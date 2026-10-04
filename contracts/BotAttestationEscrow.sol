@@ -62,12 +62,21 @@ interface IDisputePanel {
             bool upheld,
             uint256 createdAt
         );
+
+    /// @notice Open the panel case. `dispute` calls this in the same transaction.
+    /// @dev The live `DisputePanel` already has this function. The challenger it stores is
+    ///      `msg.sender`, which is this escrow. This interface does not deploy a panel.
+    function openDispute(
+        bytes32 disputeId,
+        bytes32 subjectHash,
+        string calldata reason
+    ) external;
 }
 
 /// @title BotAttestationEscrow
 /// @notice Escrows value for a bot-to-bot transaction until both sides verify each other.
-/// @dev Who may `release`, and which panel cases `dispute` will link, is specified in
-///      `BotAttestationEscrow.spec.md` (same directory).
+/// @dev Who may `release`, and how `dispute` opens a panel case, is specified in
+///      `BotAttestationEscrow.spec.md` (same directory). `dispute` opens the case itself.
 /// @dev Denylist policy: `governance` is immutable and is CORE_TIMELOCK in production.
 ///      The deployer cannot be `governance`. `createEscrow` and dependency swaps
 ///      (`setDenylist`, `setVault`, `setDisputePanel`) run only while `owner() == governance`,
@@ -86,13 +95,6 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
     /// @dev Production value is CORE_TIMELOCK. A later owner who is not this address
     ///      cannot retarget the denylist; they can transfer ownership back.
     address public immutable governance;
-
-    /// @dev `DisputePanel.PANEL_SIZE` is 3. Two votes on one side cannot be outvoted, and
-    ///      `resolved` stays false until the third vote. Linking that tally is how a
-    ///      pre-create ballot was attached (ESC-M-1). One vote is not a decision.
-    ///      This escrow is built for that panel. A swap to a different panel size is a
-    ///      governance action and would need this constant updated with it.
-    uint256 internal constant UNMOVABLE_PANEL_VOTES = 2;
 
     /// @notice How long after `expiresAt` an unresolved linked case still blocks `refund`.
     /// @dev The payee may `dispute` at `expiresAt`. The panel has this long to vote before
@@ -133,6 +135,8 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
         uint256 expiresAt;
         EscrowState state;
         bytes32 disputeId;
+        /// @dev The payer or payee who called `dispute`. Not `tx.origin`, and not the panel challenger.
+        address party;
     }
 
     mapping(bytes32 => Escrow) public escrows; // keyed by escrowId
@@ -160,7 +164,9 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
     event Credited(bytes32 indexed escrowId, address indexed recipient, uint256 amount, bool isRelease);
     /// @notice `account` pulled `amount` of their own credit to `to`.
     event Withdrawn(address indexed account, address indexed to, uint256 amount);
-    event EscrowDisputed(bytes32 indexed escrowId, bytes32 disputeId);
+    /// @notice `party` is the payer or payee who called `dispute` (`msg.sender`). Not `tx.origin`.
+    /// @dev The panel challenger is this escrow. Arbitrators read `party`.
+    event EscrowDisputed(bytes32 indexed escrowId, bytes32 disputeId, address party);
     /// @notice Governance record of a denylist swap. `actor` is `governance` after it has accepted ownership.
     event DenylistUpdated(
         address indexed previousDenylist, address indexed newDenylist, address indexed actor, uint256 timestamp
@@ -185,12 +191,16 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
     error InvalidParties();
     error Replay();
     error InvalidDispute();
+    /// @notice `bytes(reason).length` is above 256. The panel stores the string with no cap.
+    error DisputeReasonTooLong();
+    /// @dev Selector retained. `dispute` opens the case and does not attach an existing ruling.
     error DisputeAlreadyResolved();
-    /// @notice The panel tally can no longer be outvoted, and the case is not resolved yet.
-    /// @dev Name kept from the zero-vote check. Now means `votesFor >= UNMOVABLE_PANEL_VOTES`
-    ///      or the same for `votesAgainst`. One vote, or one on each side, still links. Open a new dispute id.
+    /// @dev Selector retained. `dispute` opens the case and does not read a pre-existing tally.
     error DisputeVotesCast();
+    /// @dev Selector retained. `dispute` opens the case and does not attach one opened earlier.
     error DisputePredatesEscrow();
+    /// @dev Selector retained. The panel challenger of a case `dispute` opens is this escrow.
+    ///      The caller is stored as `party`.
     error DisputeChallengerNotParty();
     error DisputeAfterExpiry();
     error DisputePending();
@@ -359,7 +369,8 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
             createdAt: block.timestamp,
             expiresAt: expiresAt,
             state: EscrowState.Open,
-            disputeId: bytes32(0)
+            disputeId: bytes32(0),
+            party: address(0)
         });
 
         emit EscrowCreated(escrowId, msg.sender, payee, payerBotId, payeeBotId, msg.value, expiresAt);
@@ -530,63 +541,48 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
         emit Withdrawn(account, to, amt);
     }
 
-    /// @notice Flag an escrow for dispute. Does not authorize a refund.
-    /// @dev Links a panel case whose subject is `panelSubject(escrowId, createdAt)`, at any vote count that has
-    ///      not already decided a 3-seat panel. A vote cast after `openDispute` and before
-    ///      this call no longer reverts, so that race cannot leave the escrow `Open`.
-    ///      `votesFor >= UNMOVABLE_PANEL_VOTES` or `votesAgainst >= UNMOVABLE_PANEL_VOTES`
-    ///      reverts `DisputeVotesCast`: the third vote cannot outvote that side, and
-    ///      `resolved` is still false. That is the ESC-M-1 pre-cooked ballot. The party
-    ///      opens a new dispute id. This function does not call the panel.
-    ///      `e.createdAt` is the timestamp stored by `createEscrow`. Same-block open
-    ///      (`dispute.createdAt >= e.createdAt`) is allowed. A case opened earlier, already
-    ///      resolved, opened by a non-party, or linked after `expiresAt` is not.
+    /// @notice Flag an escrow for dispute and open the panel case in this transaction.
+    /// @dev Does not authorize a refund. There is no path that only links an existing case.
+    ///      Checks, in order, after `EscrowNotFound`: the caller is the payer or the payee;
+    ///      the escrow is `Open`; `disputeId` is not zero; `disputeId` is not `escrowId`,
+    ///      `panelSubject(escrowId, createdAt)`, or `keccak256(abi.encode(escrowId, createdAt))`;
+    ///      `bytes(reason).length` is 256 or less; `block.timestamp` is at or before `expiresAt`.
+    ///      Effects are stored before the external call: state `Disputed`, `disputeId`, and
+    ///      `party = msg.sender` (not `tx.origin`). Then `openDispute(disputeId, subject, reason)`
+    ///      with `subject = panelSubject(escrowId, createdAt)`. A revert from the panel reverts
+    ///      this transaction and leaves the escrow `Open`. The panel challenger is `address(this)`,
+    ///      and only for the case this call just opened. Arbitrators read `party`.
     function dispute(
         bytes32 escrowId,
-        bytes32 disputeId
-    ) external {
+        bytes32 disputeId,
+        string calldata reason
+    ) external nonReentrant {
         Escrow storage e = _requireEscrow(escrowId);
-        if (e.state != EscrowState.Open) revert EscrowNotOpen();
         if (msg.sender != e.payer && msg.sender != e.payee) revert NotParty();
+        if (e.state != EscrowState.Open) revert EscrowNotOpen();
         if (disputeId == bytes32(0)) revert InvalidDispute();
-
-        (
-            bytes32 subject,
-            address challenger,,
-            uint256 votesFor,
-            uint256 votesAgainst,
-            bool resolved,,
-            uint256 disputeCreatedAt
-        ) = disputePanel.disputes(disputeId);
-
-        // 1. Exists (createdAt != 0, same as outcome) and the subject is this deployment's row.
-        if (disputeCreatedAt == 0 || subject != panelSubject(escrowId, e.createdAt)) revert InvalidDispute();
-        // 2. Still open on the panel. A resolved ruling cannot be attached later.
-        if (resolved) revert DisputeAlreadyResolved();
-        // 3. A tally that already decides the 3-seat panel is not a live challenge.
-        //    One vote, or one on each side, still links. See `UNMOVABLE_PANEL_VOTES`.
-        if (votesFor >= UNMOVABLE_PANEL_VOTES || votesAgainst >= UNMOVABLE_PANEL_VOTES) {
-            revert DisputeVotesCast();
+        bytes32 subject = panelSubject(escrowId, e.createdAt);
+        if (disputeId == escrowId || disputeId == subject || disputeId == keccak256(abi.encode(escrowId, e.createdAt)))
+        {
+            revert InvalidDispute();
         }
-        // 4. The case must not predate this escrow. Equal timestamps (same block) pass.
-        if (disputeCreatedAt < e.createdAt) revert DisputePredatesEscrow();
-        // 5. The challenger recorded on the panel is the payer or the payee.
-        if (challenger != e.payer && challenger != e.payee) revert DisputeChallengerNotParty();
-        // 6. The escrow window is still open, including the exact expiry timestamp.
+        if (bytes(reason).length > 256) revert DisputeReasonTooLong();
         if (block.timestamp > e.expiresAt) revert DisputeAfterExpiry();
 
         e.state = EscrowState.Disputed;
         e.disputeId = disputeId;
-        emit EscrowDisputed(escrowId, disputeId);
+        e.party = msg.sender;
+        emit EscrowDisputed(escrowId, disputeId, msg.sender);
+
+        disputePanel.openDispute(disputeId, subject, reason);
     }
 
     /// @notice Subject a panel case must use for this escrow row.
     /// @dev `keccak256(abi.encode(block.chainid, address(this), escrowId, createdAt))`.
     ///      `createdAt` is the timestamp `createEscrow` stored. Two deployments that share
     ///      a panel, an `escrowId`, and a `createdAt` still hash apart, because the
-    ///      escrow address is inside the preimage. `dispute` and the ruling checks require
-    ///      this exact value. The formula is public, so a stranger can open a case with
-    ///      it; `dispute` still requires the panel challenger to be the payer or the payee.
+    ///      escrow address is inside the preimage. `dispute` passes this exact value to
+    ///      `openDispute`. Ruling checks require the same hash.
     function panelSubject(
         bytes32 escrowId,
         uint256 createdAt

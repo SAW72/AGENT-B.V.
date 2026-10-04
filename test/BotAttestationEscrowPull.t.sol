@@ -43,13 +43,10 @@ contract TogglePayer {
 
     function openAndLink(
         BotAttestationEscrow e,
-        DisputePanel p,
         bytes32 id,
         bytes32 did
     ) external {
-        (,,,,, uint256 createdAt,,,) = e.escrows(id);
-        p.openDispute(did, e.panelSubject(id, createdAt), "grief");
-        e.dispute(id, did);
+        e.dispute(id, did, "grief");
     }
 
     function pullTo(
@@ -192,14 +189,7 @@ contract BotAttestationEscrowPullTest is Test {
     function _state(
         bytes32 id
     ) internal view returns (BotAttestationEscrow.EscrowState s) {
-        (,,,,,,, s,) = escrow.escrows(id);
-    }
-
-    function _subjectOf(
-        bytes32 id
-    ) internal view returns (bytes32) {
-        (,,,,, uint256 createdAt,,,) = escrow.escrows(id);
-        return escrow.panelSubject(id, createdAt);
+        (,,,,,,, s,,) = escrow.escrows(id);
     }
 
     function _assertFundedGate() internal {
@@ -300,10 +290,8 @@ contract BotAttestationEscrowPullTest is Test {
         vm.expectRevert(BotAttestationEscrow.EscrowNotOpen.selector);
         escrow.release(id);
         vm.prank(payer);
-        panel.openDispute(keccak256("late"), id, "late");
-        vm.prank(payer);
         vm.expectRevert(BotAttestationEscrow.EscrowNotOpen.selector);
-        escrow.dispute(id, keccak256("late"));
+        escrow.dispute(id, keccak256("late"), "attestation stale");
 
         _assertSettersUnlocked();
     }
@@ -334,11 +322,8 @@ contract BotAttestationEscrowPullTest is Test {
         bytes32 id = keccak256("d3");
         bytes32 did = keccak256("did3");
         _create(id, 1 ether, 1 hours);
-        bytes32 subject = _subjectOf(id);
         vm.prank(payer);
-        panel.openDispute(did, subject, "r");
-        vm.prank(payer);
-        escrow.dispute(id, did);
+        escrow.dispute(id, did, "r");
         _rule(did, true);
         vm.etch(payee, type(RejectETH).runtimeCode);
         // H-1: upheld still closes refund, including after expiry, before the credit lands.
@@ -364,11 +349,8 @@ contract BotAttestationEscrowPullTest is Test {
         bytes32 id = keccak256("d4");
         bytes32 did = keccak256("did4");
         _create(id, 1 ether, 1 hours);
-        bytes32 subject = _subjectOf(id);
         vm.prank(payer);
-        panel.openDispute(did, subject, "r");
-        vm.prank(payer);
-        escrow.dispute(id, did);
+        escrow.dispute(id, did, "r");
         _rule(did, false);
         vm.etch(payer, type(RejectETH).runtimeCode);
         // Unwind is not an upheld deal. Release stays closed until refund credits the payer.
@@ -397,7 +379,7 @@ contract BotAttestationEscrowPullTest is Test {
         bytes32 did = keccak256("did5");
         g.create{ value: 1 wei }(escrow, id, payee, payerBot, payeeBot, 1 hours);
         vm.warp(block.timestamp + 1 hours);
-        g.openAndLink(escrow, panel, id, did);
+        g.openAndLink(escrow, id, did);
         g.setAccept(false);
         // Linked at expiresAt. An unresolved case refunds at expiresAt + RULING_GRACE, not one second later.
         vm.warp(block.timestamp + escrow.RULING_GRACE());
@@ -821,7 +803,7 @@ contract PullPaymentHandler is StdUtils {
     ) external {
         if (ids.length == 0) return;
         bytes32 id = _pick(i);
-        (address rowPayer, address rowPayee,,,,,,,) = escrow.escrows(id);
+        (address rowPayer, address rowPayee,,,,,,,,) = escrow.escrows(id);
         // Open release is the payer. After an uphold, either party can release.
         // A payee call while Open reverts and is swallowed here.
         vm.prank(i % 2 == 0 ? rowPayer : rowPayee);
@@ -847,7 +829,7 @@ contract PullPaymentHandler is StdUtils {
         bytes32 id = bytes32(0);
         for (uint256 k; k < ids.length; k++) {
             bytes32 c = ids[(i % ids.length + k) % ids.length];
-            (,,,,,, uint256 exp, BotAttestationEscrow.EscrowState st,) = escrow.escrows(c);
+            (,,,,,, uint256 exp, BotAttestationEscrow.EscrowState st,,) = escrow.escrows(c);
             if (st == BotAttestationEscrow.EscrowState.Open && block.timestamp <= exp) {
                 id = c;
                 break;
@@ -856,15 +838,8 @@ contract PullPaymentHandler is StdUtils {
         if (id == bytes32(0)) return;
         address who = byPayee ? payee : payer;
         bytes32 d = keccak256(abi.encode("d", nonce++));
-        (,,,,, uint256 createdAt,,,) = escrow.escrows(id);
-        bytes32 subject = escrow.panelSubject(id, createdAt);
         vm.prank(who);
-        try panel.openDispute(d, subject, "x") { }
-        catch {
-            return;
-        }
-        vm.prank(who);
-        try escrow.dispute(id, d) {
+        try escrow.dispute(id, d, "x") {
             did[id] = d;
             callsDispute++;
         } catch { }
@@ -1028,7 +1003,7 @@ contract PullPaymentInvariantTest is Test {
         uint256 settled;
         uint256 n = handler.idsLength();
         for (uint256 i; i < n; i++) {
-            (,,,, uint256 amt,,, BotAttestationEscrow.EscrowState s,) = escrow.escrows(handler.ids(i));
+            (,,,, uint256 amt,,, BotAttestationEscrow.EscrowState s,,) = escrow.escrows(handler.ids(i));
             if (s == BotAttestationEscrow.EscrowState.Open || s == BotAttestationEscrow.EscrowState.Disputed) {
                 open += amt;
             } else {

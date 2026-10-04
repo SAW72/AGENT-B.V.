@@ -46,14 +46,18 @@ describe("calldata preview", () => {
     expect(decoded.args?.[0]).toBe(id)
   })
 
-  it("encodes release, refund, dispute, and openDispute as zero-value calldata", () => {
+  it("encodes release, refund, and dispute as zero-value calldata", () => {
     const release = previewRelease(escrow, id)
     const refund = previewRefund(escrow, id)
-    const dispute = previewDispute(escrow, id, other)
+    const dispute = previewDispute(escrow, id, other, "preview only")
     const opened = previewOpenDispute(panel, other, id, "preview only")
     expect(decodeFunctionData({ abi: escrowAbi, data: release.calldata }).functionName).toBe("release")
     expect(decodeFunctionData({ abi: escrowAbi, data: refund.calldata }).functionName).toBe("refund")
-    expect(decodeFunctionData({ abi: escrowAbi, data: dispute.calldata }).functionName).toBe("dispute")
+    const decoded = decodeFunctionData({ abi: escrowAbi, data: dispute.calldata })
+    expect(decoded.functionName).toBe("dispute")
+    expect(decoded.args).toEqual([id, other, "preview only"])
+    expect(dispute.to).toBe(escrow)
+    expect(dispute.valueWei).toBe(0n)
     expect(decodeFunctionData({ abi: disputePanelAbi, data: opened.calldata }).functionName).toBe("openDispute")
     expect(release.valueWei).toBe(0n)
     expect(opened.to).toBe(panel)
@@ -71,6 +75,16 @@ describe("calldata preview", () => {
     expect(names).toContain("ReleaseNotAuthorized")
     expect(names).toContain("NotParty")
     expect(names).toContain("DisputeAfterExpiry")
+    expect(names).toContain("DisputeReasonTooLong")
+    expect(ERROR_GLOSSARY.find((entry) => entry.name === "DisputeReasonTooLong")?.meaning).toBe(
+      "The reason is longer than 256 bytes, so this dispute was not filed.",
+    )
+    expect(ERROR_GLOSSARY.find((entry) => entry.name === "InvalidDispute")?.meaning).toBe(
+      "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created.",
+    )
+    expect(ERROR_GLOSSARY.find((entry) => entry.name === "exists")?.meaning).toBe(
+      "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open.",
+    )
     expect(RELEASE_NOT_AUTHORIZED_TEXT).toBe(
       "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee.",
     )
@@ -142,7 +156,7 @@ describe("calldata preview", () => {
     expect(source).toContain('id="open-created-at"')
     expect(source).toContain("readOnly")
     expect(source).not.toContain("Use the claim identifier. The panel stores this as the subject.")
-    const openForm = source.slice(source.indexOf("function OpenDisputeForm"), source.indexOf("function DisputeForm"))
+    const openForm = source.slice(source.indexOf("function OpenDisputeForm"))
     expect(openForm).toContain("readDisputeSubject")
     expect(openForm).toContain("currentNowSeconds()")
     expect(openForm).toContain("disputeWindowMessage")
@@ -150,12 +164,15 @@ describe("calldata preview", () => {
     expect(openForm).not.toContain("setCreatedAt")
     expect(openForm).not.toContain("parseCreatedAt")
     expect(openForm).toContain("randomBytes32()")
-    expect(openForm).toContain("previewOpenDispute")
-    expect(openForm).toContain("previewDispute(escrow, claim, id)")
+    expect(openForm).not.toContain("previewOpenDispute")
+    expect(openForm).toContain("previewDispute(escrow, claim, id, trimmedReason)")
     expect(openForm).toContain('id="open-dispute"')
     expect(openForm).not.toContain("keccak256")
     expect(openForm).not.toContain("Date.now")
-    expect(source).toContain('data-testid="open-and-link"')
+    expect(openForm).not.toContain("function DisputeForm")
+    expect(source).not.toContain('data-testid="open-and-link"')
+    expect(source).not.toContain("Link a dispute")
+    expect(source).not.toContain("Prepare this dispute link")
   })
 
   it("draws a case identifier from 32 random bytes", () => {

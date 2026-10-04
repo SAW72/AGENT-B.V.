@@ -74,7 +74,7 @@ export function senderNoteFor(action) {
     return "createEscrow is signed by the relayer key. It succeeds only when that address is the payer Vault operator. This service does not treat the funding wallet as that operator.";
   }
   if (action === "dispute") {
-    return "dispute() succeeds only when the relayer signer is the payer or the payee.";
+    return "dispute is not relayed. The payer or the payee sends it from their own wallet.";
   }
   if (action === "release") {
     return "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee. Release is not relayed. Send it from that wallet.";

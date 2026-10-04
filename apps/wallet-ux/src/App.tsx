@@ -91,7 +91,7 @@ function LiveStatus({ status }: { status: GateStatus }) {
             <strong>Panel not seated. Gate B is not seated.</strong>
             <p>
               arbitratorCount is {status.disputePanel.arbitratorCount.toString()} and PANEL_SIZE is{" "}
-              {status.disputePanel.panelSize.toString()}. openDispute will revert until the panel is seated.
+              {status.disputePanel.panelSize.toString()}. A dispute can't be filed until the panel is seated.
             </p>
           </div>
         ) : (

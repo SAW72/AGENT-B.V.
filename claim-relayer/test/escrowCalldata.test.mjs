@@ -28,7 +28,7 @@ describe("escrow calldata", () => {
     }
     assert.match(source, /function release\(\s*bytes32 escrowId\s*\)/);
     assert.match(source, /function refund\(\s*bytes32 escrowId\s*\)/);
-    assert.match(source, /function dispute\(\s*bytes32 escrowId,\s*bytes32 disputeId\s*\)/);
+    assert.match(source, /function dispute\(\s*bytes32 escrowId,\s*bytes32 disputeId,\s*string calldata reason\s*\)/);
     assert.match(source, /durationSeconds > 30 days/);
     assert.match(source, /IDisputePanel public disputePanel/);
     assert.match(source, /address public immutable governance/);
@@ -73,13 +73,40 @@ describe("escrow calldata", () => {
   });
 
   it("encodes dispute and refuses governance setters and bad durations", () => {
+    const reason = "panel case";
     const encoded = encodeEscrowAction({
       action: "dispute",
       escrowId: ESCROW_ID,
       disputeId: "0x" + "44".repeat(32),
+      reason,
     });
-    assert.equal(encoded.signature, "dispute(bytes32,bytes32)");
-    assert.equal(encoded.calldata.length, 2 + 8 + 64 * 2);
+    assert.equal(encoded.signature, "dispute(bytes32,bytes32,string)");
+    assert.equal(encoded.selector, selectorFor("dispute(bytes32,bytes32,string)"));
+    assert.equal(encoded.senderConstraint, "party_must_send");
+    assert.equal(encoded.valueWei, "0");
+    const reasonBytes = Buffer.from(reason, "utf8");
+    const paddedWords = Math.ceil(reasonBytes.length / 32);
+    assert.equal(encoded.calldata.length, 2 + 8 + 64 * 3 + 64 + paddedWords * 64);
+    const body = encoded.calldata.slice(10);
+    assert.equal(body.slice(0, 64), ESCROW_ID.slice(2));
+    assert.equal(body.slice(64, 128), "44".repeat(32));
+    assert.equal(BigInt("0x" + body.slice(128, 192)), 96n);
+    assert.equal(BigInt("0x" + body.slice(192, 256)), BigInt(reasonBytes.length));
+    assert.equal(Buffer.from(body.slice(256, 256 + reasonBytes.length * 2), "hex").toString("utf8"), reason);
+    assert.throws(
+      () => encodeEscrowAction({ action: "dispute", escrowId: ESCROW_ID, disputeId: "0x" + "44".repeat(32) }),
+      (err) => err.error === "invalid_reason",
+    );
+    assert.throws(
+      () =>
+        encodeEscrowAction({
+          action: "dispute",
+          escrowId: ESCROW_ID,
+          disputeId: "0x" + "44".repeat(32),
+          reason: "x".repeat(257),
+        }),
+      (err) => err.error === "reason_too_long",
+    );
     assert.throws(() => encodeEscrowAction({ action: "setDenylist", escrowId: ESCROW_ID }), (err) => err.error === "action_not_claim");
     assert.throws(
       () =>

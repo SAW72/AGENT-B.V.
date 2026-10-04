@@ -70,7 +70,7 @@ describe("submit target", () => {
     expect(submitSenderNote("refund")).toBe("Anyone can send a refund. The connected wallet sends this on Base Sepolia.")
     expect(submitSenderNote("dispute")).toBe("The payer or the payee has to send this. The connected wallet is the sender.")
     expect(previewCardCopy("dispute", false)).toBe(
-      "This prepares linking a dispute to a claim. Submit sends it from the connected wallet on Base Sepolia only.",
+      "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason. Submit sends it from the connected wallet on Base Sepolia only.",
     )
     expect(previewCardCopy("dispute", true)).not.toMatch(/claim relayer/)
     expect(previewCardCopy("release", true)).not.toMatch(/claim relayer/)

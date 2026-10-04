@@ -283,7 +283,7 @@ Calldata is encoded in `escrowCalldata.mjs` from the signatures in `contracts/Bo
 | `createEscrow` | `createEscrow(bytes32,address,bytes32,bytes32,uint256)` | `amountWei` as `msg.value` | Payer bot's Vault operator (`vault_operator_must_send`) |
 | `release` | `release(bytes32)` | 0 | Payer while Open (`payer_while_open`). Payer or payee after an upheld dispute. Not relayed (`release_not_relayable`). |
 | `refund` | `refund(bytes32)` | 0 | Anyone (`permissionless`) |
-| `dispute` | `dispute(bytes32,bytes32)` | 0 | Payer or payee (`party_must_send`) |
+| `dispute` | `dispute(bytes32,bytes32,string)` | 0 | Payer or payee (`party_must_send`). Encoded for description only. Not relayed. |
 
 Selectors are `keccak256` of those strings. `setDenylist`, `setVault`, and `setDisputePanel` are not claim actions.
 

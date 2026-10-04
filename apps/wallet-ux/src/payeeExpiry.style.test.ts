@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { PAYEE_OPEN_AFTER_EXPIRY_TEXT, PAYEE_OPEN_BEFORE_EXPIRY_TEXT, payeeDisputeBeforeCta, payeeExpiryUrgentText } from "./format"
-import { CASE_ID_HINT, LINK_CASE_HEADING, NEW_CASE_ID_BUTTON, OPEN_AND_LINK_BUTTON, OPEN_AND_LINK_TEXT, OPEN_CASE_HEADING } from "./preview"
+import { CASE_ID_HINT, FILE_DISPUTE_BUTTON, FILE_DISPUTE_TEXT, NEW_CASE_ID_BUTTON } from "./preview"
 
 const identifiers = [
   "createEscrow",
@@ -44,11 +44,9 @@ describe("payee expiry copy", () => {
     "While a dispute is unresolved, a refund stays blocked until 2026-10-08 12:00:00 UTC.",
     payeeDisputeBeforeCta("2026-10-01 12:00:00 UTC"),
     payeeExpiryUrgentText("2026-10-01 12:00:00 UTC"),
-    OPEN_AND_LINK_TEXT,
-    OPEN_AND_LINK_BUTTON,
+    FILE_DISPUTE_TEXT,
+    FILE_DISPUTE_BUTTON,
     NEW_CASE_ID_BUTTON,
-    OPEN_CASE_HEADING,
-    LINK_CASE_HEADING,
     CASE_ID_HINT,
   ]
 

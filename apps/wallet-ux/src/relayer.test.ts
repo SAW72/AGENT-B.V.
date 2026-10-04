@@ -235,7 +235,7 @@ describe("postLiveClaim", () => {
         }),
       ),
     ).toThrow(/your wallet/)
-    expect(() => claimBodyFromPreview(previewDispute(escrow, id, other))).toThrow(/your wallet/)
+    expect(() => claimBodyFromPreview(previewDispute(escrow, id, other, "wallet only"))).toThrow(/your wallet/)
   })
 })
 
@@ -500,7 +500,7 @@ describe("refund submit via the claim relayer", () => {
     const dispute = await runRelayerSubmission({
       url: relayerUrl,
       ...signerInput(),
-      preview: previewDispute(escrow, id, other),
+      preview: previewDispute(escrow, id, other, "wallet only"),
       client,
       fetchImpl: async () => {
         fetches += 1

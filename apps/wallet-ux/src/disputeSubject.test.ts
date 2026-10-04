@@ -73,6 +73,7 @@ function escrowWord(setup: RpcSetup): Hex {
       setup.expiresAt ?? expiresAt,
       setup.state ?? OPEN_ESCROW_STATE,
       `0x${"00".repeat(32)}`,
+      "0x0000000000000000000000000000000000000000" as Address,
     ],
   })
 }
