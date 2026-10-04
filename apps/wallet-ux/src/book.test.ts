@@ -8,6 +8,7 @@ import { FALLBACK_PIN, fallbackBook, resolveAddressBook, SUPERSEDED } from "./bo
 
 const CANONICAL = {
   coreTimelock: "0x10CC9474b45625ADfd05C209f2518023484878D9",
+  governanceTimelock: "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
   denylist: "0xeE76876bECcFc1B58fC06fF4E654a517d784B224",
   vault: "0x1463D664fA467FBCDA4B05443434494f05e565bc",
   disputePanel: "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb",
@@ -36,8 +37,8 @@ describe("deployment book", () => {
     expect(ADDRESSES.denylist).toBe(CANONICAL.denylist)
     expect(ADDRESSES.vault).toBe(CANONICAL.vault)
     expect(ADDRESSES.coreTimelock).toBe(CANONICAL.coreTimelock)
-    expect(ADDRESSES.governanceTimelock).toBeNull()
-    expect(deploymentBook.governanceTimelock).toBeNull()
+    expect(ADDRESSES.governanceTimelock).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.governanceTimelock).toBe(CANONICAL.governanceTimelock)
     expect(ADDRESSES.disputePanel).toBe(CANONICAL.disputePanel)
     expect(ADDRESSES.liability).toBe(CANONICAL.liability)
     expect(ADDRESSES.insuranceFund).toBe(CANONICAL.insuranceFund)

@@ -9,6 +9,8 @@ import { Vault } from "../contracts/Vault.sol";
 
 /// @notice Fork coverage for the live Base Sepolia Denylist + Vault pair.
 ///         Mutations are `vm.prank` on the fork. This file never broadcasts.
+///         The live owner is `GOVERNANCE_TIMELOCK`. `CORE_TIMELOCK` is the pre-migration
+///         EOA and is checked only for its EIP-7702 delegation.
 ///
 ///         Run:
 ///         forge test --fork-url https://base-sepolia.gateway.tenderly.co --match-contract LiveDenylistVaultTest -vv
@@ -19,6 +21,8 @@ contract LiveDenylistVaultTest is Test {
     address internal constant DENYLIST = 0xeE76876bECcFc1B58fC06fF4E654a517d784B224;
     address internal constant VAULT = 0x1463D664fA467FBCDA4B05443434494f05e565bc;
     address internal constant CORE_TIMELOCK = 0x10CC9474b45625ADfd05C209f2518023484878D9;
+    /// @dev Live owner of Denylist and Vault. Same address as `governanceTimelock` in the deployment book.
+    address internal constant GOVERNANCE_TIMELOCK = 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33;
     /// @dev Deploy sender of both creation txs. Not an owner on this pair.
     address internal constant DEPLOY_SENDER = 0x5D467FA00eC0E92044f779e495a17db66c5964aa;
     /// @dev EIP-7702 designator target read from CORE_TIMELOCK code (`0xef0100 || address`).
@@ -60,6 +64,8 @@ contract LiveDenylistVaultTest is Test {
 
         denylist = Denylist(DENYLIST);
         vault = Vault(VAULT);
+        // Owner pranks pay the fork base fee. This timelock holds no ETH on Base Sepolia.
+        vm.deal(GOVERNANCE_TIMELOCK, 1 ether);
         console2.log("live fork block", block.number);
     }
 
@@ -89,10 +95,10 @@ contract LiveDenylistVaultTest is Test {
         assertEq(keccak256(liveVault), keccak256(compiledVault));
     }
 
-    function test_ownerAndPendingOwnerAreCoreTimelock() public view {
-        assertEq(denylist.owner(), CORE_TIMELOCK);
+    function test_ownerAndPendingOwnerAreGovernanceTimelock() public view {
+        assertEq(denylist.owner(), GOVERNANCE_TIMELOCK);
         assertEq(denylist.pendingOwner(), address(0));
-        assertEq(vault.owner(), CORE_TIMELOCK);
+        assertEq(vault.owner(), GOVERNANCE_TIMELOCK);
         assertEq(vault.pendingOwner(), address(0));
     }
 
@@ -178,7 +184,7 @@ contract LiveDenylistVaultTest is Test {
         denylist.acceptOwnership();
         vm.stopPrank();
 
-        assertEq(denylist.owner(), CORE_TIMELOCK);
+        assertEq(denylist.owner(), GOVERNANCE_TIMELOCK);
         assertEq(denylist.pendingOwner(), address(0));
         assertFalse(denylist.everListed(uint8(Denylist.Bucket.Exact), WEIGHT));
     }
@@ -203,26 +209,26 @@ contract LiveDenylistVaultTest is Test {
         vault.acceptOwnership();
         vm.stopPrank();
 
-        assertEq(vault.owner(), CORE_TIMELOCK);
+        assertEq(vault.owner(), GOVERNANCE_TIMELOCK);
         assertEq(vault.pendingOwner(), address(0));
         (,,,,, uint256 registeredAt) = vault.bots(BOT);
         assertEq(registeredAt, 0);
     }
 
     function test_acceptOwnershipRevertsWhilePendingIsZero() public {
-        vm.startPrank(CORE_TIMELOCK);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, CORE_TIMELOCK));
+        vm.startPrank(GOVERNANCE_TIMELOCK);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, GOVERNANCE_TIMELOCK));
         denylist.acceptOwnership();
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, CORE_TIMELOCK));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, GOVERNANCE_TIMELOCK));
         vault.acceptOwnership();
         vm.stopPrank();
 
-        assertEq(denylist.owner(), CORE_TIMELOCK);
-        assertEq(vault.owner(), CORE_TIMELOCK);
+        assertEq(denylist.owner(), GOVERNANCE_TIMELOCK);
+        assertEq(vault.owner(), GOVERNANCE_TIMELOCK);
     }
 
     function test_timelockListUnbanKeepsHistoryAndGatesRegister() public {
-        vm.startPrank(CORE_TIMELOCK);
+        vm.startPrank(GOVERNANCE_TIMELOCK);
         denylist.addExact(WEIGHT);
         denylist.addSignature(SIG);
         denylist.addPrompt(PROMPT);
@@ -230,23 +236,23 @@ contract LiveDenylistVaultTest is Test {
 
         assertEq(uint256(denylist.check(WEIGHT, SIG, PROMPT)), uint256(Denylist.MatchLevel.ExactBlock));
         assertTrue(denylist.denylistedHashes(WEIGHT));
-        assertEq(denylist.listing(uint8(Denylist.Bucket.Exact), WEIGHT).lastListedBy, CORE_TIMELOCK);
+        assertEq(denylist.listing(uint8(Denylist.Bucket.Exact), WEIGHT).lastListedBy, GOVERNANCE_TIMELOCK);
         assertEq(denylist.listing(uint8(Denylist.Bucket.Exact), WEIGHT).timesListed, 1);
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vm.expectRevert(bytes("bot is denylisted"));
         vault.register(BOT, WEIGHT, SIG, PROMPT, Vault.Tier.Critical);
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.remove(WEIGHT, uint8(Denylist.Bucket.Exact));
         assertEq(uint256(denylist.check(WEIGHT, SIG, PROMPT)), uint256(Denylist.MatchLevel.SignatureBlock));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.remove(SIG, uint8(Denylist.Bucket.Signature));
         assertEq(uint256(denylist.check(WEIGHT, SIG, PROMPT)), uint256(Denylist.MatchLevel.PromptBlock));
         assertTrue(denylist.denylistedPrompts(PROMPT));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.remove(PROMPT, uint8(Denylist.Bucket.Prompt));
 
         assertEq(uint256(denylist.check(WEIGHT, SIG, PROMPT)), uint256(Denylist.MatchLevel.None));
@@ -263,26 +269,26 @@ contract LiveDenylistVaultTest is Test {
         assertGt(cleared.firstListedAt, 0);
         assertEq(cleared.lastListedAt, cleared.firstListedAt);
         assertGe(cleared.lastUnlistedAt, cleared.lastListedAt);
-        assertEq(cleared.lastListedBy, CORE_TIMELOCK);
-        assertEq(cleared.lastUnlistedBy, CORE_TIMELOCK);
+        assertEq(cleared.lastListedBy, GOVERNANCE_TIMELOCK);
+        assertEq(cleared.lastUnlistedBy, GOVERNANCE_TIMELOCK);
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.addPrompt(PROMPT);
         assertEq(denylist.listing(uint8(Denylist.Bucket.Prompt), PROMPT).timesListed, 2);
         assertEq(uint256(denylist.check(bytes32(0), bytes32(0), PROMPT)), uint256(Denylist.MatchLevel.PromptBlock));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vm.expectRevert(bytes("bot is denylisted"));
         vault.register(BOT, WEIGHT, SIG, PROMPT, Vault.Tier.Chat);
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.remove(PROMPT, uint8(Denylist.Bucket.Prompt));
         assertEq(denylist.listing(uint8(Denylist.Bucket.Prompt), PROMPT).timesListed, 2);
         assertTrue(denylist.everListed(uint8(Denylist.Bucket.Prompt), PROMPT));
 
         uint256 vaultBefore = VAULT.balance;
         uint256 denyBefore = DENYLIST.balance;
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vault.register(BOT, WEIGHT, SIG, PROMPT, Vault.Tier.Financial);
         assertEq(VAULT.balance, vaultBefore);
         assertEq(DENYLIST.balance, denyBefore);
@@ -303,12 +309,12 @@ contract LiveDenylistVaultTest is Test {
         uint256 vaultBefore = VAULT.balance;
         uint256 denyBefore = DENYLIST.balance;
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         (bool paidAdd,) = address(denylist).call{ value: 1 }(abi.encodeWithSignature("addExact(bytes32)", WEIGHT));
         assertFalse(paidAdd);
         assertFalse(denylist.denylistedHashes(WEIGHT));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         (bool paidRegister,) = address(vault).call{ value: 1 }(
             abi.encodeWithSignature(
                 "register(bytes32,bytes32,bytes32,bytes32,uint8)", BOT, WEIGHT, SIG, PROMPT, uint8(Vault.Tier.Chat)
@@ -316,16 +322,16 @@ contract LiveDenylistVaultTest is Test {
         );
         assertFalse(paidRegister);
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         (bool freeAdd,) = address(denylist).call(abi.encodeWithSignature("addExact(bytes32)", WEIGHT));
         assertTrue(freeAdd);
         assertTrue(denylist.denylistedHashes(WEIGHT));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         denylist.remove(WEIGHT, uint8(Denylist.Bucket.Exact));
 
         address operator = address(0xBEEF);
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         (bool freeRegister,) = address(vault)
             .call(
                 abi.encodeWithSignature(
@@ -343,16 +349,16 @@ contract LiveDenylistVaultTest is Test {
         assertTrue(vault.grantAccess(BOT, 2));
         assertFalse(vault.grantAccess(BOT, 3));
 
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vault.burn(BOT);
         (,,,, bool active,) = vault.bots(BOT);
         assertFalse(active);
         vm.expectRevert(bytes("bot not active"));
         vault.grantAccess(BOT, 1);
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vm.expectRevert(bytes("not active"));
         vault.burn(BOT);
-        vm.prank(CORE_TIMELOCK);
+        vm.prank(GOVERNANCE_TIMELOCK);
         vm.expectRevert(bytes("already registered"));
         vault.register(BOT, WEIGHT, SIG, PROMPT, Vault.Tier.Critical);
 
