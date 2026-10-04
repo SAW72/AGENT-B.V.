@@ -191,6 +191,8 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
     error InvalidParties();
     error Replay();
     error InvalidDispute();
+    /// @notice `bytes(reason).length` is zero.
+    error DisputeReasonEmpty();
     /// @notice `bytes(reason).length` is above 256. The panel stores the string with no cap.
     error DisputeReasonTooLong();
     /// @dev Selector retained. `dispute` opens the case and does not attach an existing ruling.
@@ -546,7 +548,7 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
     ///      Checks, in order, after `EscrowNotFound`: the caller is the payer or the payee;
     ///      the escrow is `Open`; `disputeId` is not zero; `disputeId` is not `escrowId`,
     ///      `panelSubject(escrowId, createdAt)`, or `keccak256(abi.encode(escrowId, createdAt))`;
-    ///      `bytes(reason).length` is 256 or less; `block.timestamp` is at or before `expiresAt`.
+    ///      `bytes(reason).length` is from 1 through 256; `block.timestamp` is at or before `expiresAt`.
     ///      Effects are stored before the external call: state `Disputed`, `disputeId`, and
     ///      `party = msg.sender` (not `tx.origin`). Then `openDispute(disputeId, subject, reason)`
     ///      with `subject = panelSubject(escrowId, createdAt)`. A revert from the panel reverts
@@ -566,6 +568,7 @@ contract BotAttestationEscrow is Ownable2Step, ReentrancyGuard {
         {
             revert InvalidDispute();
         }
+        if (bytes(reason).length == 0) revert DisputeReasonEmpty();
         if (bytes(reason).length > 256) revert DisputeReasonTooLong();
         if (block.timestamp > e.expiresAt) revert DisputeAfterExpiry();
 

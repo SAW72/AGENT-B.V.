@@ -10,10 +10,9 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Wallet-facing meanings for contract reverts the relayer may surface in
- * `revert_data`. `dispute` itself is not relayed. `DisputeVotesCast` means two
- * votes already agree on a 3-member panel, so that case cannot be linked or
- * linked again. One vote, or one on each side, still links. The party opens a
- * new case.
+ * `revert_data`. `dispute` itself is not relayed. `DisputeVotesCast` is the
+ * retained selector. Filing opens the panel case in the same transaction.
+ * Votes cast on another case are not read.
  */
 export const REVERT_COPY = JSON.parse(
   readFileSync(fileURLToPath(new URL("./revertCopy.json", import.meta.url)), "utf8"),

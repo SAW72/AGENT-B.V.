@@ -1,7 +1,7 @@
 {
   "DisputeVotesCast": {
     "selector": "0x8aab0a8f",
-    "meaning": "Two votes on one side already decide this case, so it can't be linked or linked again. Open a new case and link that one."
+    "meaning": "Filing opens the panel case in the same transaction. Votes cast on another case are not read."
   },
   "ReleaseNotAuthorized": {
     "selector": "0xfe28f476",

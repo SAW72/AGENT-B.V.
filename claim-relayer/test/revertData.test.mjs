@@ -13,10 +13,10 @@ const CUSTOM = "0x" + "aabbccdd" + "11".repeat(32);
 const KEY = "0x" + "22".repeat(32);
 
 const DISPUTE_VOTES_CAST_TEXT =
-  "Two votes on one side already decide this case, so it can't be linked or linked again. Open a new case and link that one.";
+  "Filing opens the panel case in the same transaction. Votes cast on another case are not read.";
 
 describe("revert data", () => {
-  it("maps DisputeVotesCast to two deciding votes and a new case", () => {
+  it("maps DisputeVotesCast to opening the panel case in the same transaction", () => {
     assert.equal(REVERT_COPY.DisputeVotesCast.selector, "0x8aab0a8f");
     assert.equal(REVERT_COPY.DisputeVotesCast.meaning, DISPUTE_VOTES_CAST_TEXT);
     assert.equal(REVERT_COPY.DisputeVotesCast.meaning.includes("already has votes"), false);

@@ -239,7 +239,7 @@ Production uses the file-backed store (`createFileIntentNonceStore`) at `INTENT_
 
 A **409** `ruling_pending` consumes that signed intent's nonce. The same body retried returns `nonce_replay`. The user signs again after the 7-day grace ends.
 
-`dispute` is not relayed. When a wallet-sent link reverts `DisputeVotesCast` (`0x8aab0a8f`), two votes on one side already decide that 3-member case, so it can't be linked or linked again. One vote, or one vote on each side, still links. The party opens a new case and links that one. `revertCopy.json` is that mapping. The sentence is: "Two votes on one side already decide this case, so it can't be linked or linked again. Open a new case and link that one."
+`dispute` is not relayed. `revertCopy.json` maps `DisputeVotesCast` (`0x8aab0a8f`). The sentence is: "Filing opens the panel case in the same transaction. Votes cast on another case are not read."
 
 A live claim that fails while sending returns this body. `revert_data` is always present: a `0x` lowercase hex string of the raw revert bytes, or `null`. Empty `0x`, odd length, non-hex, and payloads larger than 4096 bytes are `null` (they are not truncated). The body does not include the RPC URL, the provider error text, the request body, or the signer key.
 
