@@ -47,7 +47,7 @@ describe("deployment book", () => {
     expect(deploymentBook.BotAttestationEscrow.startBlock).toBe(47345163)
     expect(deploymentBook.BotAttestationEscrow.commit).toBe("444c427")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnership).toBe("complete")
-    expect(deploymentBook.BotAttestationEscrow.owner).toBe("0x10CC9474b45625ADfd05C209f2518023484878D9")
+    expect(deploymentBook.BotAttestationEscrow.owner).toBe(CANONICAL.governanceTimelock)
     expect(deploymentBook.BotAttestationEscrow.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnershipTx).toBe(
       "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",

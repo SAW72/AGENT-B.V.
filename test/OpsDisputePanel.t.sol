@@ -46,7 +46,7 @@ contract OpsDisputePanelGuardTest is Test {
         assertEq(book.readString(".BotAttestationEscrow.commit"), "444c427");
         assertEq(book.readAddress(".BotAttestationEscrow.deployer"), 0x5D467FA00eC0E92044f779e495a17db66c5964aa);
         assertEq(book.readString(".BotAttestationEscrow.acceptOwnership"), "complete");
-        assertEq(book.readAddress(".BotAttestationEscrow.owner"), liveTimelock);
+        assertEq(book.readAddress(".BotAttestationEscrow.owner"), book.readAddress(".governanceTimelock"));
         assertEq(book.readAddress(".BotAttestationEscrow.pendingOwner"), address(0));
         assertEq(
             book.readString(".BotAttestationEscrow.acceptOwnershipTx"),
