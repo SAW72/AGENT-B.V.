@@ -65,7 +65,7 @@ contract BotAttestationEscrowNotFoundTest is Test {
     function test_disputeNeverCreatedIdRevertsEscrowNotFound() public {
         bytes32 id = keccak256("never-created-dispute");
         vm.expectRevert(abi.encodeWithSelector(BotAttestationEscrow.EscrowNotFound.selector, id));
-        escrow.dispute(id, keccak256("panel-case"));
+        escrow.dispute(id, keccak256("panel-case"), "attestation stale");
     }
 
     function testFuzz_neverCreatedEscrowIdRevertsEscrowNotFound(
@@ -76,7 +76,7 @@ contract BotAttestationEscrowNotFoundTest is Test {
         vm.expectRevert(abi.encodeWithSelector(BotAttestationEscrow.EscrowNotFound.selector, id));
         escrow.release(id);
         vm.expectRevert(abi.encodeWithSelector(BotAttestationEscrow.EscrowNotFound.selector, id));
-        escrow.dispute(id, keccak256("panel-case"));
+        escrow.dispute(id, keccak256("panel-case"), "attestation stale");
     }
 
     /// @dev A row with a real payer and `usedEscrowIds` set, but amount 0, is not missing.
@@ -91,7 +91,7 @@ contract BotAttestationEscrowNotFoundTest is Test {
         vm.store(address(escrow), bytes32(uint256(row) + 6), bytes32(block.timestamp + 1000));
         vm.store(address(escrow), keccak256(abi.encode(id, USED_ESCROW_IDS_SLOT)), bytes32(uint256(1)));
 
-        (address storedPayer,,,, uint256 amount,,,,) = _row(id);
+        (address storedPayer,,,, uint256 amount,,,,,) = _row(id);
         assertEq(storedPayer, payer);
         assertEq(amount, 0);
         assertTrue(escrow.usedEscrowIds(id));
@@ -105,8 +105,8 @@ contract BotAttestationEscrowNotFoundTest is Test {
         escrow.release(id);
 
         vm.prank(payer);
-        vm.expectRevert(BotAttestationEscrow.InvalidDispute.selector);
-        escrow.dispute(id, keccak256("zero-amount-case"));
+        vm.expectRevert(bytes("panel not seated"));
+        escrow.dispute(id, keccak256("zero-amount-case"), "attestation stale");
     }
 
     /// @dev A real open escrow still takes the expiry path, not `EscrowNotFound`.
@@ -132,7 +132,7 @@ contract BotAttestationEscrowNotFoundTest is Test {
         assertEq(escrow.totalOwed(), owedBefore);
         assertEq(escrow.pendingWithdrawals(address(0)), dustBefore);
         assertFalse(escrow.usedEscrowIds(id));
-        (address storedPayer,,,,,,, BotAttestationEscrow.EscrowState state,) = _row(id);
+        (address storedPayer,,,,,,, BotAttestationEscrow.EscrowState state,,) = _row(id);
         assertEq(storedPayer, address(0));
         assertEq(uint8(state), uint8(BotAttestationEscrow.EscrowState.Open));
     }
@@ -160,7 +160,8 @@ contract BotAttestationEscrowNotFoundTest is Test {
             uint256 createdAt,
             uint256 expiresAt,
             BotAttestationEscrow.EscrowState state,
-            bytes32 disputeId
+            bytes32 disputeId,
+            address party
         )
     {
         return escrow.escrows(id);
