@@ -110,6 +110,11 @@
         "name": "disputeId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "outputs": [],
@@ -183,6 +188,11 @@
         "name": "disputeId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "party",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -589,6 +599,12 @@
         "type": "bytes32",
         "indexed": false,
         "internalType": "bytes32"
+      },
+      {
+        "name": "party",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -774,6 +790,11 @@
   {
     "type": "error",
     "name": "DisputePredatesEscrow",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DisputeReasonTooLong",
     "inputs": []
   },
   {
