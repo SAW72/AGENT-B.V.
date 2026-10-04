@@ -11,17 +11,14 @@ import { resolveWalletChainId } from "./guard"
 import {
   CASE_ID_HINT,
   ERROR_GLOSSARY,
-  LINK_CASE_HEADING,
+  FILE_DISPUTE_BUTTON,
+  FILE_DISPUTE_TEXT,
   MAX_DURATION_SECONDS,
   NEW_CASE_ID_BUTTON,
-  OPEN_AND_LINK_BUTTON,
-  OPEN_AND_LINK_TEXT,
-  OPEN_CASE_HEADING,
   POST_EXPIRY_REFUND_INTRO,
   POST_EXPIRY_REFUND_ORDER,
   previewCreateEscrow,
   previewDispute,
-  previewOpenDispute,
   previewRefund,
   previewRelease,
   type CallPreview,
@@ -368,12 +365,6 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
       />
       <OpenDisputeForm
         escrow={escrow}
-        panel={panel}
-        onPreview={show}
-        onError={fail}
-      />
-      <DisputeForm
-        escrow={escrow}
         onPreview={show}
         onError={fail}
       />
@@ -382,17 +373,7 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
           {error}
         </p>
       ) : null}
-      {previews.length > 1 ? (
-        <div data-testid="open-and-link">
-          <p>{OPEN_AND_LINK_TEXT}</p>
-          <h3>{OPEN_CASE_HEADING}</h3>
-          <PreviewBlock preview={previews[0] ?? null} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
-          <h3>{LINK_CASE_HEADING}</h3>
-          <PreviewBlock preview={previews[1] ?? null} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
-        </div>
-      ) : (
-        <PreviewBlock preview={previews[0] ?? null} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
-      )}
+      <PreviewBlock preview={previews[0] ?? null} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
       <h3>Revert glossary</h3>
       <dl className="glossary">
         {ERROR_GLOSSARY.map((entry) => (
@@ -546,13 +527,11 @@ function IdForm({
 
 function OpenDisputeForm({
   escrow,
-  panel,
   onPreview,
   onError,
 }: {
   escrow: Address
-  panel: Address
-  onPreview: (preview: CallPreview[]) => void
+  onPreview: (preview: CallPreview) => void
   onError: (message: string) => void
 }) {
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
@@ -617,8 +596,13 @@ function OpenDisputeForm({
           onError(FORM_ERRORS.openIds)
           return
         }
-        if (reason.trim().length === 0) {
+        const trimmedReason = reason.trim()
+        if (trimmedReason.length === 0) {
           onError(FORM_ERRORS.openReason)
+          return
+        }
+        if (new TextEncoder().encode(trimmedReason).length > 256) {
+          onError(FORM_ERRORS.reasonTooLong)
           return
         }
         if (readingSubject || !resolution || (resolution.ok && resolution.escrowId !== claim)) {
@@ -634,14 +618,11 @@ function OpenDisputeForm({
           onError(windowMessage)
           return
         }
-        onPreview([
-          previewOpenDispute(panel, id, resolution.subject, reason.trim()),
-          previewDispute(escrow, claim, id),
-        ])
+        onPreview(previewDispute(escrow, claim, id, trimmedReason))
       }}
     >
       <h3>Open a dispute</h3>
-      <p className="muted">{OPEN_AND_LINK_TEXT}</p>
+      <p className="muted">{FILE_DISPUTE_TEXT}</p>
       <Field
         id="open-dispute-id"
         label="Case identifier"
@@ -671,44 +652,7 @@ function OpenDisputeForm({
         hint={subjectHint}
       />
       <Field id="open-reason" label="Reason" value={reason} onChange={setReason} />
-      <button type="submit">{OPEN_AND_LINK_BUTTON}</button>
-      <p className="mono">{panel}</p>
-    </form>
-  )
-}
-
-function DisputeForm({
-  escrow,
-  onPreview,
-  onError,
-}: {
-  escrow: Address
-  onPreview: (preview: CallPreview) => void
-  onError: (message: string) => void
-}) {
-  const [escrowId, setEscrowId] = useState("")
-  const [disputeId, setDisputeId] = useState("")
-  return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault()
-        const id = parseBytes32(escrowId)
-        const dispute = parseBytes32(disputeId)
-        if (!id) {
-          onError(FORM_ERRORS.disputeClaim)
-          return
-        }
-        if (!dispute) {
-          onError(FORM_ERRORS.disputeId)
-          return
-        }
-        onPreview(previewDispute(escrow, id, dispute))
-      }}
-    >
-      <h3>Link a dispute</h3>
-      <Field id="escrow-dispute-id" label="Claim identifier" value={escrowId} onChange={setEscrowId} />
-      <Field id="escrow-dispute-panel-id" label="Dispute identifier" value={disputeId} onChange={setDisputeId} />
-      <button type="submit">Prepare this dispute link</button>
+      <button type="submit">{FILE_DISPUTE_BUTTON}</button>
     </form>
   )
 }

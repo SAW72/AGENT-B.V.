@@ -85,7 +85,7 @@ function sourceFiles(dir: string): string[] {
       out.push(...sourceFiles(path))
       continue
     }
-    if (path.endsWith(".test.ts")) continue
+    if (path.endsWith(".test.ts") || path.endsWith(".test.tsx")) continue
     if (path.endsWith(".ts") || path.endsWith(".tsx")) out.push(path)
   }
   return out

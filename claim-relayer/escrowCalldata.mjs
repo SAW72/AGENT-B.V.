@@ -11,7 +11,7 @@ export const ESCROW_SIGNATURES = {
   createEscrow: "createEscrow(bytes32,address,bytes32,bytes32,uint256)",
   release: "release(bytes32)",
   refund: "refund(bytes32)",
-  dispute: "dispute(bytes32,bytes32)",
+  dispute: "dispute(bytes32,bytes32,string)",
 };
 
 /** Public getters. `owner()` is inherited from OpenZeppelin Ownable. */
@@ -102,6 +102,16 @@ function uintWord(value) {
   return value.toString(16).padStart(64, "0");
 }
 
+/** ABI tail for a dynamic string: offset is written by the caller. Length is UTF-8 bytes, capped at 256. */
+function reasonTail(value, field = "reason") {
+  if (typeof value !== "string") throw httpError(400, "invalid_reason", { field });
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length > 256) throw httpError(400, "reason_too_long", { field });
+  const padded = Buffer.alloc(Math.ceil(bytes.length / 32) * 32);
+  bytes.copy(padded);
+  return uintWord(BigInt(bytes.length)) + padded.toString("hex");
+}
+
 function escrowIdWord(body) {
   if (body.escrowId !== undefined && body.escrowId !== null && String(body.escrowId).trim() !== "") {
     return bytes32Word(body.escrowId, "escrowId");
@@ -155,7 +165,13 @@ export function encodeEscrowAction(body) {
 
   if (action === "dispute") {
     assertNoValue(body);
-    const words = [escrowIdWord(body), bytes32Word(body.disputeId, "disputeId")];
+    if (body.reason === undefined || body.reason === null) throw httpError(400, "invalid_reason", { field: "reason" });
+    const words = [
+      escrowIdWord(body),
+      bytes32Word(body.disputeId, "disputeId"),
+      uintWord(96n),
+      reasonTail(body.reason, "reason"),
+    ];
     return {
       action,
       signature,

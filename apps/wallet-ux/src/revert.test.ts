@@ -55,7 +55,7 @@ const ESC_M1 = [
   {
     name: "DisputeAfterExpiry",
     selector: "0xaf6c5d51",
-    meaning: "The claim window has closed, so this dispute can't be linked.",
+    meaning: "The claim window has closed, so this dispute can't be filed.",
   },
   {
     name: "RulingPending",

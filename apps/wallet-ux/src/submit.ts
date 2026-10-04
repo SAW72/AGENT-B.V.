@@ -96,7 +96,7 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
         : functionName === "refund"
           ? "This prepares a refund of a claim."
           : functionName === "dispute"
-            ? "This prepares linking a dispute to a claim."
+            ? "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason."
             : functionName === "openDispute"
               ? "This prepares opening a dispute."
               : "This prepares a transaction."
@@ -122,7 +122,8 @@ export const FORM_ERRORS = {
   subjectNotBooked: "This contract did not return a dispute subject. It is not a supported escrow.",
   subjectNotOpen:
     "This claim is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
-  subjectExpired: "The claim window has closed, so this dispute can't be linked.",
+  subjectExpired: "The claim window has closed, so this dispute can't be filed.",
+  reasonTooLong: "The reason is longer than 256 bytes, so this dispute was not prepared.",
   subjectMissing: "This claim is not on the escrow yet, so this dispute was not prepared.",
   subjectPending: "The subject is still being read, so this dispute was not prepared.",
   disputeClaim: "Enter the claim identifier before opening a dispute.",

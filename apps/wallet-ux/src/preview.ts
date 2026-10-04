@@ -49,13 +49,11 @@ export const POST_EXPIRY_REFUND_ORDER = [
   { state: "Otherwise", error: null, outcome: "The payer is refunded." },
 ] as const
 
-export const OPEN_AND_LINK_TEXT =
-  "Open the case, then link it to this claim right away, using this same identifier. The identifier is random, so it cannot be guessed from the claim."
+export const FILE_DISPUTE_TEXT =
+  "One transaction files this dispute. The identifier is random, so it cannot be guessed from the claim. If that identifier is already open, generate a new one. The claim stays open until a fresh identifier is filed."
 
-export const OPEN_AND_LINK_BUTTON = "Prepare opening and linking"
+export const FILE_DISPUTE_BUTTON = "Prepare this dispute"
 export const NEW_CASE_ID_BUTTON = "Generate a new identifier"
-export const OPEN_CASE_HEADING = "Open the case"
-export const LINK_CASE_HEADING = "Link the case"
 export const CASE_ID_HINT = "A new random identifier for this case. It is not taken from the claim or the clock."
 
 /** Contract error ReleaseNotAuthorized. */
@@ -74,14 +72,15 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "AttestationFailed", meaning: "This claim can't be created. The amount or the time window isn't allowed, or one of the bots is inactive, not approved for payments, blocked, or on the deny list." },
   { name: "InvalidParties", meaning: "The payer and payee aren't valid. They must be two different wallets, with two different bots, and the connected wallet must be allowed to act for the payer." },
   { name: "Replay", meaning: "This claim identifier was already used. Choose a new one." },
-  { name: "InvalidDispute", meaning: "This dispute can't be linked. The dispute identifier is missing, the panel hasn't recorded an outcome, or the outcome is for a different claim." },
+  { name: "InvalidDispute", meaning: "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created." },
   { name: "DisputeAlreadyResolved", meaning: "This dispute is already resolved, so it can't be linked to this claim." },
   { name: "DisputeVotesCast", meaning: DISPUTE_VOTES_CAST_TEXT },
   { name: "DisputePredatesEscrow", meaning: "This dispute was opened before this claim, so it can't be linked." },
   { name: "DisputeChallengerNotParty", meaning: "The person who opened this dispute is neither the payer nor the payee, so it can't be linked to this claim." },
   { name: "ReleaseNotAuthorized", meaning: RELEASE_NOT_AUTHORIZED_TEXT },
   { name: "NotParty", meaning: "This wallet is not a party to this escrow." },
-  { name: "DisputeAfterExpiry", meaning: "The claim window has closed, so this dispute can't be linked." },
+  { name: "DisputeAfterExpiry", meaning: "The claim window has closed, so this dispute can't be filed." },
+  { name: "DisputeReasonTooLong", meaning: "The reason is longer than 256 bytes, so this dispute was not filed." },
   { name: "DisputePending", meaning: DISPUTE_PENDING_TEXT },
   { name: "RulingPending", meaning: RULING_PENDING_TEXT },
   { name: "ZeroAddress", meaning: "A required wallet address was left blank." },
@@ -96,7 +95,7 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "transfer failed", meaning: "Paying the payee didn't go through. No funds were released." },
   { name: "refund failed", meaning: "The refund didn't go through. No funds were returned." },
   { name: "panel not seated", meaning: "A dispute can't be opened yet. The panel doesn't have enough members." },
-  { name: "exists", meaning: "A dispute with this identifier is already open." },
+  { name: "exists", meaning: "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open." },
   { name: "not authorized", meaning: "Only a panel member can vote on this dispute." },
   { name: "no dispute", meaning: "There is no dispute with that identifier to vote on." },
   { name: "resolved", meaning: "This dispute is already decided, so it can't be voted on." },
@@ -162,15 +161,21 @@ export function previewRefund(escrow: Address, escrowId: Hex): CallPreview {
   }
 }
 
-export function previewDispute(escrow: Address, escrowId: Hex, disputeId: Hex): CallPreview {
+/** One wallet call: dispute(escrowId, disputeId, reason). The escrow opens the panel case. */
+export function previewDispute(escrow: Address, escrowId: Hex, disputeId: Hex, reason: string): CallPreview {
   return {
     to: escrow,
     functionName: "dispute",
     valueWei: 0n,
-    calldata: encodeFunctionData({ abi: escrowAbi, functionName: "dispute", args: [escrowId, disputeId] }),
+    calldata: encodeFunctionData({
+      abi: escrowAbi,
+      functionName: "dispute",
+      args: [escrowId, disputeId, reason],
+    }),
   }
 }
 
+/** Panel-only preview. The dispute form does not send this. The escrow calls it inside dispute(). */
 export function previewOpenDispute(panel: Address, disputeId: Hex, subjectHash: Hex, reason: string): CallPreview {
   return {
     to: panel,
