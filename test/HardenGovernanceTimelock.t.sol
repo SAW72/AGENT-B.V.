@@ -24,7 +24,7 @@ contract HardenGovernanceTimelockTest is Test {
         assertGt(json.readUint(".governanceTimelockHardening.minDelayTarget"), 300);
         assertEq(json.readUint(".governanceTimelockHardening.liveMinDelay"), 300);
         assertFalse(json.readBool(".governanceTimelockHardening.applied"));
-        assertEq(json.readAddress(".governanceTimelockHardening.executorTarget"), hard.GOVERNANCE_TIMELOCK());
+        assertEq(json.readAddress(".governanceTimelockHardening.executorTarget"), hard.PROPOSER());
         assertEq(json.readString(".governanceTimelockHardening.executorMode"), "closed");
         assertEq(json.readString(".governanceTimelockHardening.liveExecutor"), "open");
         assertEq(json.readString(".governanceTimelockHardening.status"), "target-not-applied");
@@ -41,19 +41,21 @@ contract HardenGovernanceTimelockTest is Test {
 
     function test_buildUsesLiveDelayAndClosedExecutor() public {
         (TimelockController controller, address proposer) = _openController(300);
-        HardenGovernanceTimelock.Batch memory batch = hard.build(address(controller), controller.getMinDelay());
+        HardenGovernanceTimelock.Batch memory batch =
+            hard.build(address(controller), proposer, controller.getMinDelay());
 
         assertEq(batch.delay, 300);
         assertLt(batch.delay, hard.MIN_DELAY_TARGET());
         assertEq(batch.salt, keccak256("GOVERNANCE_TIMELOCK_HARDENING_V1"));
         assertEq(batch.predecessor, bytes32(0));
         assertEq(batch.targets.length, 3);
-        assertEq(batch.payloads[0], abi.encodeCall(TimelockController.updateDelay, (86_400)));
-        assertEq(
-            batch.payloads[1],
-            abi.encodeCall(IAccessControl.grantRole, (controller.EXECUTOR_ROLE(), address(controller)))
-        );
-        assertEq(batch.payloads[2], abi.encodeCall(IAccessControl.revokeRole, (controller.EXECUTOR_ROLE(), address(0))));
+        assertEq(batch.payloads[0], abi.encodeCall(IAccessControl.grantRole, (controller.EXECUTOR_ROLE(), proposer)));
+        assertEq(batch.payloads[1], abi.encodeCall(IAccessControl.revokeRole, (controller.EXECUTOR_ROLE(), address(0))));
+        assertEq(batch.payloads[2], abi.encodeCall(TimelockController.updateDelay, (86_400)));
+        vm.expectRevert(bytes("HardenTimelock: executor is the timelock"));
+        hard.build(address(controller), address(controller), 300);
+        vm.expectRevert(bytes("HardenTimelock: executor is open"));
+        hard.build(address(controller), address(0), 300);
         for (uint256 i = 0; i < 3; i++) {
             assertEq(batch.targets[i], address(controller));
             assertEq(batch.values[i], 0);
@@ -63,38 +65,38 @@ contract HardenGovernanceTimelockTest is Test {
 
     function test_previewSchedulesUntilTheBatchLands() public {
         (TimelockController controller, address proposer) = _openController(300);
-        (, string memory beforeSchedule) = hard.preview(address(controller));
+        (, string memory beforeSchedule) = hard.preview(address(controller), proposer);
         assertEq(beforeSchedule, "schedule");
 
-        HardenGovernanceTimelock.Batch memory batch = hard.build(address(controller), 300);
+        HardenGovernanceTimelock.Batch memory batch = hard.build(address(controller), proposer, 300);
         vm.prank(proposer);
         controller.scheduleBatch(
             batch.targets, batch.values, batch.payloads, batch.predecessor, batch.salt, batch.delay
         );
 
-        (, string memory pending) = hard.preview(address(controller));
+        (, string memory pending) = hard.preview(address(controller), proposer);
         assertEq(pending, "execute");
         assertEq(controller.getMinDelay(), 300);
         assertTrue(controller.hasRole(controller.EXECUTOR_ROLE(), address(0)));
-        assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), address(controller)));
+        assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), proposer));
 
         vm.warp(block.timestamp + 300);
         controller.executeBatch(batch.targets, batch.values, batch.payloads, batch.predecessor, batch.salt);
 
         assertEq(controller.getMinDelay(), 86_400);
-        assertTrue(controller.hasRole(controller.EXECUTOR_ROLE(), address(controller)));
+        assertTrue(controller.hasRole(controller.EXECUTOR_ROLE(), proposer));
         assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), address(0)));
+        assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), address(controller)));
         assertTrue(controller.hasRole(controller.PROPOSER_ROLE(), proposer));
         assertTrue(controller.hasRole(controller.CANCELLER_ROLE(), proposer));
-        assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), proposer));
 
-        (, string memory done) = hard.preview(address(controller));
+        (, string memory done) = hard.preview(address(controller), proposer);
         assertEq(done, "already-applied");
     }
 
-    function test_closedExecutorBlocksSafeAndStrangers() public {
+    function test_safeExecutorBlocksStrangers() public {
         (TimelockController controller, address proposer) = _openController(300);
-        HardenGovernanceTimelock.Batch memory batch = hard.build(address(controller), 300);
+        HardenGovernanceTimelock.Batch memory batch = hard.build(address(controller), proposer, 300);
         vm.prank(proposer);
         controller.scheduleBatch(batch.targets, batch.values, batch.payloads, batch.predecessor, batch.salt, 300);
         vm.warp(block.timestamp + 300);
@@ -116,16 +118,7 @@ contract HardenGovernanceTimelockTest is Test {
         controller.execute(address(controller), 0, later, bytes32(0), salt);
         vm.stopPrank();
 
-        vm.startPrank(proposer);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "AccessControlUnauthorizedAccount(address,bytes32)", proposer, controller.EXECUTOR_ROLE()
-            )
-        );
-        controller.execute(address(controller), 0, later, bytes32(0), salt);
-        vm.stopPrank();
-
-        vm.prank(address(controller));
+        vm.prank(proposer);
         controller.execute(address(controller), 0, later, bytes32(0), salt);
         assertTrue(
             controller.isOperationDone(controller.hashOperation(address(controller), 0, later, bytes32(0), salt))

@@ -58,12 +58,17 @@ describe("deployment book", () => {
     expect(deploymentBook.governanceTimelockHardening.minDelayTarget).toBeGreaterThan(300)
     expect(deploymentBook.governanceTimelockHardening.liveMinDelay).toBe(300)
     expect(deploymentBook.governanceTimelockHardening.applied).toBe(false)
-    expect(deploymentBook.governanceTimelockHardening.executorTarget).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.governanceTimelockHardening.executorTarget).toBe(
+      "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    )
+    expect(deploymentBook.governanceTimelockHardening.proposer).toBe(
+      "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    )
     expect(deploymentBook.governanceTimelockHardening.executorMode).toBe("closed")
     expect(deploymentBook.governanceTimelockHardening.liveExecutor).toBe("open")
     expect(deploymentBook.governanceTimelockHardening.timelock).toBe(CANONICAL.governanceTimelock)
     expect(deploymentBook.governanceTimelockHardening.notes).toContain("TARGET only")
-    expect(deploymentBook.governanceTimelockHardening.notes).toContain("Spencer must confirm")
+    expect(deploymentBook.governanceTimelockHardening.notes).toContain("Spencer delegated the executor choice to Pete")
     expect(deploymentBook.BotAttestationEscrow.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnershipTx).toBe(
       "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",

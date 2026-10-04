@@ -8,20 +8,19 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @notice Safe calldata for the booked governance-timelock hardening. It does not send transactions.
-/// @dev Target, not live state: `minDelay` 86400 and `EXECUTOR_ROLE` on the timelock itself.
+/// @dev Target, not live state: `minDelay` 86400 and `EXECUTOR_ROLE` on the governance Safe.
+///      Spencer delegated that executor choice to Pete. The Safe already proposes and cancels. Granting it
+///      `EXECUTOR_ROLE` and revoking `address(0)` closes the open executor without leaving the Safe unable
+///      to execute.
 ///      Base Sepolia still has `getMinDelay() == 300` and an open executor (`address(0)`) until the Safe
 ///      `0x12b3683A30De9845767c1f27a5D23591cA83dD54` submits `scheduleBatch` and, after that existing delay,
 ///      someone submits `executeBatch` while the executor is still open.
-///      Spencer must confirm the executor. After `address(0)` loses `EXECUTOR_ROLE`, only the timelock can
-///      call `execute` / `executeBatch`. The Safe can still propose and cancel. It cannot execute a later
-///      grant. A Safe or ops-wallet executor has to be granted in this same batch, before the revoke.
 ///      `--broadcast` reverts. Agents do not pass it. The Safe sends the calls.
 contract HardenGovernanceTimelock is Script {
     using stdJson for string;
 
     address public constant GOVERNANCE_TIMELOCK = 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33;
-    /// @dev Safe that holds `PROPOSER_ROLE` and `CANCELLER_ROLE` on the live controller. It does not hold
-    /// `EXECUTOR_ROLE`.
+    /// @dev Governance Safe. Live `PROPOSER_ROLE` and `CANCELLER_ROLE`. Booked `EXECUTOR_ROLE` target.
     address public constant PROPOSER = 0x12b3683A30De9845767c1f27a5D23591cA83dD54;
     address public constant CORE_TIMELOCK = 0x10CC9474b45625ADfd05C209f2518023484878D9;
 
@@ -54,13 +53,16 @@ contract HardenGovernanceTimelock is Script {
         if (isBroadcast) revert("HardenTimelock: do not --broadcast; the Safe sends these calls");
     }
 
-    /// @notice Three self-calls: `updateDelay(86400)`, grant the timelock `EXECUTOR_ROLE`, revoke `address(0)`.
+    /// @notice Grant `executor` `EXECUTOR_ROLE`, revoke `address(0)`, then `updateDelay(86400)`.
     /// @param scheduleDelay The existing `getMinDelay()`, not `MIN_DELAY_TARGET`.
     function build(
         address timelock,
+        address executor,
         uint256 scheduleDelay
     ) public pure returns (Batch memory batch) {
         if (timelock == address(0)) revert("HardenTimelock: timelock unset");
+        if (executor == address(0)) revert("HardenTimelock: executor is open");
+        if (executor == timelock) revert("HardenTimelock: executor is the timelock");
         if (scheduleDelay == 0) revert("HardenTimelock: schedule delay unset");
         if (MIN_DELAY_TARGET <= 300) revert("HardenTimelock: target delay is not above 300");
 
@@ -70,9 +72,9 @@ contract HardenGovernanceTimelock is Script {
         batch.targets[0] = timelock;
         batch.targets[1] = timelock;
         batch.targets[2] = timelock;
-        batch.payloads[0] = abi.encodeCall(TimelockController.updateDelay, (MIN_DELAY_TARGET));
-        batch.payloads[1] = abi.encodeCall(IAccessControl.grantRole, (EXECUTOR_ROLE, timelock));
-        batch.payloads[2] = abi.encodeCall(IAccessControl.revokeRole, (EXECUTOR_ROLE, address(0)));
+        batch.payloads[0] = abi.encodeCall(IAccessControl.grantRole, (EXECUTOR_ROLE, executor));
+        batch.payloads[1] = abi.encodeCall(IAccessControl.revokeRole, (EXECUTOR_ROLE, address(0)));
+        batch.payloads[2] = abi.encodeCall(TimelockController.updateDelay, (MIN_DELAY_TARGET));
         batch.predecessor = bytes32(0);
         batch.salt = SALT;
         batch.delay = scheduleDelay;
@@ -81,17 +83,18 @@ contract HardenGovernanceTimelock is Script {
     /// @notice `schedule` while the operation is unset, `execute` while it is pending, or `already-applied`.
     /// @dev `already-applied` is a chain read. The deployment book stays `target-not-applied` until a later edit.
     function preview(
-        address timelock
+        address timelock,
+        address executor
     ) public view returns (Batch memory batch, string memory action) {
         TimelockController controller = TimelockController(payable(timelock));
         uint256 liveDelay = controller.getMinDelay();
         if (liveDelay == 0) revert("HardenTimelock: live minDelay is zero");
 
         bool openExecutor = controller.hasRole(EXECUTOR_ROLE, address(0));
-        bool namedExecutor = controller.hasRole(EXECUTOR_ROLE, timelock);
+        bool namedExecutor = controller.hasRole(EXECUTOR_ROLE, executor);
         bool atTarget = liveDelay == MIN_DELAY_TARGET && namedExecutor && !openExecutor;
 
-        batch = build(timelock, liveDelay);
+        batch = build(timelock, executor, liveDelay);
         bytes32 id =
             controller.hashOperationBatch(batch.targets, batch.values, batch.payloads, batch.predecessor, batch.salt);
         if (atTarget) return (batch, "already-applied");
@@ -112,7 +115,7 @@ contract HardenGovernanceTimelock is Script {
         if (json.readUint(".governanceTimelockHardening.minDelayTarget") != MIN_DELAY_TARGET) {
             revert("HardenTimelock: book minDelay target");
         }
-        if (json.readAddress(".governanceTimelockHardening.executorTarget") != GOVERNANCE_TIMELOCK) {
+        if (json.readAddress(".governanceTimelockHardening.executorTarget") != PROPOSER) {
             revert("HardenTimelock: book executor");
         }
         if (keccak256(bytes(json.readString(".governanceTimelockHardening.executorMode"))) != keccak256("closed")) {
@@ -151,14 +154,13 @@ contract HardenGovernanceTimelock is Script {
         assertBook();
 
         console.log("SIMULATE; no transaction will be sent");
-        console.log("CONFIRM named executor is the timelock itself", GOVERNANCE_TIMELOCK);
-        console.log("After address(0) loses EXECUTOR_ROLE, the Safe cannot execute a later grant.");
-        console.log("Grant the Safe or another wallet in this same batch if that should remain possible.");
+        console.log("Spencer delegated the executor choice to Pete.");
+        console.log("named executor is the governance Safe", PROPOSER);
         console.log("TARGET minDelay", MIN_DELAY_TARGET);
         console.log("booked pre-apply minDelay", BOOKED_LIVE_MIN_DELAY);
         console.log("proposer Safe", PROPOSER);
 
-        (Batch memory batch, string memory action) = preview(GOVERNANCE_TIMELOCK);
+        (Batch memory batch, string memory action) = preview(GOVERNANCE_TIMELOCK, PROPOSER);
         _log(batch, action);
         console.log("Agents must not --broadcast.");
     }
@@ -171,7 +173,8 @@ contract HardenGovernanceTimelock is Script {
         console.log("action", action);
         console.log("LIVE getMinDelay", controller.getMinDelay());
         console.log("LIVE open executor", controller.hasRole(EXECUTOR_ROLE, address(0)));
-        console.log("LIVE timelock executor", controller.hasRole(EXECUTOR_ROLE, batch.targets[0]));
+        console.log("LIVE Safe executor", controller.hasRole(EXECUTOR_ROLE, PROPOSER));
+        console.log("TARGET executor", PROPOSER);
         console.log("schedule delay is the live minDelay, not the 86400 target", batch.delay);
         console.log("predecessor");
         console.logBytes32(batch.predecessor);
