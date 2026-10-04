@@ -931,9 +931,11 @@ contract CoreTimelockTest is FixtureFiles {
         escrowDeploy.useTimelockCheck(mig);
         (TimelockController tl, address safe) = _controller(300, address(0));
         _arm(safe, address(tl));
+        // The book names governanceTimelock. Deploy accepts NEW_TIMELOCK only when it is that address.
+        _pinGovernanceBook(escrowDeploy, address(tl));
         (address booked, bool set) = escrowDeploy.readBookGovernance();
-        assertFalse(set);
-        assertEq(booked, address(0));
+        assertTrue(set);
+        assertEq(booked, address(tl));
 
         (Denylist deny, Vault v, DisputePanel dispute) = _freshDeps();
         BotAttestationEscrow created = escrowDeploy.deploy(address(deny), address(v), address(dispute), address(tl));
@@ -963,6 +965,8 @@ contract CoreTimelockTest is FixtureFiles {
         escrowDeploy.useTimelockCheck(mig);
         (TimelockController tl, address safe) = _controller(300, address(0));
         _arm(safe, address(tl));
+        // The book names governanceTimelock. Broadcast accepts NEW_TIMELOCK only when it is that address.
+        _pinGovernanceBook(escrowDeploy, address(tl));
 
         address deployer = makeAddr("escrowBroadcaster");
         vm.deal(deployer, 1 ether);
@@ -1087,6 +1091,18 @@ contract CoreTimelockTest is FixtureFiles {
         mig.useSafe(safe);
         mig.useExpected(timelock);
         _pinDeployRecord(timelock);
+    }
+
+    /// @dev Fixture book whose `governanceTimelock` is the controller under test.
+    ///      `deployments/base-sepolia.json` already names the live controller, so an unpinned
+    ///      book rejects any other `NEW_TIMELOCK`.
+    function _pinGovernanceBook(
+        DeployBotAttestationEscrow escrowDeploy,
+        address timelock
+    ) internal {
+        string memory path = _fixturePath();
+        vm.writeFile(path, string.concat('{"governanceTimelock":"', vm.toString(timelock), '"}'));
+        escrowDeploy.useBook(path);
     }
 
     function _pinDeployRecord(
