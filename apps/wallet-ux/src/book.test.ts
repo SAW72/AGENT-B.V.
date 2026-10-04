@@ -47,7 +47,28 @@ describe("deployment book", () => {
     expect(deploymentBook.BotAttestationEscrow.startBlock).toBe(47345163)
     expect(deploymentBook.BotAttestationEscrow.commit).toBe("444c427")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnership).toBe("complete")
-    expect(deploymentBook.BotAttestationEscrow.owner).toBe("0x10CC9474b45625ADfd05C209f2518023484878D9")
+    expect(deploymentBook.BotAttestationEscrow.owner).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.Denylist.owner).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.Vault.owner).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.Denylist.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
+    expect(deploymentBook.Vault.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
+    expect(deploymentBook.BotAttestationEscrow.constructorArgs.governance).toBe(CANONICAL.coreTimelock)
+    expect(deploymentBook.governanceTimelockHardening.status).toBe("target-not-applied")
+    expect(deploymentBook.governanceTimelockHardening.minDelayTarget).toBe(86400)
+    expect(deploymentBook.governanceTimelockHardening.minDelayTarget).toBeGreaterThan(300)
+    expect(deploymentBook.governanceTimelockHardening.liveMinDelay).toBe(300)
+    expect(deploymentBook.governanceTimelockHardening.applied).toBe(false)
+    expect(deploymentBook.governanceTimelockHardening.executorTarget).toBe(
+      "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    )
+    expect(deploymentBook.governanceTimelockHardening.proposer).toBe(
+      "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    )
+    expect(deploymentBook.governanceTimelockHardening.executorMode).toBe("closed")
+    expect(deploymentBook.governanceTimelockHardening.liveExecutor).toBe("open")
+    expect(deploymentBook.governanceTimelockHardening.timelock).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.governanceTimelockHardening.notes).toContain("TARGET only")
+    expect(deploymentBook.governanceTimelockHardening.notes).toContain("Spencer delegated the executor choice to Pete")
     expect(deploymentBook.BotAttestationEscrow.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnershipTx).toBe(
       "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",

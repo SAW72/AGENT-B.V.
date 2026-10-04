@@ -3,16 +3,29 @@
   "chainId": 84532,
   "network": "base-sepolia",
   "status": "live",
-  "notes": "PR #11 DeployDenylist surgical redeploy (Denylist + Vault only). Gate A is DONE: acceptOwnership is complete on both the new Denylist and the new Vault. owner is coreTimelock and pendingOwner is the zero address on both. Listing migration replay of Listed/Unlisted from the old Denylist was empty (0 Exact / 0 Signature / 0 Prompt). Previous Denylist and Vault remain on chain under superseded (old Vault still points at the old Denylist; old Denylist owner remains coreTimelock and was untouched). Liability, InsuranceFund, and DisputePanel addresses are unchanged. BotAttestationEscrow is live at 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d (ESC-M-1 redeploy from commit 444c427). Deploy tx 0x7ab17bac1f046ad50299e905f6f5fed47455fdebd3e3004094b899c7f801d8aa is block 47345163 (indexer and relayer start block). Deployer is 0x5D467FA00eC0E92044f779e495a17db66c5964aa. transferOwnership tx 0xbffb1df647a1ecc3ec0ab479956b0564de0efe58d1664e0aad3c61a28fd76da8. acceptOwnership is complete (tx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9, block 47345442, status 1, from CORE_TIMELOCK). owner is coreTimelock and pendingOwner is the zero address. The previous escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c is retired (ESC-M-1 redeploy, retired 2026-09-26). Its deploy tx 0x700d9bac95e8833bd7e93721a88d689a0fb839c9e6108858c52560eae111948e and transferOwnership tx 0x00aaef315f23de346bfe63e77e0f04d3fbcadc370b0db21bb7abb8f8e12c40f2 are both block 47299930. Its acceptOwnership was complete (tx 0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983, block 47300275); owner is coreTimelock and pendingOwner is the zero address. Linked DisputePanel is 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb. Gate B is seated: arbitratorCount is 3. Arbitrators: 0xD5ee9fA366C3698b34204722c635989E5197B018, 0xF4253A3a3C102Ee59e38b2AA92989C3232eDcC30, 0xB87Ed5F74276AC6172ef53fE866675093F75936E. Seat txs (block 47299643): 0xa97b518ad87489ab1d45ec4bef5e548c1d4bf3b9c940552e8cba1752fed7553c, 0xf1ad4d9221b2393863d9bc6a72c1a716cf389532d2cfa63fd4df682303ed6df6, 0xa1f8f0fb6ad78dd2d9fd9d33dabf9cde5b73195a1b292869e7d96cc985cb79a3. The BVT stack is not deployed (address null). Agents do not --broadcast. Never put secrets here. SIMULATE is not live.",
+  "notes": "PR #11 DeployDenylist surgical redeploy (Denylist + Vault only). Gate A is DONE: acceptOwnership is complete on both the new Denylist and the new Vault. owner is governanceTimelock and pendingOwner is the zero address on both. Listing migration replay of Listed/Unlisted from the old Denylist was empty (0 Exact / 0 Signature / 0 Prompt). Previous Denylist and Vault remain on chain under superseded (old Vault still points at the old Denylist; old Denylist owner remains coreTimelock and was untouched). Liability, InsuranceFund, and DisputePanel addresses are unchanged. BotAttestationEscrow is live at 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d (ESC-M-1 redeploy from commit 444c427). Deploy tx 0x7ab17bac1f046ad50299e905f6f5fed47455fdebd3e3004094b899c7f801d8aa is block 47345163 (indexer and relayer start block). Deployer is 0x5D467FA00eC0E92044f779e495a17db66c5964aa. transferOwnership tx 0xbffb1df647a1ecc3ec0ab479956b0564de0efe58d1664e0aad3c61a28fd76da8. acceptOwnership is complete (tx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9, block 47345442, status 1, from CORE_TIMELOCK). owner is governanceTimelock and pendingOwner is the zero address. The previous escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c is retired (ESC-M-1 redeploy, retired 2026-09-26). Its deploy tx 0x700d9bac95e8833bd7e93721a88d689a0fb839c9e6108858c52560eae111948e and transferOwnership tx 0x00aaef315f23de346bfe63e77e0f04d3fbcadc370b0db21bb7abb8f8e12c40f2 are both block 47299930. Its acceptOwnership was complete (tx 0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983, block 47300275); owner is coreTimelock and pendingOwner is the zero address. Linked DisputePanel is 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb. Gate B is seated: arbitratorCount is 3. Arbitrators: 0xD5ee9fA366C3698b34204722c635989E5197B018, 0xF4253A3a3C102Ee59e38b2AA92989C3232eDcC30, 0xB87Ed5F74276AC6172ef53fE866675093F75936E. Seat txs (block 47299643): 0xa97b518ad87489ab1d45ec4bef5e548c1d4bf3b9c940552e8cba1752fed7553c, 0xf1ad4d9221b2393863d9bc6a72c1a716cf389532d2cfa63fd4df682303ed6df6, 0xa1f8f0fb6ad78dd2d9fd9d33dabf9cde5b73195a1b292869e7d96cc985cb79a3. The BVT stack is not deployed (address null). Agents do not --broadcast. Never put secrets here. SIMULATE is not live. governanceTimelock hardening is a TARGET, not live state: minDelayTarget is 86400 and the closed executor is the governance Safe 0x12b3683A30De9845767c1f27a5D23591cA83dD54. Spencer delegated that executor choice to Pete. Live getMinDelay() is still 300 and EXECUTOR_ROLE is still open on address(0) until that Safe schedules the batch and, after the existing delay, it is executed. See governanceTimelockHardening.",
   "coreTimelock": "0x10CC9474b45625ADfd05C209f2518023484878D9",
   "governanceTimelock": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
+  "governanceTimelockHardening": {
+    "status": "target-not-applied",
+    "timelock": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
+    "minDelayTarget": 86400,
+    "executorTarget": "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    "executorMode": "closed",
+    "proposer": "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
+    "liveMinDelay": 300,
+    "liveExecutor": "open",
+    "applied": false,
+    "saltLabel": "GOVERNANCE_TIMELOCK_HARDENING_V1",
+    "notes": "TARGET only. Spencer delegated the executor choice to Pete. minDelayTarget 86400 (24h) is the mainnet-ready delay; 300s is the live getMinDelay() and is too weak for mainnet. 24h is a common protocol-change delay and still lets the Safe cancel inside the window. The named executor is the governance Safe 0x12b3683A30De9845767c1f27a5D23591cA83dD54, which already holds PROPOSER_ROLE and CANCELLER_ROLE. The batch grants EXECUTOR_ROLE to that Safe, revokes EXECUTOR_ROLE from address(0), and calls updateDelay(86400). The schedule delay stays the live 300 seconds until the batch executes. Live chain stays 300/open until that Safe applies docs/runbooks/GOVERNANCE_TIMELOCK_HARDENING.md. This object does not mean the chain already has a 24h delay. Agents do not --broadcast."
+  },
   "bvtGuardian": null,
   "claimRelayerWallet": "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861",
   "Denylist": {
     "address": "0xeE76876bECcFc1B58fC06fF4E654a517d784B224",
     "deployTx": "0xc4f2bf7ac1b256f79aaa566db6c88973761b41ae0e510d16e49cc2c7897c0c32",
     "transferOwnershipTx": "0xb9767bc6c2b54ff4ae805c09b401c0c5ffb0079be0a54b7925eb9dd41758443c",
-    "owner": "0x10CC9474b45625ADfd05C209f2518023484878D9",
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
     "pendingOwner": "0x0000000000000000000000000000000000000000",
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949",
@@ -23,7 +36,7 @@
     "deployTx": "0xeb0b97ac3c7abd49ffd99baef18703cb44563ff906e664d494325174ef6a8171",
     "transferOwnershipTx": "0xd2b0aef1af321729e7361305a591ed7d8aacb2d84724968f979598e8be2d4076",
     "denylist": "0xeE76876bECcFc1B58fC06fF4E654a517d784B224",
-    "owner": "0x10CC9474b45625ADfd05C209f2518023484878D9",
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
     "pendingOwner": "0x0000000000000000000000000000000000000000",
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0",
@@ -55,7 +68,7 @@
       "panel": "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb",
       "governance": "0x10CC9474b45625ADfd05C209f2518023484878D9"
     },
-    "owner": "0x10CC9474b45625ADfd05C209f2518023484878D9",
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
     "pendingOwner": "0x0000000000000000000000000000000000000000",
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",
@@ -64,7 +77,7 @@
     "blockscout": "https://base-sepolia.blockscout.com/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
     "basescan": "verified",
     "basescanUrl": "https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code",
-    "notes": "acceptOwnership is complete. owner is CORE_TIMELOCK and pendingOwner is the zero address. accept tx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9, block 47345442, status 1, from CORE_TIMELOCK. Basescan is verified (Pass - Verified) via Etherscan v2, solc v0.8.20+commit.a1b79de6, standard JSON, shanghai: https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code."
+    "notes": "acceptOwnership is complete. owner is governanceTimelock and pendingOwner is the zero address. accept tx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9, block 47345442, status 1, from CORE_TIMELOCK. Basescan is verified (Pass - Verified) via Etherscan v2, solc v0.8.20+commit.a1b79de6, standard JSON, shanghai: https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code."
   },
   "BVT": {
     "address": null,
