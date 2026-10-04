@@ -30,7 +30,7 @@ describe("config gates", () => {
     assert.equal(health.escrowStartBlockSource, "address_book");
     assert.equal(config.disputePanelAddress, "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb");
     assert.equal(config.coreTimelock, "0x10CC9474b45625ADfd05C209f2518023484878D9");
-    assert.equal(config.governanceTimelock, null);
+    assert.equal(config.governanceTimelock, "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33");
     assert.equal(config.bvtAddress, null);
     assert.equal(config.liveSubmit.allowed, false);
     assert.equal(config.claimApiSecret, undefined);
