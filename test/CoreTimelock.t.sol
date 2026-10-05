@@ -1304,7 +1304,8 @@ contract SafeThresholdStub {
 /// @notice Live Base Sepolia classification. Skips with no fork and no `BASE_SEPOLIA_RPC_URL`.
 contract CoreTimelockForkTest is FixtureFiles {
     address internal constant CORE = 0x10CC9474b45625ADfd05C209f2518023484878D9;
-    address internal constant DEPLOYER = 0x5D467FA00eC0E92044f779e495a17db66c5964aa;
+    /// @dev Live owner of the book rows this fork reads. Same address as `governanceTimelock`.
+    address internal constant GOVERNANCE_TIMELOCK = 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33;
     uint256 internal constant BASE_SEPOLIA = 84532;
 
     MigrateOwnershipToTimelock internal mig;
@@ -1386,7 +1387,7 @@ contract CoreTimelockForkTest is FixtureFiles {
         for (uint256 i = 0; i < 8; i++) {
             (bool hasOwner, address owner, bool twoStep, address pending) = mig.inspect(owned[i]);
             assertTrue(hasOwner);
-            assertEq(owner, CORE);
+            assertEq(owner, GOVERNANCE_TIMELOCK);
             assertEq(pending, address(0));
             if (i == 2 || i == 3 || i == 4) assertFalse(twoStep);
             else assertTrue(twoStep);
@@ -1395,8 +1396,8 @@ contract CoreTimelockForkTest is FixtureFiles {
         (bool oldHas, address oldOwner, bool oldTwo, address oldPending) = mig.inspect(targets[12]);
         assertTrue(oldHas);
         assertTrue(oldTwo);
-        assertEq(oldOwner, DEPLOYER);
-        assertEq(oldPending, CORE);
+        assertEq(oldOwner, GOVERNANCE_TIMELOCK);
+        assertEq(oldPending, address(0));
 
         assertEq(mig.governanceOf(targets[5]), CORE);
         assertEq(mig.governanceOf(targets[13]), CORE);

@@ -238,7 +238,8 @@ contract DisputePanelLiveReadTest is Test {
     using stdJson for string;
 
     address internal constant PANEL = 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb;
-    address internal constant CORE_TIMELOCK = 0x10CC9474b45625ADfd05C209f2518023484878D9;
+    /// @dev Live DisputePanel owner. `pendingOwner()` reverts (immediate `setOwner`).
+    address internal constant GOVERNANCE_TIMELOCK = 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33;
     uint256 internal constant BASE_SEPOLIA = 84532;
 
     OpsDisputePanelAdd internal addOp;
@@ -264,7 +265,7 @@ contract DisputePanelLiveReadTest is Test {
     function test_forkReadsOwnerAndArbitratorCount() public view {
         assertEq(block.chainid, BASE_SEPOLIA);
         assertGt(PANEL.code.length, 0);
-        assertEq(panel.owner(), CORE_TIMELOCK);
+        assertEq(panel.owner(), GOVERNANCE_TIMELOCK);
         uint256 count = panel.arbitratorCount();
         assertEq(count, panel.arbitratorCount());
         assertLt(count, 1024);
@@ -273,13 +274,20 @@ contract DisputePanelLiveReadTest is Test {
 
     function test_forkLoadPanelMatchesBook() public {
         vm.setEnv("DISPUTE_PANEL", vm.toString(PANEL));
-        // Not a deployed controller. The live owner is still CORE, so this stays on the legacy path.
-        vm.setEnv("NEW_TIMELOCK", vm.toString(address(0xBEEF)));
+        // Live owner is the governance timelock, so this stays on the calldata path.
+        vm.setEnv("NEW_TIMELOCK", vm.toString(GOVERNANCE_TIMELOCK));
         (DisputePanel loaded, address timelock) = addOp.loadPanel();
         assertEq(address(loaded), PANEL);
-        assertEq(timelock, address(0xBEEF));
-        assertEq(loaded.owner(), CORE_TIMELOCK);
-        assertFalse(addOp.timelockMode(loaded.owner(), timelock));
-        loaded.arbitratorCount();
+        assertEq(timelock, GOVERNANCE_TIMELOCK);
+        assertEq(loaded.owner(), GOVERNANCE_TIMELOCK);
+        assertTrue(addOp.timelockMode(loaded.owner(), timelock));
+
+        address candidate = address(0xBEEF);
+        assertFalse(loaded.isArbitrator(candidate));
+        uint256 beforeCount = loaded.arbitratorCount();
+        addOp.useSalt(keccak256("DisputePanelLiveReadTest.loadPanel"));
+        addOp.queueOrApply(loaded, timelock, candidate, true);
+        assertFalse(loaded.isArbitrator(candidate));
+        assertEq(loaded.arbitratorCount(), beforeCount);
     }
 }
