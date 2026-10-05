@@ -794,6 +794,11 @@
   },
   {
     "type": "error",
+    "name": "DisputeReasonEmpty",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DisputeReasonTooLong",
     "inputs": []
   },

@@ -1857,6 +1857,18 @@ contract BotAttestationEscrowTest is Test {
         assertEq(challenger, address(escrow));
     }
 
+    function test_disputeEmptyReasonStaysOpen() public {
+        bytes32 escrowId = keccak256("reason-empty");
+        bytes32 disputeId = keccak256("reason-empty-d");
+        _create(escrowId, 1 ether, 3600);
+
+        vm.prank(payer);
+        vm.expectRevert(BotAttestationEscrow.DisputeReasonEmpty.selector);
+        escrow.dispute(escrowId, disputeId, "");
+
+        _assertDisputeRolledBack(escrowId, disputeId);
+    }
+
     function test_disputeReasonOverCapOpensNothing() public {
         bytes32 escrowId = keccak256("reason-cap");
         _create(escrowId, 1 ether, 3600);

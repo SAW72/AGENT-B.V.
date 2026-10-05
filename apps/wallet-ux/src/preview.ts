@@ -29,11 +29,11 @@ export const DISPUTE_PENDING_TEXT =
   "Release stays blocked while the dispute is unresolved or was unwound. A refund before the claim ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal."
 
 /**
- * Two votes on one side already decide a 3-member panel, so that case cannot be linked.
- * One vote, or one vote on each side, still links. The next step is a new case.
+ * Filing opens the panel case in the same transaction.
+ * Votes cast on another case are not read.
  */
 export const DISPUTE_VOTES_CAST_TEXT =
-  "Two votes on one side already decide this case, so it can't be linked or linked again. Open a new case and link that one."
+  "Filing opens the panel case in the same transaction. Votes cast on another case are not read."
 
 export const POST_EXPIRY_REFUND_INTRO = "After the claim ends, a refund is decided in this order."
 
@@ -73,10 +73,10 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "InvalidParties", meaning: "The payer and payee aren't valid. They must be two different wallets, with two different bots, and the connected wallet must be allowed to act for the payer." },
   { name: "Replay", meaning: "This claim identifier was already used. Choose a new one." },
   { name: "InvalidDispute", meaning: "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created." },
-  { name: "DisputeAlreadyResolved", meaning: "This dispute is already resolved, so it can't be linked to this claim." },
+  { name: "DisputeAlreadyResolved", meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim." },
   { name: "DisputeVotesCast", meaning: DISPUTE_VOTES_CAST_TEXT },
-  { name: "DisputePredatesEscrow", meaning: "This dispute was opened before this claim, so it can't be linked." },
-  { name: "DisputeChallengerNotParty", meaning: "The person who opened this dispute is neither the payer nor the payee, so it can't be linked to this claim." },
+  { name: "DisputePredatesEscrow", meaning: "Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim." },
+  { name: "DisputeChallengerNotParty", meaning: "Filing opens the panel case in the same transaction. The escrow opens that case, and the caller is stored as the party." },
   { name: "ReleaseNotAuthorized", meaning: RELEASE_NOT_AUTHORIZED_TEXT },
   { name: "NotParty", meaning: "This wallet is not a party to this escrow." },
   { name: "DisputeAfterExpiry", meaning: "The claim window has closed, so this dispute can't be filed." },

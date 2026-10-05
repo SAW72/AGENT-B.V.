@@ -35,7 +35,7 @@ const ESC_M1 = [
   {
     name: "DisputeAlreadyResolved",
     selector: "0xf10068b5",
-    meaning: "This dispute is already resolved, so it can't be linked to this claim.",
+    meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.",
   },
   {
     name: "DisputeVotesCast",
@@ -45,12 +45,12 @@ const ESC_M1 = [
   {
     name: "DisputePredatesEscrow",
     selector: "0x9bc3a099",
-    meaning: "This dispute was opened before this claim, so it can't be linked.",
+    meaning: "Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim.",
   },
   {
     name: "DisputeChallengerNotParty",
     selector: "0xb4b5168e",
-    meaning: "The person who opened this dispute is neither the payer nor the payee, so it can't be linked to this claim.",
+    meaning: "Filing opens the panel case in the same transaction. The escrow opens that case, and the caller is stored as the party.",
   },
   {
     name: "DisputeAfterExpiry",
@@ -245,7 +245,7 @@ describe("preflight", () => {
       })
     } catch (cause) {
       expect(presentError(cause).main).toBe(
-        "This dispute is already resolved, so it can't be linked to this claim.",
+        "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.",
       )
     }
   })
@@ -348,7 +348,7 @@ describe("preflight", () => {
     try {
       await submitRelayerAfterPreflight({ client, to: escrow, data: calldata, value: 0n, post })
     } catch (cause) {
-      expect(presentError(cause).main).toBe("This dispute is already resolved, so it can't be linked to this claim.")
+      expect(presentError(cause).main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
     }
   })
 })

@@ -270,7 +270,7 @@ describe("relayer broadcast failures", () => {
         jsonResponse(502, { error: "broadcast_failed", reason: "Execution reverted", revert_data: "0xf10068b5" }),
     }).catch((cause: unknown) => cause)
     const decoded = presentRelayerError(withData)
-    expect(decoded.main).toBe("This dispute is already resolved, so it can't be linked to this claim.")
+    expect(decoded.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
     expect(decoded.detail).toContain("DisputeAlreadyResolved")
     expect(decoded.detail).toContain("0xf10068b5")
     expect(decoded.detail).toContain("502 broadcast_failed")
@@ -289,7 +289,7 @@ describe("relayer broadcast failures", () => {
     }).catch((cause: unknown) => cause)
     const revertDataHit = presentRelayerError(fromRevertData)
     expect(revertDataHit.main).toBe(
-      "Two votes on one side already decide this case, so it can't be linked or linked again. Open a new case and link that one.",
+      "Filing opens the panel case in the same transaction. Votes cast on another case are not read.",
     )
     expect(revertDataHit.detail).toContain("0x8aab0a8f")
     expect(revertDataHit.main).not.toMatch(/0x[0-9a-fA-F]+/)
@@ -307,7 +307,7 @@ describe("relayer broadcast failures", () => {
         }),
     }).catch((cause: unknown) => cause)
     const dataHit = presentRelayerError(fromData)
-    expect(dataHit.main).toBe("This dispute was opened before this claim, so it can't be linked.")
+    expect(dataHit.main).toBe("Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim.")
     expect(dataHit.detail).toContain("0x9bc3a099")
     expect(dataHit.main).not.toContain("0x9bc3a099")
 
@@ -534,7 +534,7 @@ describe("refund submit via the claim relayer", () => {
     expect(client.waitForTransactionReceipt).not.toHaveBeenCalled()
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.presentation.main).toBe("This dispute is already resolved, so it can't be linked to this claim.")
+      expect(result.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
     }
   })
 
@@ -593,7 +593,7 @@ describe("refund submit via the claim relayer", () => {
     })
     expect(decoded.ok).toBe(false)
     if (decoded.ok) return
-    expect(decoded.presentation.main).toBe("This dispute is already resolved, so it can't be linked to this claim.")
+    expect(decoded.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
     expect(decoded.presentation.link?.href).toBe(relayerTxUrl(txHash))
     expect(decoded.presentation.main).not.toMatch(/[()]/)
 
