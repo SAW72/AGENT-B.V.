@@ -28,7 +28,7 @@ jobs:
       run:
         working-directory: apps/wallet-ux
     env:
-      LIVE_ESCROW: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d"
+      LIVE_ESCROW: "0x3d660502D75f1e97b08c110255921b437A3C4C42"
       PHRASE_SUBMITTING: "Submitting through the claim relayer"
       PHRASE_WALLET_CHOICE: "Submit through the claim relayer, or from your wallet."
     steps:

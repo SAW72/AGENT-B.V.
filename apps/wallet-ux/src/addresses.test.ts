@@ -22,16 +22,24 @@ describe("address pin", () => {
     expect(ADDRESSES.denylist).not.toBe(SUPERSEDED.denylist)
     expect(ADDRESSES.vault).not.toBe(SUPERSEDED.vault)
     expect(ADDRESSES.botAttestationEscrow).not.toBe(SUPERSEDED.botAttestationEscrow)
+    expect(ADDRESSES.botAttestationEscrow).not.toBe(SUPERSEDED.botAttestationEscrowEscM1)
   })
 
   it("loads live escrow from the book and keeps BVT unset", () => {
-    expect(ADDRESSES.botAttestationEscrow).toBe("0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d")
+    expect(ADDRESSES.botAttestationEscrow).toBe("0x3d660502D75f1e97b08c110255921b437A3C4C42")
     const bvt = NOT_DEPLOYED.filter(([name]) => name !== "BotAttestationEscrow")
     expect(bvt.map(([, address]) => address)).toEqual([null, null, null, null, null])
   })
 
   it("uses checksummed addresses", () => {
-    for (const address of [...LIVE, SUPERSEDED.denylist, SUPERSEDED.vault, SUPERSEDED.botAttestationEscrow, ZERO_ADDRESS]) {
+    for (const address of [
+      ...LIVE,
+      SUPERSEDED.denylist,
+      SUPERSEDED.vault,
+      SUPERSEDED.botAttestationEscrow,
+      SUPERSEDED.botAttestationEscrowEscM1,
+      ZERO_ADDRESS,
+    ]) {
       expect(isAddress(address)).toBe(true)
       expect(getAddress(address)).toBe(address)
     }

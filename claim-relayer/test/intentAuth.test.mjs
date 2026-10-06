@@ -285,6 +285,14 @@ describe("signed claim intent auth", () => {
       assert.equal(retiredRes.status, 400);
       assert.equal(retiredRes.json.error, "retired_or_superseded_address");
 
+      const retiredEscM1 = await releaseBody(accounts.payer, {
+        nonce: "106",
+        verifyingContract: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+      });
+      const retiredEscM1Res = await request(ctx.port, "POST", "/v1/claims", retiredEscM1);
+      assert.equal(retiredEscM1Res.status, 400);
+      assert.equal(retiredEscM1Res.json.error, "retired_or_superseded_address");
+
       const otherEscrow = "0x3333333333333333333333333333333333333333";
       const mismatch = await releaseBody(accounts.payer, { nonce: "105", verifyingContract: otherEscrow });
       const mismatchRes = await request(ctx.port, "POST", "/v1/claims", mismatch);
@@ -784,7 +792,7 @@ describe("signed claim intent auth", () => {
   });
 
   it("uses the booked escrow as the verifying contract", () => {
-    assert.equal(BOOKED_ESCROW.toLowerCase(), "0x1069aa6597f08f1e8b8ad39aa40ede1d0c77298d");
+    assert.equal(BOOKED_ESCROW.toLowerCase(), "0x3d660502d75f1e97b08c110255921b437a3c4c42");
   });
 });
 

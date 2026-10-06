@@ -18,7 +18,7 @@ The two ledgers are never summed, in storage, API, or UI. Points are off-chain, 
 
 - chainId `84532` only. Refuse to start (and refuse any RPC whose `eth_chainId` is not `0x14a34`) on any other chain, explicitly including `1` and `8453`.
 - Addresses and start blocks come from config (`contracts.*.address`, `contracts.*.start_block`). Usage and arbitrator points are earned only from Escrow, DisputePanel, and Vault logs on chainId `84532`. Denylist logs and the `Vault.bots()` view are allowed for enforcer signals only, at 0 points, and only from the pinned addresses in config. They are never an earning source.
-- Register every topic0 listed in EVENT_MAP.md, including **both** shapes of Escrow `VaultUpdated` and `DisputePanelUpdated` (1-field on the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, 4-field on the live escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` and on `main`). Decode by `(address, topic0)`. Unknown topic0 values are logged and skipped, never fatal. The live escrow indexer start block is `47345163`.
+- Register every topic0 listed in EVENT_MAP.md, including **both** shapes of Escrow `VaultUpdated` and `DisputePanelUpdated` (1-field on the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, 4-field on the live escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`, on the retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`, and on `main`). Decode by `(address, topic0)`. Unknown topic0 values are logged and skipped, never fatal. The live escrow indexer start block is `47715415`.
 - Block header timestamps (`eth_getBlockByNumber`) are the only time source. Never use wall-clock time or `expiresAt` alone for "created at".
 
 ## 3. Log scanning

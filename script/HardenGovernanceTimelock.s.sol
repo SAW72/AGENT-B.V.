@@ -8,14 +8,10 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @notice Safe calldata for the booked governance-timelock hardening. It does not send transactions.
-/// @dev Target, not live state: `minDelay` 86400 and `EXECUTOR_ROLE` on the governance Safe.
-///      Spencer delegated that executor choice to Pete. The Safe already proposes and cancels. Granting it
-///      `EXECUTOR_ROLE` and revoking `address(0)` closes the open executor without leaving the Safe unable
-///      to execute.
-///      Base Sepolia still has `getMinDelay() == 300` and an open executor (`address(0)`) until the Safe
-///      `0x12b3683A30De9845767c1f27a5D23591cA83dD54` submits `scheduleBatch` and, after that existing delay,
-///      someone submits `executeBatch` while the executor is still open.
-///      `--broadcast` reverts. Agents do not pass it. The Safe sends the calls.
+/// @dev The booked target is applied on Base Sepolia: `getMinDelay()` is 86400 and `EXECUTOR_ROLE` is
+///      held only by the governance Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54`. That Safe is 2-of-2,
+///      so losing either key freezes admin changes. Spencer delegated that executor choice to Pete.
+///      This script still only prints the batch that landed. `--broadcast` reverts. Agents do not pass it.
 contract HardenGovernanceTimelock is Script {
     using stdJson for string;
 
@@ -81,7 +77,7 @@ contract HardenGovernanceTimelock is Script {
     }
 
     /// @notice `schedule` while the operation is unset, `execute` while it is pending, or `already-applied`.
-    /// @dev `already-applied` is a chain read. The deployment book stays `target-not-applied` until a later edit.
+    /// @dev `already-applied` is a chain read. The deployment book records that state.
     function preview(
         address timelock,
         address executor
@@ -103,7 +99,7 @@ contract HardenGovernanceTimelock is Script {
         return (batch, "schedule");
     }
 
-    /// @notice Booked target matches this script. `applied` must stay false. Owners and escrow governance stay put.
+    /// @notice Booked target matches this script, and the book records that the chain has applied it.
     function assertBook() public view {
         string memory json = vm.readFile("deployments/base-sepolia.json");
         if (json.readAddress(".governanceTimelock") != GOVERNANCE_TIMELOCK) {
@@ -124,15 +120,14 @@ contract HardenGovernanceTimelock is Script {
         if (json.readAddress(".governanceTimelockHardening.proposer") != PROPOSER) {
             revert("HardenTimelock: book proposer");
         }
-        if (json.readUint(".governanceTimelockHardening.liveMinDelay") != BOOKED_LIVE_MIN_DELAY) {
+        if (json.readUint(".governanceTimelockHardening.liveMinDelay") != MIN_DELAY_TARGET) {
             revert("HardenTimelock: book live delay");
         }
-        if (keccak256(bytes(json.readString(".governanceTimelockHardening.liveExecutor"))) != keccak256("open")) {
+        if (keccak256(bytes(json.readString(".governanceTimelockHardening.liveExecutor"))) != keccak256("closed")) {
             revert("HardenTimelock: book live executor");
         }
-        if (json.readBool(".governanceTimelockHardening.applied")) revert("HardenTimelock: book claims applied");
-        if (keccak256(bytes(json.readString(".governanceTimelockHardening.status"))) != keccak256("target-not-applied"))
-        {
+        if (!json.readBool(".governanceTimelockHardening.applied")) revert("HardenTimelock: book not applied");
+        if (keccak256(bytes(json.readString(".governanceTimelockHardening.status"))) != keccak256("applied")) {
             revert("HardenTimelock: book status");
         }
         if (keccak256(bytes(json.readString(".governanceTimelockHardening.saltLabel"))) != keccak256(bytes(SALT_LABEL)))
@@ -144,7 +139,7 @@ contract HardenGovernanceTimelock is Script {
         if (json.readAddress(".BotAttestationEscrow.owner") != GOVERNANCE_TIMELOCK) {
             revert("HardenTimelock: escrow owner");
         }
-        if (json.readAddress(".BotAttestationEscrow.constructorArgs.governance") != CORE_TIMELOCK) {
+        if (json.readAddress(".BotAttestationEscrow.constructorArgs.governance") != GOVERNANCE_TIMELOCK) {
             revert("HardenTimelock: escrow governance");
         }
     }
@@ -193,7 +188,7 @@ contract HardenGovernanceTimelock is Script {
         console.logBytes32(id);
         if (keccak256(bytes(action)) == keccak256("already-applied")) {
             console.log(
-                "Chain matches the target. The book still says target-not-applied. This script does not edit it."
+                "Chain matches the target. The book records applied."
             );
             return;
         }

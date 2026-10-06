@@ -43,6 +43,11 @@ export function startServer(env = process.env) {
     broadcaster,
   });
   const mode = config.liveSubmit.allowed ? "live" : "fixture";
+  if (config.escrowRetired) {
+    console.error(
+      `claim-relayer: configured escrow ${config.escrowAddress} is retired. Submits are disabled. Set ESCROW_ADDRESS to ${config.retiredEscrowCurrent} or clear ESCROW_ADDRESS to use the address book.`,
+    );
+  }
   server.listen(config.port, config.host, () => {
     console.log(
       `claim-relayer listening on ${config.host}:${config.port} mode=${mode} chainId=${config.chainId} escrowBooked=${config.escrowBooked} escrowStartBlock=${config.escrowStartBlock ?? "unset"} escrowStartBlockSource=${config.escrowStartBlockSource} killSwitch=${killSwitch.isOn()} liveSubmit=${config.liveSubmit.allowed}`,

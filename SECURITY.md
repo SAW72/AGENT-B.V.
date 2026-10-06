@@ -6,7 +6,7 @@
 
 ## Where it runs
 
-Base Sepolia (84532) only. Mainnet execution is refused. The live escrow is `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`, owned by `CORE_TIMELOCK`. The previous escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is retired. Addresses and the stage checklist are in [GO_LIVE.md](GO_LIVE.md) and `deployments/base-sepolia.json`.
+Base Sepolia (84532) only. Mainnet execution is refused. The live escrow is `0x3d660502D75f1e97b08c110255921b437A3C4C42`, owned by governanceTimelock `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`. The ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is retired (2026-10-06). The previous escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is retired (2026-09-26). Addresses and the stage checklist are in [GO_LIVE.md](GO_LIVE.md) and `deployments/base-sepolia.json`.
 
 ## What holds
 

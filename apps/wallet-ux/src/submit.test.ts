@@ -52,7 +52,7 @@ describe("evaluateEscrowSubmit", () => {
 
 describe("submit target", () => {
   it("allows the booked escrow and dispute panel only", () => {
-    expect(escrow).toBe("0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d")
+    expect(escrow).toBe("0x3d660502D75f1e97b08c110255921b437A3C4C42")
     expect(panel).toBe("0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb")
     if (!escrow || !panel) throw new Error("booked addresses missing")
     expect(() => assertSubmitTarget(escrow, [escrow, panel])).not.toThrow()

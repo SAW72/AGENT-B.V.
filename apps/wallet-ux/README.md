@@ -59,11 +59,11 @@ The current book matches:
 | DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` |
 | Liability | `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307` |
 | InsuranceFund | `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8` |
-| BotAttestationEscrow | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` |
+| BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |
 
-The superseded Denylist `0xF0f260967D377E07Bdd7840862508ddB23C012b8` and Vault `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` are recorded only so the UI cannot treat them as live. The previous BotAttestationEscrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is retired (ESC-M-1 redeploy, retired 2026-09-26) and is not a read target. BVT stays `null`.
+The superseded Denylist `0xF0f260967D377E07Bdd7840862508ddB23C012b8` and Vault `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` are recorded only so the UI cannot treat them as live. Two escrows are retired and are not read targets: `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (ESC-M-1, retired 2026-10-06) and `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` (pre-ESC-M-1, retired 2026-09-26). BVT stays `null`.
 
-The booked escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is source `444c427`. A dispute on that contract links only when the panel subject is the claim identifier. The wallet reads `panelSubject` from the escrow and uses that bytes32 as-is. It uses the claim identifier only when that view reverts with empty data, the address has code, and the address is this booked escrow. A network failure, a timeout, a node limit, or an empty revert on any other address blocks the open. A later redeploy changes this wallet book, the relayer book, the deploy-guard pin in `scripts/guard-escrow-addresses.mjs`, and the superseded entry for `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` together. Those four pins stay on this address until that redeploy.
+The booked escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` is source `7fe4a863e9bce0b70b629dab76ddd2728c97b536`. It exposes `panelSubject`. The wallet reads that view and uses the bytes32 as-is. It uses the claim identifier only when that view reverts with empty data, the address has code, and the address is this booked escrow. A network failure, a timeout, a node limit, or an empty revert on any other address blocks the open. A later redeploy changes this wallet book, the relayer book, the deploy-guard pin in `scripts/guard-escrow-addresses.mjs`, and the superseded entries for both retired escrows together.
 
 Liability and InsuranceFund are included because `deployments/base-sepolia.json` still lists them and the live `owner` / `insurance()` / `liability()` links agree with that book. Rows are owner, balance, and the cross-link.
 

@@ -9,7 +9,7 @@ import { encodeEscrowAction } from "../escrowCalldata.mjs";
 
 export const TEST_MNEMONIC = "test test test test test test test test test test test junk";
 export const NOW_MS = Date.parse("2026-09-25T19:00:00.000Z");
-export const BOOKED_ESCROW = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
+export const BOOKED_ESCROW = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
 export const ZERO = "0x0000000000000000000000000000000000000000";
 
 export function testAccounts() {

@@ -42,22 +42,23 @@ describe("deployment book", () => {
     expect(ADDRESSES.disputePanel).toBe(CANONICAL.disputePanel)
     expect(ADDRESSES.liability).toBe(CANONICAL.liability)
     expect(ADDRESSES.insuranceFund).toBe(CANONICAL.insuranceFund)
-    expect(ADDRESSES.botAttestationEscrow).toBe("0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d")
+    expect(ADDRESSES.botAttestationEscrow).toBe("0x3d660502D75f1e97b08c110255921b437A3C4C42")
     expect(ADDRESSES.botAttestationEscrow).not.toBe(SUPERSEDED.botAttestationEscrow)
-    expect(deploymentBook.BotAttestationEscrow.startBlock).toBe(47345163)
-    expect(deploymentBook.BotAttestationEscrow.commit).toBe("444c427")
+    expect(ADDRESSES.botAttestationEscrow).not.toBe(SUPERSEDED.botAttestationEscrowEscM1)
+    expect(deploymentBook.BotAttestationEscrow.startBlock).toBe(47715415)
+    expect(deploymentBook.BotAttestationEscrow.commit).toBe("7fe4a863e9bce0b70b629dab76ddd2728c97b536")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnership).toBe("complete")
     expect(deploymentBook.BotAttestationEscrow.owner).toBe(CANONICAL.governanceTimelock)
     expect(deploymentBook.Denylist.owner).toBe(CANONICAL.governanceTimelock)
     expect(deploymentBook.Vault.owner).toBe(CANONICAL.governanceTimelock)
     expect(deploymentBook.Denylist.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
     expect(deploymentBook.Vault.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
-    expect(deploymentBook.BotAttestationEscrow.constructorArgs.governance).toBe(CANONICAL.coreTimelock)
-    expect(deploymentBook.governanceTimelockHardening.status).toBe("target-not-applied")
+    expect(deploymentBook.BotAttestationEscrow.constructorArgs.governance).toBe(CANONICAL.governanceTimelock)
+    expect(deploymentBook.governanceTimelockHardening.status).toBe("applied")
     expect(deploymentBook.governanceTimelockHardening.minDelayTarget).toBe(86400)
     expect(deploymentBook.governanceTimelockHardening.minDelayTarget).toBeGreaterThan(300)
-    expect(deploymentBook.governanceTimelockHardening.liveMinDelay).toBe(300)
-    expect(deploymentBook.governanceTimelockHardening.applied).toBe(false)
+    expect(deploymentBook.governanceTimelockHardening.liveMinDelay).toBe(86400)
+    expect(deploymentBook.governanceTimelockHardening.applied).toBe(true)
     expect(deploymentBook.governanceTimelockHardening.executorTarget).toBe(
       "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
     )
@@ -65,27 +66,32 @@ describe("deployment book", () => {
       "0x12b3683A30De9845767c1f27a5D23591cA83dD54",
     )
     expect(deploymentBook.governanceTimelockHardening.executorMode).toBe("closed")
-    expect(deploymentBook.governanceTimelockHardening.liveExecutor).toBe("open")
+    expect(deploymentBook.governanceTimelockHardening.liveExecutor).toBe("closed")
     expect(deploymentBook.governanceTimelockHardening.timelock).toBe(CANONICAL.governanceTimelock)
-    expect(deploymentBook.governanceTimelockHardening.notes).toContain("TARGET only")
+    expect(deploymentBook.governanceTimelockHardening.notes).toContain("APPLIED")
     expect(deploymentBook.governanceTimelockHardening.notes).toContain("Spencer delegated the executor choice to Pete")
+    expect(deploymentBook.governanceTimelockHardening.notes).toContain("losing either key freezes admin changes")
     expect(deploymentBook.BotAttestationEscrow.pendingOwner).toBe("0x0000000000000000000000000000000000000000")
     expect(deploymentBook.BotAttestationEscrow.acceptOwnershipTx).toBe(
-      "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",
+      "0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769",
     )
-    expect(deploymentBook.BotAttestationEscrow.acceptOwnershipBlock).toBe(47345442)
-    expect(deploymentBook.BotAttestationEscrow.basescan).toBe("verified")
+    expect(deploymentBook.BotAttestationEscrow.acceptOwnershipBlock).toBe(47760929)
+    expect(deploymentBook.BotAttestationEscrow.basescan).toBe("unconfirmed")
     expect(deploymentBook.BotAttestationEscrow.basescanUrl).toBe(
-      "https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code",
+      "https://sepolia.basescan.org/address/0x3d660502D75f1e97b08c110255921b437A3C4C42#code",
     )
     expect(deploymentBook.claimRelayerWallet).toBe("0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861")
     expect(ADDRESSES.bvt).toBeNull()
     expect(JSON.stringify(ADDRESSES).toLowerCase()).not.toContain(SUPERSEDED.denylist.toLowerCase())
     expect(JSON.stringify(ADDRESSES).toLowerCase()).not.toContain(SUPERSEDED.vault.toLowerCase())
     expect(JSON.stringify(ADDRESSES).toLowerCase()).not.toContain(SUPERSEDED.botAttestationEscrow.toLowerCase())
+    expect(JSON.stringify(ADDRESSES).toLowerCase()).not.toContain(SUPERSEDED.botAttestationEscrowEscM1.toLowerCase())
     expect(deploymentBook.superseded.Denylist.address).toBe(SUPERSEDED.denylist)
     expect(deploymentBook.retired.BotAttestationEscrow.address).toBe(SUPERSEDED.botAttestationEscrow)
     expect(deploymentBook.retired.BotAttestationEscrow.reason).toBe("ESC-M-1 redeploy, retired 2026-09-26")
+    expect(deploymentBook.retired.BotAttestationEscrowEscM1.address).toBe(SUPERSEDED.botAttestationEscrowEscM1)
+    expect(deploymentBook.retired.BotAttestationEscrowEscM1.supersededBy).toBe(ADDRESSES.botAttestationEscrow)
+    expect(deploymentBook.retired.BotAttestationEscrowEscM1.reason).toBe("Pull-payment redeploy, retired 2026-10-06")
   })
 
   it("falls back to the corrected pin when the book is not Base Sepolia", () => {
@@ -96,12 +102,14 @@ describe("deployment book", () => {
     expect(book).toEqual(fallbackBook())
   })
 
-  it("falls back when the live escrow is the retired address", () => {
-    const poisoned = structuredClone(deploymentBook)
-    poisoned.BotAttestationEscrow.address = SUPERSEDED.botAttestationEscrow
-    const book = resolveAddressBook(poisoned)
-    expect(book.source).toBe("fallback-pin")
-    expect(book.botAttestationEscrow).toBe(FALLBACK_PIN.botAttestationEscrow)
+  it("falls back when the live escrow is a retired address", () => {
+    for (const retired of [SUPERSEDED.botAttestationEscrow, SUPERSEDED.botAttestationEscrowEscM1]) {
+      const poisoned = structuredClone(deploymentBook)
+      poisoned.BotAttestationEscrow.address = retired
+      const book = resolveAddressBook(poisoned)
+      expect(book.source).toBe("fallback-pin")
+      expect(book.botAttestationEscrow).toBe(FALLBACK_PIN.botAttestationEscrow)
+    }
   })
 
   it("falls back when a live slot is a superseded address", () => {

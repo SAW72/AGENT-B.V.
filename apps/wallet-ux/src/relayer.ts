@@ -419,7 +419,12 @@ function withStatus(detail: string | null, status: number | null, code: string):
 }
 
 function isRetiredEscrow(value: unknown): boolean {
-  return typeof value === "string" && value.toLowerCase() === SUPERSEDED.botAttestationEscrow.toLowerCase()
+  if (typeof value !== "string") return false
+  const key = value.toLowerCase()
+  return (
+    key === SUPERSEDED.botAttestationEscrow.toLowerCase() ||
+    key === SUPERSEDED.botAttestationEscrowEscM1.toLowerCase()
+  )
 }
 
 function txHashFromBody(body: Record<string, unknown> | null): Hex | null {

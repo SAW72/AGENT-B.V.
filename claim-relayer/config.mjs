@@ -4,15 +4,30 @@
  * Escrow defaults from deployments/base-sepolia.json when ESCROW_ADDRESS is unset.
  */
 
-import { loadAddressBook, DEFAULT_ADDRESS_BOOK, parseStartBlock, rejectRetiredAddress } from "./addressBook.mjs";
+import {
+  loadAddressBook,
+  DEFAULT_ADDRESS_BOOK,
+  parseStartBlock,
+  rejectRetiredAddress,
+  currentBooking,
+} from "./addressBook.mjs";
 
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
 export const DEFAULT_RELAYER_ADDRESS = "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861";
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 /** Booked BotAttestationEscrow on Base Sepolia. Live submit refuses every other target. */
-export const BOOKED_SEPOLIA_ESCROW = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
-/** ESC-M-1 deploy block. Indexer and relayer log scans start here. */
-export const BOOKED_SEPOLIA_ESCROW_START_BLOCK = 47345163;
+export const BOOKED_SEPOLIA_ESCROW = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
+/** Pull-payment deploy block. Indexer and relayer log scans start here. */
+export const BOOKED_SEPOLIA_ESCROW_START_BLOCK = 47715415;
+/**
+ * Retired escrows. A configured escrow on this list does not crash the process.
+ * Startup logs the address, /health flags it, and every submit stays refused.
+ * ESC-M-1 (0x1069…) and the pre-ESC-M-1 escrow (0x141214…).
+ */
+export const RETIRED_SEPOLIA_ESCROWS = [
+  "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c",
+];
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const MAINNET_CHAIN_IDS = new Set([1, 8453]);
@@ -58,6 +73,7 @@ export function liveSubmitStatus(env, escrow = {}) {
   const blockers = [];
   if (MAINNET_CHAIN_IDS.has(chainId)) blockers.push("mainnet_refused");
   else if (!Number.isInteger(chainId) || chainId !== BASE_SEPOLIA_CHAIN_ID) blockers.push("wrong_chain");
+  if (booked.escrowRetired) blockers.push("escrow_retired");
   if (!booked.escrowBooked) blockers.push("escrow_not_booked");
   else if (!sameAddress(booked.escrowAddress, BOOKED_SEPOLIA_ESCROW)) blockers.push("escrow_not_booked_sepolia");
   if (!spencerAuth) blockers.push("spencer_run_auth_required");
@@ -114,7 +130,16 @@ function resolveEscrowStartBlock(env, escrowAddress, book) {
 
 function resolveEscrow(env) {
   const book = loadAddressBook(env.ADDRESS_BOOK_PATH || DEFAULT_ADDRESS_BOOK);
-  const guard = { forbidden: book.forbidden, replacements: book.replacements };
+  const forbidden = new Set(book.forbidden);
+  const replacements = new Map(book.replacements);
+  const retiredEscrows = new Set(book.retiredEscrows || []);
+  for (const retired of RETIRED_SEPOLIA_ESCROWS) {
+    const key = retired.toLowerCase();
+    forbidden.add(key);
+    retiredEscrows.add(key);
+    if (!replacements.has(key)) replacements.set(key, BOOKED_SEPOLIA_ESCROW);
+  }
+  const guard = { forbidden, replacements };
   rejectRetiredAddress(book.disputePanelAddress, guard);
   rejectRetiredAddress(book.denylistAddress, guard);
   rejectRetiredAddress(book.vaultAddress, guard);
@@ -136,7 +161,15 @@ function resolveEscrow(env) {
       escrowSource = "env";
     }
   }
-  rejectRetiredAddress(escrowAddress, guard);
+  const retiredKey = escrowAddress ? escrowAddress.toLowerCase() : "";
+  const escrowRetired = Boolean(retiredKey && retiredEscrows.has(retiredKey));
+  if (!escrowRetired) rejectRetiredAddress(escrowAddress, guard);
+  const retiredEscrowCurrent = escrowRetired
+    ? currentBooking(retiredKey, replacements) || BOOKED_SEPOLIA_ESCROW
+    : null;
+  const escrowRetiredDetail = escrowRetired
+    ? `${escrowAddress} is retired. Set ESCROW_ADDRESS to ${retiredEscrowCurrent} or clear ESCROW_ADDRESS to use the address book. Submits are disabled.`
+    : null;
   return {
     disputePanelAddress: book.disputePanelAddress,
     coreTimelock: book.coreTimelock,
@@ -146,6 +179,10 @@ function resolveEscrow(env) {
     escrowAddress,
     escrowBooked,
     escrowSource,
+    escrowRetired,
+    submitsDisabled: escrowRetired,
+    retiredEscrowCurrent,
+    escrowRetiredDetail,
     ...resolveEscrowStartBlock(env, escrowAddress, book),
   };
 }
@@ -227,6 +264,10 @@ export function loadConfig(env = process.env) {
     escrowStartBlockSource: escrow.escrowStartBlockSource,
     escrowBooked: escrow.escrowBooked,
     escrowSource: escrow.escrowSource,
+    escrowRetired: escrow.escrowRetired,
+    submitsDisabled: escrow.submitsDisabled,
+    retiredEscrowCurrent: escrow.retiredEscrowCurrent,
+    escrowRetiredDetail: escrow.escrowRetiredDetail,
     disputePanelAddress: escrow.disputePanelAddress,
     coreTimelock: escrow.coreTimelock,
     governanceTimelock: escrow.governanceTimelock,
@@ -243,6 +284,7 @@ export function loadConfig(env = process.env) {
     liveSubmit: liveSubmitStatus(env, {
       escrowBooked: escrow.escrowBooked,
       escrowAddress: escrow.escrowAddress,
+      escrowRetired: escrow.escrowRetired,
       chainId: BASE_SEPOLIA_CHAIN_ID,
     }),
     corsOrigins:
@@ -296,6 +338,21 @@ export function reputationCorsFromEnv(env) {
   return { pagesOrigin, previewHost, localHosts };
 }
 
+/** Clear refusal for a configured escrow that is on the retired list. Does not exit the process. */
+export function retiredEscrowError(config) {
+  return httpError(409, "retired_or_superseded_address", {
+    reason: config?.escrowRetiredDetail || "retired escrow. Set or clear ESCROW_ADDRESS. Submits are disabled.",
+    address: config?.escrowAddress,
+    current: config?.retiredEscrowCurrent,
+    txHash: null,
+    dryRun: false,
+    submitsDisabled: true,
+    escrowRetired: true,
+    escrowAddress: config?.escrowAddress ?? null,
+    escrowBooked: Boolean(config?.escrowBooked),
+  });
+}
+
 export function healthPayload(config, killSwitchOn) {
   const live = Boolean(config.liveSubmit?.allowed);
   return {
@@ -309,6 +366,8 @@ export function healthPayload(config, killSwitchOn) {
     escrowBooked: config.escrowBooked,
     escrowAddress: config.escrowAddress,
     escrowSource: config.escrowSource,
+    escrowRetired: Boolean(config.escrowRetired),
+    submitsDisabled: Boolean(config.submitsDisabled),
     escrowStartBlock: config.escrowStartBlock ?? null,
     escrowStartBlockSource: config.escrowStartBlockSource ?? null,
     relayerAddress: config.relayerAddress,

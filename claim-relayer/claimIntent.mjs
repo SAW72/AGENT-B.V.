@@ -16,7 +16,7 @@ import {
   toBytes,
 } from "viem";
 import { SUPERSEDED } from "./addressBook.mjs";
-import { httpError } from "./config.mjs";
+import { httpError, RETIRED_SEPOLIA_ESCROWS } from "./config.mjs";
 
 export const CLAIM_INTENT_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL("./claimIntent.json", import.meta.url)), "utf8"),
@@ -209,7 +209,8 @@ export function assertLowS(signature) {
  * The retired escrow is rejected even when it is not the configured address.
  */
 export function assertIntentDomain(intent, config) {
-  if (sameAddress(intent.verifyingContract, RETIRED_ESCROW)) {
+  const retired = RETIRED_SEPOLIA_ESCROWS.find((address) => sameAddress(intent.verifyingContract, address));
+  if (retired || sameAddress(intent.verifyingContract, RETIRED_ESCROW)) {
     throw httpError(400, "retired_or_superseded_address", {
       address: intent.verifyingContract,
       current: config.escrowAddress,

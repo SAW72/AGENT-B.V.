@@ -353,7 +353,7 @@ contract CoreTimelockTest is FixtureFiles {
         assertEq(targets[2], 0x554Caf5a214B8d70D675C09186C5EAE24FEB7307);
         assertEq(targets[3], 0x19fc26B36Cb2031062eD90C19db64b3b09753ab8);
         assertEq(targets[4], 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb);
-        assertEq(targets[5], 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d);
+        assertEq(targets[5], 0x3d660502D75f1e97b08c110255921b437A3C4C42);
         assertEq(targets[6], address(0));
         assertEq(targets[7], address(0));
         assertEq(targets[8], address(0));

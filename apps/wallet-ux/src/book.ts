@@ -17,14 +17,17 @@ export const FALLBACK_PIN = {
   disputePanel: "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb",
   liability: "0x554Caf5a214B8d70D675C09186C5EAE24FEB7307",
   insuranceFund: "0x19fc26B36Cb2031062eD90C19db64b3b09753ab8",
-  botAttestationEscrow: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  botAttestationEscrow: "0x3d660502D75f1e97b08c110255921b437A3C4C42",
 } as const
 
-/** Previous Denylist, Vault, and retired escrow. Blocked as a read target. Not rendered and not called. */
+/** Previous Denylist, Vault, and retired escrows. Blocked as a read target. Not rendered and not called. */
 export const SUPERSEDED = {
   denylist: "0xF0f260967D377E07Bdd7840862508ddB23C012b8",
   vault: "0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7",
+  /** Pre-ESC-M-1 escrow. Retired 2026-09-26. */
   botAttestationEscrow: "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c",
+  /** ESC-M-1 escrow. Retired 2026-10-06 by the pull-payment redeploy. */
+  botAttestationEscrowEscM1: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
 } as const
 
 export type BookSource = "src/base-sepolia.json" | "fallback-pin"
@@ -84,9 +87,10 @@ function forbiddenAddresses(raw: Record<string, unknown>): Set<string> {
     SUPERSEDED.denylist.toLowerCase(),
     SUPERSEDED.vault.toLowerCase(),
     SUPERSEDED.botAttestationEscrow.toLowerCase(),
+    SUPERSEDED.botAttestationEscrowEscM1.toLowerCase(),
   ])
   addBlocked(blocked, raw.superseded, ["Denylist", "Vault", "BotAttestationEscrow"])
-  addBlocked(blocked, raw.retired, ["BotAttestationEscrow"])
+  addBlocked(blocked, raw.retired, ["BotAttestationEscrow", "BotAttestationEscrowEscM1"])
   return blocked
 }
 
