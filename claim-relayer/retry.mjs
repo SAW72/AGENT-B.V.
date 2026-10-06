@@ -53,6 +53,9 @@ const TRANSIENT_MARKERS = [
   "alreadyknown",
   "try again",
   "server error",
+  "bad gateway",
+  "service unavailable",
+  "gateway timeout",
 ];
 
 /**

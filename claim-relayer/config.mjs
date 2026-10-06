@@ -100,8 +100,13 @@ function isMissingStartBlock(raw) {
  * constant when the book omits one. A different contract never inherits that block:
  * ESCROW_START_BLOCK supplies it, or the value stays null (source "unset").
  * Null is not block 0. Callers must not coalesce null to 0 or to BOOKED_SEPOLIA_ESCROW_START_BLOCK.
+ * A retired escrow skips this parse. Submits are already disabled, and a bad
+ * dashboard ESCROW_START_BLOCK must not crash-loop the process.
  */
-function resolveEscrowStartBlock(env, escrowAddress, book) {
+function resolveEscrowStartBlock(env, escrowAddress, book, escrowRetired) {
+  if (escrowRetired) {
+    return { escrowStartBlock: null, escrowStartBlockSource: "retired" };
+  }
   if (!escrowAddress) {
     return { escrowStartBlock: null, escrowStartBlockSource: "unbooked" };
   }
@@ -183,7 +188,7 @@ function resolveEscrow(env) {
     submitsDisabled: escrowRetired,
     retiredEscrowCurrent,
     escrowRetiredDetail,
-    ...resolveEscrowStartBlock(env, escrowAddress, book),
+    ...resolveEscrowStartBlock(env, escrowAddress, book, escrowRetired),
   };
 }
 

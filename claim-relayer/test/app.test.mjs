@@ -875,16 +875,79 @@ describe("claim relayer HTTP", () => {
         const fixture = await request(port, "POST", "/v1/claims", { claimId: "retired-fixture" });
         assert.equal(fixture.status, 409);
         assert.equal(fixture.json.error, "retired_or_superseded_address");
-        const logged = errors.filter((line) => line.includes("is retired"));
-        assert.equal(logged.length, 1);
-        assert.match(logged[0], new RegExp(address));
-        assert.match(logged[0], /ESCROW_ADDRESS/);
+        assert.equal(errors.length, 1);
+        assert.match(errors[0], /is retired/);
+        assert.match(errors[0], new RegExp(address));
+        assert.match(errors[0], /ESCROW_ADDRESS/);
       } finally {
         console.error = original;
         if (server) {
           await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
         }
       }
+    }
+  });
+
+  it("boots a retired escrow when ESCROW_START_BLOCK is invalid or empty", async () => {
+    const address = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
+    for (const startBlock of ["abc", ""]) {
+      const errors = [];
+      const original = console.error;
+      console.error = (...args) => {
+        errors.push(args.map(String).join(" "));
+      };
+      const dir = await mkdtemp(join(tmpdir(), "claim-relayer-retired-start-"));
+      const port = await freePort();
+      let server;
+      try {
+        server = startServer({
+          PORT: String(port),
+          HOST: "127.0.0.1",
+          ESCROW_ADDRESS: address,
+          ESCROW_START_BLOCK: startBlock,
+          KILL_SWITCH: "0",
+          CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+          INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
+        });
+        await once(server, "listening");
+        const health = await request(port, "GET", "/health");
+        assert.equal(health.status, 200);
+        assert.equal(health.json.ok, true);
+        assert.equal(health.json.escrowRetired, true);
+        assert.equal(health.json.submitsDisabled, true);
+        assert.equal(health.json.escrowBooked, true);
+        assert.equal(health.json.escrowStartBlock, null);
+        assert.equal(health.json.escrowStartBlockSource, "retired");
+        assert.equal(errors.length, 1);
+        assert.match(errors[0], /is retired/);
+        assert.match(errors[0], /ESCROW_ADDRESS/);
+      } finally {
+        console.error = original;
+        if (server) {
+          await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+        }
+      }
+    }
+  });
+
+  it("refuses a live quote for a retired escrow when the kill switch is off", async () => {
+    const ctx = await boot({
+      ESCROW_ADDRESS: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+      KILL_SWITCH: "0",
+    });
+    try {
+      const quote = await request(ctx.port, "POST", "/v1/claims/quote", {
+        payer: PAYER,
+        payee: PAYEE,
+        claimId: "retired-quote",
+        live: true,
+      });
+      assert.equal(quote.status, 409);
+      assert.equal(quote.json.error, "retired_or_superseded_address");
+      assert.equal(quote.json.escrowRetired, true);
+      assert.equal(quote.json.submitsDisabled, true);
+    } finally {
+      await ctx.close();
     }
   });
 

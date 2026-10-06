@@ -52,7 +52,7 @@ export function startServer(env = process.env) {
     console.log(
       `claim-relayer listening on ${config.host}:${config.port} mode=${mode} chainId=${config.chainId} escrowBooked=${config.escrowBooked} escrowStartBlock=${config.escrowStartBlock ?? "unset"} escrowStartBlockSource=${config.escrowStartBlockSource} killSwitch=${killSwitch.isOn()} liveSubmit=${config.liveSubmit.allowed}`,
     );
-    if (config.escrowAddress && config.escrowStartBlockSource === "unset") {
+    if (config.escrowAddress && !config.escrowRetired && config.escrowStartBlockSource === "unset") {
       console.error(
         `claim-relayer: ESCROW_ADDRESS ${config.escrowAddress} is not the booked escrow ${BOOKED_SEPOLIA_ESCROW}. The booked start block ${BOOKED_SEPOLIA_ESCROW_START_BLOCK} was not applied. Set ESCROW_START_BLOCK to a non-negative integer. escrowStartBlock is unset.`,
       );

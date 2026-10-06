@@ -227,6 +227,29 @@ describe("retired and superseded addresses", () => {
     assert.equal(health.escrowAddress, mixed);
   });
 
+  it("skips ESCROW_START_BLOCK parsing when the configured escrow is retired", () => {
+    for (const address of [RETIRED_ESCROW_ESC_M1, RETIRED_ESCROW]) {
+      for (const startBlock of ["abc", ""]) {
+        const config = loadConfig({ ESCROW_ADDRESS: address, ESCROW_START_BLOCK: startBlock });
+        assert.equal(config.escrowRetired, true);
+        assert.equal(config.submitsDisabled, true);
+        assert.equal(config.escrowBooked, true);
+        assert.equal(config.escrowStartBlock, null);
+        assert.equal(config.escrowStartBlockSource, "retired");
+        const health = healthPayload(config, false);
+        assert.equal(health.escrowRetired, true);
+        assert.equal(health.submitsDisabled, true);
+        assert.equal(health.escrowBooked, true);
+      }
+    }
+    const booked = loadConfig({ ESCROW_ADDRESS: BOOKED_SEPOLIA_ESCROW, ESCROW_START_BLOCK: "abc" });
+    assert.equal(booked.escrowRetired, false);
+    assert.equal(booked.escrowStartBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
+    const fromBook = loadConfig({ ESCROW_START_BLOCK: "abc" });
+    assert.equal(fromBook.escrowRetired, false);
+    assert.equal(fromBook.escrowStartBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
+  });
+
   it("boots on a mixed-case retired escrow and keeps the healthy path clear", () => {
     const mixed = "0x141214f04b0E1d949b6e6bf32D019Ad7Ab5B284C";
     const config = loadConfig({ ESCROW_ADDRESS: mixed });
