@@ -1399,8 +1399,12 @@ contract CoreTimelockForkTest is FixtureFiles {
         assertEq(oldOwner, GOVERNANCE_TIMELOCK);
         assertEq(oldPending, address(0));
 
-        assertEq(mig.governanceOf(targets[5]), CORE);
+        // Live pull-payment escrow: constructor governance is the governance timelock.
+        assertEq(mig.governanceOf(targets[5]), GOVERNANCE_TIMELOCK);
+        // Retired pre-ESC-M-1 escrow still reports CORE_TIMELOCK. Retired ESC-M-1
+        // (0x1069…) is not a migration-row pin and still reports CORE_TIMELOCK too.
         assertEq(mig.governanceOf(targets[13]), CORE);
+        assertEq(mig.governanceOf(0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d), CORE);
         assertFalse(mig.coreIsArbitrator(targets[4]));
         for (uint256 i = 6; i <= 10; i++) {
             assertEq(targets[i], address(0));
