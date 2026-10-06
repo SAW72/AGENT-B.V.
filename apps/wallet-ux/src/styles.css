@@ -33,6 +33,17 @@ body {
 
 h1 { font-size: 1.6rem; margin: 0 0 4px; }
 h2 { font-size: 1.15rem; margin: 0 0 10px; }
+h2.heading-with-pill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+h2.heading-with-pill .pill {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
 h3 { font-size: 1rem; margin: 16px 0 8px; }
 
 .lede, .muted, .hint { color: var(--muted); }
@@ -116,6 +127,24 @@ input {
 
 label { display: block; margin-bottom: 4px; }
 .field { margin: 10px 0; }
+
+fieldset.choice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 8px 12px 10px;
+}
+
+fieldset.choice legend { padding: 0 4px; }
+
+fieldset.choice label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+fieldset.choice input { width: auto; }
 
 .banner {
   background: var(--bad-bg);

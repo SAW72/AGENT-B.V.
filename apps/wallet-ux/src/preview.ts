@@ -102,6 +102,8 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "already voted", meaning: "You already voted on this dispute." },
   { name: "not owner", meaning: "Only the panel owner can do that." },
   { name: "zero arbitrator", meaning: "A panel member's wallet address was left blank." },
+  { name: "nothing to withdraw", meaning: "This wallet has no credit to withdraw." },
+  { name: "WithdrawFailed", meaning: "The withdrawal did not go through. The credit stays where it was." },
 ]
 
 export function previewCreateEscrow(input: {
@@ -185,6 +187,44 @@ export function previewOpenDispute(panel: Address, disputeId: Hex, subjectHash: 
       abi: disputePanelAbi,
       functionName: "openDispute",
       args: [disputeId, subjectHash, reason],
+    }),
+  }
+}
+
+/** Allowlisted arbitrator vote. The connected wallet is the signer. */
+export function previewVote(panel: Address, disputeId: Hex, support: boolean): CallPreview {
+  return {
+    to: panel,
+    functionName: "vote",
+    valueWei: 0n,
+    calldata: encodeFunctionData({
+      abi: disputePanelAbi,
+      functionName: "vote",
+      args: [disputeId, support],
+    }),
+  }
+}
+
+/** Pull the caller's full credit to the caller. */
+export function previewWithdraw(escrow: Address): CallPreview {
+  return {
+    to: escrow,
+    functionName: "withdraw",
+    valueWei: 0n,
+    calldata: encodeFunctionData({ abi: escrowAbi, functionName: "withdraw" }),
+  }
+}
+
+/** Pull the caller's full credit to `to`. */
+export function previewWithdrawTo(escrow: Address, to: Address): CallPreview {
+  return {
+    to: escrow,
+    functionName: "withdrawTo",
+    valueWei: 0n,
+    calldata: encodeFunctionData({
+      abi: escrowAbi,
+      functionName: "withdrawTo",
+      args: [to],
     }),
   }
 }

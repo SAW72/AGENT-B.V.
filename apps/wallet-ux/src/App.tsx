@@ -5,6 +5,8 @@ import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
+import { VoteScreen } from "./VoteScreen"
+import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
 import { PAGE_FOOTER } from "./brand"
 import {
@@ -353,6 +355,9 @@ export function App() {
         status={guard.ok && statusQuery.data ? statusQuery.data.escrow : null}
         readsEnabled={guard.ok}
       />
+
+      <VoteScreen panel={ADDRESSES.disputePanel} />
+      <WithdrawScreen escrow={ADDRESSES.botAttestationEscrow} readsEnabled={guard.ok} />
 
       <section className="card" aria-labelledby="bvt-heading">
         <h2 id="bvt-heading">BVT stack</h2>

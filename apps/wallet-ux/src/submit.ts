@@ -84,6 +84,12 @@ export function submitSenderNote(functionName: string): string {
   if (functionName === "refund") {
     return "Anyone can send a refund. The connected wallet sends this on Base Sepolia."
   }
+  if (functionName === "vote") {
+    return "Only an allowlisted arbitrator can vote. The connected wallet signs this on Base Sepolia."
+  }
+  if (functionName === "withdraw" || functionName === "withdrawTo") {
+    return "The connected wallet pulls its own credit on Base Sepolia."
+  }
   return "The connected wallet sends this on Base Sepolia."
 }
 
@@ -99,7 +105,11 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
             ? "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason."
             : functionName === "openDispute"
               ? "This prepares opening a dispute."
-              : "This prepares a transaction."
+              : functionName === "vote"
+                ? "This prepares an arbitrator vote."
+                : functionName === "withdraw" || functionName === "withdrawTo"
+                  ? "This prepares a withdrawal of this wallet's credit."
+                  : "This prepares a transaction."
   const relayer =
     relayerConfigured && functionName === "refund"
       ? " A refund can also be sent through the claim relayer on Base Sepolia."
@@ -130,6 +140,9 @@ export const FORM_ERRORS = {
   disputeId: "Enter the dispute identifier before opening a dispute.",
   denylistHash: "Enter the identifier before looking it up.",
   denylistCheck: "Enter the weight, behavior, and prompt identifiers before checking the deny list.",
+  voteId: "Enter the dispute identifier before voting.",
+  voteChoice: "Choose uphold or against before voting.",
+  withdrawDestination: "Enter the destination wallet address.",
 } as const
 
 export function durationValidationMessage(maxSeconds: number): string {
