@@ -19,6 +19,8 @@ import {
   previewOpenDispute,
   previewRefund,
   previewRelease,
+  previewVote,
+  previewWithdraw,
 } from "./preview"
 
 const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as const
@@ -61,6 +63,20 @@ describe("calldata preview", () => {
     expect(decodeFunctionData({ abi: disputePanelAbi, data: opened.calldata }).functionName).toBe("openDispute")
     expect(release.valueWei).toBe(0n)
     expect(opened.to).toBe(panel)
+  })
+
+  it("encodes vote true and false, and withdraw, as zero-value wallet calldata", () => {
+    const payeePaid = previewVote(panel, id, true)
+    const payerRefunded = previewVote(panel, id, false)
+    const withdraw = previewWithdraw(escrow)
+    expect(payeePaid.to).toBe(panel)
+    expect(payeePaid.valueWei).toBe(0n)
+    expect(decodeFunctionData({ abi: disputePanelAbi, data: payeePaid.calldata }).args).toEqual([id, true])
+    expect(decodeFunctionData({ abi: disputePanelAbi, data: payerRefunded.calldata }).args).toEqual([id, false])
+    expect(withdraw.to).toBe(escrow)
+    expect(withdraw.valueWei).toBe(0n)
+    expect(decodeFunctionData({ abi: escrowAbi, data: withdraw.calldata }).functionName).toBe("withdraw")
+    expect(decodeFunctionData({ abi: escrowAbi, data: withdraw.calldata }).args ?? []).toEqual([])
   })
 
   it("lists the escrow and panel revert strings", () => {

@@ -92,7 +92,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("wallet writes", () => {
-  it("limits sends to the Base Sepolia escrow submit and signs only a claim intent", () => {
+  it("limits sends to wallet submits on Base Sepolia and signs only a claim intent", () => {
     const src = dirname(fileURLToPath(import.meta.url))
     const hits: string[] = []
     const sendHits: string[] = []
@@ -116,7 +116,9 @@ describe("wallet writes", () => {
     const relayer = readFileSync(join(src, "relayer.ts"), "utf8")
     expect(relayer).toContain("CLAIM_INTENT_PRIMARY_TYPE")
     expect(relayer).toContain("signTypedData(signArgs)")
-    expect(sendHits.every((hit) => hit.includes("FlowPreview.tsx"))).toBe(true)
-    expect(sendHits.length).toBeGreaterThan(0)
+    const sendFiles = [
+      ...new Set(sendHits.map((hit) => hit.slice(hit.lastIndexOf("/") + 1).split(" contains ")[0])),
+    ].sort()
+    expect(sendFiles).toEqual(["FlowPreview.tsx", "WalletOnlySubmit.tsx"])
   })
 })

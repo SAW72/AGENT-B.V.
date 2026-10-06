@@ -2,6 +2,7 @@ import type { Address } from "viem"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { BASE_MAINNET_CHAIN_ID, ETHEREUM_MAINNET_CHAIN_ID, type WalletChainId } from "./guard"
 import { RELEASE_SENDER_NOTE } from "./preview"
+import { VOTE_CHOICE_TEXT, VOTE_SENDER_NOTE, WITHDRAW_SENDER_NOTE } from "./walletCopy"
 
 export type SubmitCode = "ok" | "disconnected" | "conflict" | "unknown" | "mainnet" | "base-mainnet" | "wrong-chain"
 
@@ -84,6 +85,8 @@ export function submitSenderNote(functionName: string): string {
   if (functionName === "refund") {
     return "Anyone can send a refund. The connected wallet sends this on Base Sepolia."
   }
+  if (functionName === "vote") return VOTE_SENDER_NOTE
+  if (functionName === "withdraw") return WITHDRAW_SENDER_NOTE
   return "The connected wallet sends this on Base Sepolia."
 }
 
@@ -99,7 +102,11 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
             ? "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason."
             : functionName === "openDispute"
               ? "This prepares opening a dispute."
-              : "This prepares a transaction."
+              : functionName === "vote"
+                ? "This prepares an Agent-BV arbitrator vote."
+                : functionName === "withdraw"
+                  ? "This prepares a withdrawal on the Agent-BV escrow."
+                  : "This prepares a transaction."
   const relayer =
     relayerConfigured && functionName === "refund"
       ? " A refund can also be sent through the claim relayer on Base Sepolia."
@@ -130,6 +137,8 @@ export const FORM_ERRORS = {
   disputeId: "Enter the dispute identifier before opening a dispute.",
   denylistHash: "Enter the identifier before looking it up.",
   denylistCheck: "Enter the weight, behavior, and prompt identifiers before checking the deny list.",
+  voteId: "Enter the dispute identifier before voting.",
+  voteChoice: VOTE_CHOICE_TEXT,
 } as const
 
 export function durationValidationMessage(maxSeconds: number): string {

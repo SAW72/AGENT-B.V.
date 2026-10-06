@@ -375,7 +375,7 @@ describe("end-user main text", () => {
   ]
 
   it("keeps glossary sentences and fallback messages free of calls and identifiers", () => {
-    const actions = ["createEscrow", "release", "refund", "dispute", "openDispute"]
+    const actions = ["createEscrow", "release", "refund", "dispute", "openDispute", "vote", "withdraw"]
     const mains = [
       ...ERROR_GLOSSARY.map((entry) => entry.meaning),
       WALLET_CANCEL_TEXT,

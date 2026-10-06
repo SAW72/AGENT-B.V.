@@ -8,6 +8,10 @@ export const PRODUCT_TITLE = DISPLAY_NAME
 
 export const TESTNET_LINE = "Base Sepolia testnet only"
 
+/** Shown on the vote and withdraw screens. Those transactions are wallet-signed on Base Sepolia. */
+export const WALLET_SIGNED_TEST_LINE =
+  "Test only. Votes and withdrawals are real Base Sepolia transactions signed by your own wallet."
+
 export const OPERATOR_LINE = `${DISPLAY_NAME} is a product of Steward of the King LLC, an Ohio (USA) limited liability company.`
 
 const CLAIM_SIGNING_LINE =
