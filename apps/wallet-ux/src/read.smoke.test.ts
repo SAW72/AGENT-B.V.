@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { ADDRESSES, CORE_TIMELOCK, ZERO_ADDRESS } from "./addresses"
+import { ADDRESSES, ZERO_ADDRESS } from "./addresses"
 import { sameAddress } from "./format"
 import { gateAOwnershipNotes, liabilityLinkNotes } from "./gate"
 import { createSepoliaClient, DEFAULT_RPC_URL, panelNotSeated, readGateStatus, readMembership } from "./read"
@@ -13,16 +13,20 @@ describe.skipIf(!live)("Base Sepolia smoke", () => {
     expect(status.chainId).toBe(84532)
     expect(gateAOwnershipNotes(status)).toEqual([])
     expect(liabilityLinkNotes(status)).toEqual([])
-    expect(sameAddress(status.denylist.owner, CORE_TIMELOCK)).toBe(true)
+    expect(ADDRESSES.governanceTimelock).toBeTruthy()
+    expect(sameAddress(status.denylist.owner, ADDRESSES.governanceTimelock ?? "")).toBe(true)
+    expect(sameAddress(status.vault.owner, ADDRESSES.governanceTimelock ?? "")).toBe(true)
+    expect(sameAddress(status.liability.owner, ADDRESSES.governanceTimelock ?? "")).toBe(true)
+    expect(sameAddress(status.insuranceFund.owner, ADDRESSES.governanceTimelock ?? "")).toBe(true)
     expect(sameAddress(status.denylist.pendingOwner, ZERO_ADDRESS)).toBe(true)
     expect(sameAddress(status.vault.denylist, ADDRESSES.denylist)).toBe(true)
     expect(status.disputePanel.panelSize).toBe(3n)
     expect(status.disputePanel.arbitratorCount).toBe(3n)
     expect(panelNotSeated(status.disputePanel.arbitratorCount, status.disputePanel.panelSize)).toBe(false)
     expect(status.escrow).not.toBeNull()
-    expect(sameAddress(status.escrow?.owner ?? "", CORE_TIMELOCK)).toBe(true)
+    expect(sameAddress(status.escrow?.owner ?? "", ADDRESSES.governanceTimelock ?? "")).toBe(true)
     expect(sameAddress(status.escrow?.pendingOwner ?? "", ZERO_ADDRESS)).toBe(true)
-    expect(sameAddress(status.escrow?.governance ?? "", CORE_TIMELOCK)).toBe(true)
+    expect(sameAddress(status.escrow?.governance ?? "", ADDRESSES.governanceTimelock ?? "")).toBe(true)
     expect(sameAddress(status.escrow?.disputePanel ?? "", ADDRESSES.disputePanel)).toBe(true)
     expect(status.escrow?.fundingOpen).toBe(true)
 
