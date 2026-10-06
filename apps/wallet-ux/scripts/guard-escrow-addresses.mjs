@@ -94,6 +94,10 @@ function jsonOccurrences(address = RETIRED_ESCROW) {
   return { count, paths: hits.map((hit) => `${hit.path} (${hit.count})`) }
 }
 
+export function allowlistedRetiredCount(address = RETIRED_ESCROW) {
+  return bookOccurrences(address) + jsonOccurrences(address).count
+}
+
 export function assertConfiguredEscrow(addresses, fallbackPin, superseded) {
   if (addresses.botAttestationEscrow !== LIVE_ESCROW) {
     fail(`ADDRESSES.botAttestationEscrow is not the live escrow ${LIVE_ESCROW}.`)
