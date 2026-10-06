@@ -1,6 +1,14 @@
 import { encodeAbiParameters, encodeFunctionData, keccak256, type Address, type Hex } from "viem"
 import { disputePanelAbi, escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import {
+  ALREADY_VOTED_TEXT,
+  NO_DISPUTE_TEXT,
+  NOT_ARBITRATOR_TEXT,
+  NOTHING_TO_WITHDRAW_TEXT,
+  RESOLVED_LEAD,
+  WITHDRAW_FAILED_TEXT,
+} from "./walletCopy"
 
 export const MAX_DURATION_SECONDS = 30 * 24 * 60 * 60
 
@@ -96,14 +104,14 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "refund failed", meaning: "The refund didn't go through. No funds were returned." },
   { name: "panel not seated", meaning: "A dispute can't be opened yet. The panel doesn't have enough members." },
   { name: "exists", meaning: "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open." },
-  { name: "not authorized", meaning: "Only a panel member can vote on this dispute." },
-  { name: "no dispute", meaning: "There is no dispute with that identifier to vote on." },
-  { name: "resolved", meaning: "This dispute is already decided, so it can't be voted on." },
-  { name: "already voted", meaning: "You already voted on this dispute." },
+  { name: "not authorized", meaning: NOT_ARBITRATOR_TEXT },
+  { name: "no dispute", meaning: NO_DISPUTE_TEXT },
+  { name: "resolved", meaning: RESOLVED_LEAD },
+  { name: "already voted", meaning: ALREADY_VOTED_TEXT },
   { name: "not owner", meaning: "Only the panel owner can do that." },
   { name: "zero arbitrator", meaning: "A panel member's wallet address was left blank." },
-  { name: "nothing to withdraw", meaning: "This wallet has no credit to withdraw." },
-  { name: "WithdrawFailed", meaning: "The withdrawal did not go through. The credit stays where it was." },
+  { name: "nothing to withdraw", meaning: NOTHING_TO_WITHDRAW_TEXT },
+  { name: "WithdrawFailed", meaning: WITHDRAW_FAILED_TEXT },
 ]
 
 export function previewCreateEscrow(input: {
@@ -205,26 +213,12 @@ export function previewVote(panel: Address, disputeId: Hex, support: boolean): C
   }
 }
 
-/** Pull the caller's full credit to the caller. */
+/** Pull the caller's full credit to the caller. `withdraw()` pays msg.sender only. */
 export function previewWithdraw(escrow: Address): CallPreview {
   return {
     to: escrow,
     functionName: "withdraw",
     valueWei: 0n,
     calldata: encodeFunctionData({ abi: escrowAbi, functionName: "withdraw" }),
-  }
-}
-
-/** Pull the caller's full credit to `to`. */
-export function previewWithdrawTo(escrow: Address, to: Address): CallPreview {
-  return {
-    to: escrow,
-    functionName: "withdrawTo",
-    valueWei: 0n,
-    calldata: encodeFunctionData({
-      abi: escrowAbi,
-      functionName: "withdrawTo",
-      args: [to],
-    }),
   }
 }

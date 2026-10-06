@@ -2,6 +2,7 @@ import type { Address } from "viem"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { BASE_MAINNET_CHAIN_ID, ETHEREUM_MAINNET_CHAIN_ID, type WalletChainId } from "./guard"
 import { RELEASE_SENDER_NOTE } from "./preview"
+import { VOTE_CHOICE_TEXT, VOTE_SENDER_NOTE, WITHDRAW_SENDER_NOTE } from "./walletCopy"
 
 export type SubmitCode = "ok" | "disconnected" | "conflict" | "unknown" | "mainnet" | "base-mainnet" | "wrong-chain"
 
@@ -84,12 +85,8 @@ export function submitSenderNote(functionName: string): string {
   if (functionName === "refund") {
     return "Anyone can send a refund. The connected wallet sends this on Base Sepolia."
   }
-  if (functionName === "vote") {
-    return "Only an allowlisted arbitrator can vote. The connected wallet signs this on Base Sepolia."
-  }
-  if (functionName === "withdraw" || functionName === "withdrawTo") {
-    return "The connected wallet pulls its own credit on Base Sepolia."
-  }
+  if (functionName === "vote") return VOTE_SENDER_NOTE
+  if (functionName === "withdraw") return WITHDRAW_SENDER_NOTE
   return "The connected wallet sends this on Base Sepolia."
 }
 
@@ -106,9 +103,9 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
             : functionName === "openDispute"
               ? "This prepares opening a dispute."
               : functionName === "vote"
-                ? "This prepares an arbitrator vote."
-                : functionName === "withdraw" || functionName === "withdrawTo"
-                  ? "This prepares a withdrawal of this wallet's credit."
+                ? "This prepares an Agent-BV arbitrator vote."
+                : functionName === "withdraw"
+                  ? "This prepares a withdrawal on the Agent-BV escrow."
                   : "This prepares a transaction."
   const relayer =
     relayerConfigured && functionName === "refund"
@@ -141,8 +138,7 @@ export const FORM_ERRORS = {
   denylistHash: "Enter the identifier before looking it up.",
   denylistCheck: "Enter the weight, behavior, and prompt identifiers before checking the deny list.",
   voteId: "Enter the dispute identifier before voting.",
-  voteChoice: "Choose uphold or against before voting.",
-  withdrawDestination: "Enter the destination wallet address.",
+  voteChoice: VOTE_CHOICE_TEXT,
 } as const
 
 export function durationValidationMessage(maxSeconds: number): string {

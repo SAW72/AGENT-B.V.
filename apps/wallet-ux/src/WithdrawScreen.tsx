@@ -1,39 +1,30 @@
 import { useEffect, useState, type FormEvent } from "react"
-import { formatEther, getAddress, isAddress, type Address } from "viem"
+import { formatEther, type Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
-import { previewWithdraw, previewWithdrawTo, type CallPreview } from "./preview"
-import { FORM_ERRORS, previewCardCopy } from "./submit"
+import { previewWithdraw, type CallPreview } from "./preview"
+import { previewCardCopy } from "./submit"
 import { AddressRow } from "./ui"
+import {
+  NOTHING_TO_WITHDRAW_TEXT,
+  WITHDRAW_CONNECT_TEXT,
+  WITHDRAW_GAS_TEXT,
+  WITHDRAW_HEADING,
+  WITHDRAW_HIDDEN_TEXT,
+  WITHDRAW_READING_TEXT,
+  WITHDRAW_UNREADABLE_TEXT,
+  availableToWithdrawText,
+} from "./walletCopy"
 import { WalletOnlySubmit } from "./WalletOnlySubmit"
-
-function Field({
-  id,
-  label,
-  value,
-  onChange,
-}: {
-  id: string
-  label: string
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
-      <input id={id} value={value} spellCheck={false} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
-    </div>
-  )
-}
 
 function TestnetHeading() {
   return (
     <>
       <h2 id="withdraw-heading" className="heading-with-pill">
-        <span>Withdraw</span>
+        <span>{WITHDRAW_HEADING}</span>
         <span className="pill info" data-testid="withdraw-testnet-pill">
           {TESTNET_LINE}
         </span>
@@ -56,7 +47,7 @@ export function WithdrawScreen({
         <TestnetHeading />
         <div className="empty" data-testid="withdraw-empty" role="status">
           <strong>Not deployed on Sepolia yet.</strong>
-          <p>The escrow address is empty. There is no credit to withdraw.</p>
+          <p>The Agent-BV escrow address is empty. There is nothing to withdraw.</p>
         </div>
       </section>
     )
@@ -65,9 +56,8 @@ export function WithdrawScreen({
   return (
     <section className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
       <TestnetHeading />
-      <p className="muted">
-        This pulls the connected wallet's own credit back to that wallet, or to a destination that can accept it. The
-        connected wallet signs this. This page does not ask for a private key or a recovery phrase.
+      <p className="muted" data-testid="withdraw-gas">
+        {WITHDRAW_GAS_TEXT}
       </p>
       <WithdrawForm escrow={escrow} readsEnabled={readsEnabled} />
     </section>
@@ -77,22 +67,32 @@ export function WithdrawScreen({
 function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled: boolean }) {
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
-  const [destination, setDestination] = useState("")
-  const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<CallPreview | null>(null)
   const [credit, setCredit] = useState<bigint | null>(null)
-  const [creditUnreadable, setCreditUnreadable] = useState(false)
+  const [creditState, setCreditState] = useState<"idle" | "loading" | "ready" | "unreadable" | "hidden" | "disconnected">(
+    "idle",
+  )
+  const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
     const accountAddress = account.address
-    if (!readsEnabled || !accountAddress || !client) {
+    if (!account.isConnected || !accountAddress) {
       setCredit(null)
-      setCreditUnreadable(false)
+      setCreditState("disconnected")
+      return
+    }
+    if (!readsEnabled) {
+      setCredit(null)
+      setCreditState("hidden")
+      return
+    }
+    if (!client) {
+      setCredit(null)
+      setCreditState("unreadable")
       return
     }
     let cancelled = false
-    setCredit(null)
-    setCreditUnreadable(false)
+    setCreditState((state) => (state === "ready" ? state : "loading"))
     void client
       .readContract({
         address: escrow,
@@ -103,72 +103,74 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
       .then(
         (value) => {
           if (cancelled) return
-          if (typeof value === "bigint") setCredit(value)
-          else setCreditUnreadable(true)
+          if (typeof value !== "bigint") {
+            setCreditState("unreadable")
+            return
+          }
+          setCredit(value)
+          setCreditState("ready")
         },
         () => {
-          if (!cancelled) setCreditUnreadable(true)
+          if (!cancelled) setCreditState("unreadable")
         },
       )
     return () => {
       cancelled = true
     }
-  }, [account.address, client, escrow, readsEnabled])
+  }, [account.address, account.isConnected, client, escrow, generation, readsEnabled])
 
-  function show(next: CallPreview) {
-    setError(null)
-    setPreview(next)
-  }
+  const canPrepare = creditState === "ready" && credit != null && credit > 0n
 
   function onWithdraw(event: FormEvent) {
     event.preventDefault()
-    show(previewWithdraw(escrow))
+    if (!canPrepare) return
+    setPreview(previewWithdraw(escrow))
   }
 
-  function onWithdrawTo(event: FormEvent) {
-    event.preventDefault()
-    const entered = destination.trim()
-    if (!isAddress(entered)) {
-      setPreview(null)
-      setError(FORM_ERRORS.withdrawDestination)
-      return
-    }
-    show(previewWithdrawTo(escrow, getAddress(entered)))
-  }
+  const availableText =
+    creditState === "disconnected"
+      ? WITHDRAW_CONNECT_TEXT
+      : creditState === "hidden"
+        ? WITHDRAW_HIDDEN_TEXT
+        : creditState === "unreadable"
+          ? WITHDRAW_UNREADABLE_TEXT
+          : creditState === "ready" && credit != null
+            ? availableToWithdrawText(formatEth(credit))
+            : WITHDRAW_READING_TEXT
 
-  const creditText = !account.isConnected
-    ? "Connect a wallet on Base Sepolia to read its credit."
-    : !readsEnabled
-      ? "Credit stays hidden while reads are refused."
-      : creditUnreadable
-        ? "This wallet's credit could not be read."
-        : credit == null
-          ? "Reading this wallet's credit."
-          : `Credit available to this wallet: ${formatEth(credit)}`
+  const blockedLabel =
+    creditState === "ready" && credit === 0n
+      ? NOTHING_TO_WITHDRAW_TEXT
+      : creditState === "unreadable"
+        ? WITHDRAW_UNREADABLE_TEXT
+        : creditState === "disconnected"
+          ? WITHDRAW_CONNECT_TEXT
+          : creditState === "hidden"
+            ? WITHDRAW_HIDDEN_TEXT
+            : WITHDRAW_READING_TEXT
 
   return (
     <>
-      <AddressRow label="Escrow" value={escrow} testId="withdraw-escrow" />
-      <p data-testid="withdraw-credit">{creditText}</p>
+      <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
+      <p data-testid="withdraw-available">{availableText}</p>
       <form id="withdraw-form" onSubmit={onWithdraw}>
-        <button type="submit">Prepare withdraw</button>
+        <button type="submit" disabled={!canPrepare}>
+          {canPrepare ? "Prepare withdraw" : blockedLabel}
+        </button>
       </form>
-      <form id="withdraw-to-form" onSubmit={onWithdrawTo}>
-        <Field id="withdraw-destination" label="Destination wallet" value={destination} onChange={setDestination} />
-        <button type="submit">Prepare withdraw to this address</button>
-      </form>
-      {error ? (
-        <p className="bad" role="alert">
-          {error}
-        </p>
-      ) : null}
       {preview ? (
         <div className="preview" data-testid="withdraw-preview">
           <p>{previewCardCopy(preview.functionName, false)}</p>
           <p className="mono">{preview.to}</p>
           <p>value {formatEther(preview.valueWei)} ETH</p>
           <pre className="calldata">{preview.calldata}</pre>
-          <WalletOnlySubmit key={preview.calldata} preview={preview} allowed={[escrow]} />
+          <WalletOnlySubmit
+            key={preview.calldata}
+            preview={preview}
+            allowed={[escrow]}
+            hold={!canPrepare}
+            onConfirmed={() => setGeneration((value) => value + 1)}
+          />
         </div>
       ) : null}
     </>
