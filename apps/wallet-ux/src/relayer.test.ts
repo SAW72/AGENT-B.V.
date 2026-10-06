@@ -51,7 +51,7 @@ import {
   type SignedLiveClaim,
 } from "./relayer"
 
-const escrow = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d" as const
+const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as const
 const panel = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb" as const
 const id = `0x${"ab".repeat(32)}` as const
 const other = `0x${"cd".repeat(32)}` as const
@@ -346,6 +346,7 @@ describe("wallet submit stays direct unless the UI opts in", () => {
 })
 
 const retiredEscrow = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c"
+const retiredEscM1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d"
 const relayerPackage = join(dirname(fileURLToPath(import.meta.url)), "../../../claim-relayer")
 
 function rpcRevert(data: Hex) {
@@ -729,24 +730,26 @@ describe("relayer response copy", () => {
     }
   })
 
-  it("treats a live hash aimed at the retired escrow as already submitted", async () => {
-    const client = readyClient({ status: "success" })
-    const result = await runRelayerSubmission({
-      url: relayerUrl,
-      ...signerInput(),
-      preview: release,
-      client,
-      fetchImpl: async () =>
-        jsonResponse(200, { ok: true, mode: "live", txHash, escrowAddress: retiredEscrow }),
-    })
-    expect(client.waitForTransactionReceipt).not.toHaveBeenCalled()
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.code).toBe("retired_or_superseded_address")
-    expect(result.presentation.main).toBe("The claim relayer used a retired escrow. Check the transaction before you try again.")
-    expect(result.presentation.main.toLowerCase()).not.toContain("nothing was sent")
-    expect(result.presentation.link?.href).toBe(relayerTxUrl(txHash))
-    expect(result.presentation.detail).toBe("Details: 200 retired_or_superseded_address")
+  it("treats a live hash aimed at a retired escrow as already submitted", async () => {
+    for (const retired of [retiredEscrow, retiredEscM1]) {
+      const client = readyClient({ status: "success" })
+      const result = await runRelayerSubmission({
+        url: relayerUrl,
+        ...signerInput(),
+        preview: release,
+        client,
+        fetchImpl: async () =>
+          jsonResponse(200, { ok: true, mode: "live", txHash, escrowAddress: retired }),
+      })
+      expect(client.waitForTransactionReceipt).not.toHaveBeenCalled()
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.code).toBe("retired_or_superseded_address")
+      expect(result.presentation.main).toBe("The claim relayer used a retired escrow. Check the transaction before you try again.")
+      expect(result.presentation.main.toLowerCase()).not.toContain("nothing was sent")
+      expect(result.presentation.link?.href).toBe(relayerTxUrl(txHash))
+      expect(result.presentation.detail).toBe("Details: 200 retired_or_superseded_address")
+    }
   })
 })
 

@@ -6,7 +6,7 @@
  * root directory apps/wallet-ux does not import a parent path. `npm run dev`
  * and `npm run build` refresh the copy when the repo-root book is visible.
  * The corrected Gate A pin is the fallback when that file fails validation.
- * The superseded Denylist (0xF0f2…), Vault (0xa1a0…), and retired escrow (0x141214…) are never read targets.
+ * The superseded Denylist (0xF0f2…), Vault (0xa1a0…), and retired escrows (0x141214… and 0x1069…) are never read targets.
  * There is no mainnet book.
  */
 

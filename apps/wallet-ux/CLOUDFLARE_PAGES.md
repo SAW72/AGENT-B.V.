@@ -82,7 +82,7 @@ npm run build
 
 ## Bundle guard
 
-The workflow fails the deploy unless `dist/assets` contains the live BotAttestationEscrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (case-insensitive) and both of these phrases from `src/`:
+The workflow fails the deploy unless `dist/assets` contains the live BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` (case-insensitive) and both of these phrases from `src/`:
 
 - `Submitting through the claim relayer` (`src/relayer.ts`)
 - `Submit through the claim relayer, or from your wallet.` (`src/FlowPreview.tsx`)
@@ -93,9 +93,9 @@ That scan fails on bundles that contain the `x-claim-secret` header or the `VITE
 
 The `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs `node scripts/guard-claim-secret.mjs dist` from `apps/wallet-ux` after `npm run build`. A leak fails the pull request. A clean scan logs `Claim leak scan passed`.
 
-[`scripts/guard-escrow-addresses.mjs`](scripts/guard-escrow-addresses.mjs) imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` in [`src/book.ts`](src/book.ts) is the blocked-address list. The script requires `ADDRESSES.botAttestationEscrow` and `FALLBACK_PIN.botAttestationEscrow` to be the live escrow, and `SUPERSEDED.botAttestationEscrow` to be the retired escrow. It fails if any live `ADDRESSES` slot is the retired escrow.
+[`scripts/guard-escrow-addresses.mjs`](scripts/guard-escrow-addresses.mjs) imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` in [`src/book.ts`](src/book.ts) is the blocked-address list. The script requires `ADDRESSES.botAttestationEscrow` and `FALLBACK_PIN.botAttestationEscrow` to be the live escrow, `SUPERSEDED.botAttestationEscrow` to be the pre-ESC-M-1 retired escrow, and `SUPERSEDED.botAttestationEscrowEscM1` to be the retired ESC-M-1 escrow. It fails if any live `ADDRESSES` slot is either retired escrow.
 
-The retired address also appears in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json), which records that the previous escrow is retired. That sentence is not the `SUPERSEDED` literal, so the bundle does not contain the address only inside the blocked-list literal. The script allowlists three client sources: the `SUPERSEDED` entry, `retired.BotAttestationEscrow.address`, and that notes sentence. Any other client occurrence fails the job. The built `dist` and each served bundle must contain the retired address exactly as many times as those allowlisted sources. At this commit that count is 3.
+Both retired addresses also appear in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json). Those sentences are not the `SUPERSEDED` literals. The script allowlists `SUPERSEDED`, `retired.*`, `superseded.*`, and the top-level notes. Any other client occurrence fails the job. The built `dist` and each served bundle must contain each retired address exactly as many times as those allowlisted sources. At this commit `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is 3 (SUPERSEDED, `retired.BotAttestationEscrow.address`, and notes). `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is 8 (SUPERSEDED plus seven allowlisted JSON fields, including `retired.BotAttestationEscrow.supersededBy`).
 
 After each upload, the job reads the `deployment-url` output and fetches `/`. Served `index.html` must reference the same `/assets/*` hashes as the built `dist/index.html`. The check then downloads those `/assets/*.js` files and any same-directory `./chunk.js` imports, including lazy chunks. Each `.js` asset must use a JavaScript content-type (`text/javascript`, `application/javascript`, or `application/x-javascript`; parameters such as `charset` are allowed). A `.js` body that is empty, only whitespace, or only a UTF-8 BOM fails the check. After that BOM is stripped, leading whitespace is ignored and the body must not start with `<`. A response that is `200` with `text/html`, including a Pages fallback that serves `index.html` for a missing chunk, fails the check. If the host is unreachable or DNS lookup fails, the script prints one `Verify failed:` line and exits 1. The retired-address count and the claim-secret scan run on `index.html` together with that JavaScript, so an address or secret that appears only in the HTML still fails the job. A failed preview check stops the job before the production upload. If **Verify the production bundle** fails, follow Rollback below.
 
@@ -147,7 +147,7 @@ The app imports [`src/base-sepolia.json`](src/base-sepolia.json). That file is a
 
 `npm run dev` and `npm run build` run `scripts/sync-book.mjs`. When the repo-root book is visible, the script refreshes `src/base-sepolia.json`. When it is not visible, the script keeps the committed copy. Either way the book must be Base Sepolia (`chainId` 84532, `network` `base-sepolia`). After a book change in the full repo, run `npm run sync-book` and commit `src/base-sepolia.json`. `npm test` fails if the two files differ.
 
-`src/book.ts` `FALLBACK_PIN` matches the live book. The app uses the pin only when the copied JSON fails validation. Superseded Denylist and Vault addresses stay blocked. The retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` (ESC-M-1 redeploy, retired 2026-09-26) stays blocked too.
+`src/book.ts` `FALLBACK_PIN` matches the live book. The app uses the pin only when the copied JSON fails validation. Superseded Denylist and Vault addresses stay blocked. Both retired escrows stay blocked: `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (ESC-M-1, retired 2026-10-06) and `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` (pre-ESC-M-1, retired 2026-09-26).
 
 Live slots:
 
@@ -157,4 +157,4 @@ Live slots:
 | Denylist | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` |
 | Vault | `0x1463D664fA467FBCDA4B05443434494f05e565bc` |
 | DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` |
-| BotAttestationEscrow | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` |
+| BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |

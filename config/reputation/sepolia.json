@@ -20,9 +20,9 @@
   "contracts": {
     "escrow": {
       "name": "BotAttestationEscrow",
-      "address": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
-      "start_block": 47345163,
-      "note": "Live escrow is the ESC-M-1 redeploy from commit 444c427 (deploy block 47345163). It emits 4-field VaultUpdated and DisputePanelUpdated, matching main. The retired escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c (start block 47299930) emitted the 1-field shapes. Accept both."
+      "address": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
+      "start_block": 47715415,
+      "note": "Live escrow is the pull-payment redeploy from commit 7fe4a863e9bce0b70b629dab76ddd2728c97b536 (deploy block 47715415). It emits 4-field VaultUpdated and DisputePanelUpdated, matching main. The retired ESC-M-1 escrow 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d (start block 47345163, commit 444c427) emitted the same 4-field shapes. The retired pre-ESC-M-1 escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c (start block 47299930) emitted the 1-field shapes. Accept both shapes."
     },
     "dispute_panel": {
       "name": "DisputePanel",
@@ -110,7 +110,7 @@
       },
       {
         "role": "escrow",
-        "address": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d"
+        "address": "0x3d660502D75f1e97b08c110255921b437A3C4C42"
       },
       {
         "role": "dispute_panel",

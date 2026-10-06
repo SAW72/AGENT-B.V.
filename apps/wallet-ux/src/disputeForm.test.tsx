@@ -8,7 +8,7 @@ import { FlowPreview } from "./FlowPreview"
 import { FILE_DISPUTE_TEXT } from "./preview"
 import { FORM_ERRORS } from "./submit"
 
-const escrow = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d" as Address
+const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as Address
 const panel = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb" as Address
 const claim = `0x${"ab".repeat(32)}` as Hex
 const subject = `0x${"11".repeat(32)}` as Hex

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { BASE_SEPOLIA_CHAIN_ID, ZERO_ADDRESS, httpError, isAddress } from "./config.mjs";
+import { BASE_SEPOLIA_CHAIN_ID, ZERO_ADDRESS, httpError, isAddress, retiredEscrowError } from "./config.mjs";
 import { encodeEscrowAction } from "./escrowCalldata.mjs";
 import { isRulingPending, revertDataFrom } from "./revertData.mjs";
 
@@ -56,6 +56,7 @@ export function wantsLiveSubmit(body) {
 
 export function refusalReason(config) {
   const blockers = config?.liveSubmit?.blockers || [];
+  if (config?.escrowRetired || blockers.includes("escrow_retired")) return "retired_or_superseded_address";
   if (blockers.includes("mainnet_refused")) return "mainnet_refused";
   if (blockers.includes("wrong_chain")) return "wrong_chain";
   if (!config?.escrowBooked || blockers.includes("escrow_not_booked")) return "escrow_not_booked";
@@ -83,6 +84,7 @@ export function senderNoteFor(action) {
 }
 
 export function liveSubmitError(config) {
+  if (config?.escrowRetired) return retiredEscrowError(config);
   return httpError(409, "live_submit_blocked", {
     reason: refusalReason(config),
     blockers: config.liveSubmit.blockers,
@@ -176,6 +178,7 @@ export function buildFixtureClaim(body, config) {
  */
 export async function submitLiveClaim({ body, config, broadcaster, prepared }) {
   assertBaseSepolia(body);
+  if (config?.escrowRetired) throw retiredEscrowError(config);
   if (!config?.liveSubmit?.allowed) throw liveSubmitError(config);
   const encoded = prepared?.encoded || describeCalldata(body);
   if (encoded.calldataStatus !== "encoded" || !encoded.calldata) {

@@ -8,9 +8,11 @@ import {
   assertBundle,
   assertConfiguredEscrow,
   GuardError,
+  allowlistedRetiredCount,
   LIVE_ESCROW,
   PHRASES,
   RETIRED_ESCROW,
+  RETIRED_ESCROW_ESC_M1,
 } from "./guard-escrow-addresses.mjs"
 
 const HEADER = "x-claim-secret"
@@ -28,7 +30,13 @@ function tempDir() {
 }
 
 function bundleSource(retiredCount) {
-  return [LIVE_ESCROW, ...PHRASES, ...Array.from({ length: retiredCount }, () => RETIRED_ESCROW)].join("\n")
+  const escM1Count = allowlistedRetiredCount(RETIRED_ESCROW_ESC_M1)
+  return [
+    LIVE_ESCROW,
+    ...PHRASES,
+    ...Array.from({ length: retiredCount }, () => RETIRED_ESCROW),
+    ...Array.from({ length: escM1Count }, () => RETIRED_ESCROW_ESC_M1),
+  ].join("\n")
 }
 
 function writeBundle(retiredCount) {

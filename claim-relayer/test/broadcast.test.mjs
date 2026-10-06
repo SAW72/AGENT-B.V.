@@ -75,6 +75,15 @@ describe("sepolia broadcaster", () => {
         }),
       (err) => err.error === "escrow_not_booked_sepolia",
     );
+    for (const retired of [
+      "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+      "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c",
+    ]) {
+      await assert.rejects(
+        () => broadcaster.send({ chainId: 84532, to: retired, data: "0x1234", valueWei: "0" }),
+        (err) => err.error === "escrow_not_booked_sepolia",
+      );
+    }
     assert.deepEqual(seen, []);
     assert.equal(JSON.stringify(broadcaster).includes(KEY), false);
   });

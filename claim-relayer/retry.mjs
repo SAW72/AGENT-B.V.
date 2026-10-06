@@ -40,10 +40,6 @@ const TRANSIENT_MARKERS = [
   "socket hang up",
   "fetch failed",
   "network",
-  "429",
-  "502",
-  "503",
-  "504",
   "rate limit",
   "too many requests",
   "temporarily unavailable",
@@ -57,7 +53,17 @@ const TRANSIENT_MARKERS = [
   "alreadyknown",
   "try again",
   "server error",
+  "bad gateway",
+  "service unavailable",
+  "gateway timeout",
 ];
+
+/**
+ * HTTP status codes that mean "try again". Matched only as standalone
+ * tokens so a hex address containing those digits (the live escrow
+ * includes 502) is not treated as a gateway error.
+ */
+const TRANSIENT_STATUS_CODES = ["429", "502", "503", "504"];
 
 function blob(err) {
   if (!err) return "";
@@ -77,11 +83,17 @@ function blob(err) {
     .toLowerCase();
 }
 
+function hasStatusCode(text, code) {
+  const re = new RegExp(`(^|[^0-9a-f])${code}([^0-9a-f]|$)`);
+  return re.test(text);
+}
+
 export function isTransientClaimError(err) {
   const text = blob(err);
   if (!text) return false;
   if (PERMANENT_MARKERS.some((marker) => text.includes(marker))) return false;
-  return TRANSIENT_MARKERS.some((marker) => text.includes(marker));
+  if (TRANSIENT_MARKERS.some((marker) => text.includes(marker))) return true;
+  return TRANSIENT_STATUS_CODES.some((code) => hasStatusCode(text, code));
 }
 
 export function backoffMs(attempt, baseDelayMs = DEFAULT_BASE_DELAY_MS) {

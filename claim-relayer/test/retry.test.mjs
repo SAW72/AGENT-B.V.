@@ -14,6 +14,18 @@ describe("claim retry bounds", () => {
     assert.equal(isTransientClaimError(new Error("wrong_chain")), false);
     assert.equal(isTransientClaimError(new Error("simulation_failed")), false);
     assert.equal(isTransientClaimError(new Error("kill_switch")), false);
+    assert.equal(isTransientClaimError(new Error("HTTP 502 Bad Gateway")), true);
+    assert.equal(isTransientClaimError(new Error("503 Service Unavailable")), true);
+    assert.equal(isTransientClaimError(new Error("status 504")), true);
+    assert.equal(isTransientClaimError(new Error("bad gateway")), true);
+    assert.equal(isTransientClaimError(new Error("service unavailable")), true);
+    assert.equal(isTransientClaimError(new Error("gateway timeout")), true);
+    assert.equal(
+      isTransientClaimError(
+        new Error("execution reverted to 0x3d660502d75f1e97b08c110255921b437a3c4c42"),
+      ),
+      false,
+    );
   });
 
   it("uses bounded exponential backoff", () => {

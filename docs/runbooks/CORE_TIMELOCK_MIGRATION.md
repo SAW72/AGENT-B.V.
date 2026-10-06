@@ -17,7 +17,7 @@ This runbook does not create a Safe. `SAFE_ADDRESS` is an existing Safe. The scr
 | Liability | `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307` | immediate `setOwner`, owner `CORE_TIMELOCK` | later step `immediate`, only after the two-step accepts have executed |
 | InsuranceFund | `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8` | immediate `setOwner`, owner `CORE_TIMELOCK` | later step `immediate`, only after the two-step accepts have executed |
 | DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` | immediate `setOwner`, owner `CORE_TIMELOCK` | later step `immediate`, only after the two-step accepts have executed |
-| BotAttestationEscrow | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` | Ownable2Step, owner `CORE_TIMELOCK`, pending `0` | skipped unless `MIGRATE_ESCROWS=1`; if set, step `transfer` then timelock `acceptOwnership` |
+| BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` | Ownable2Step, owner governanceTimelock, pending `0`. The ESC-M-1 address `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` was this row when the migration was written and is now retired under `retired.BotAttestationEscrowEscM1`. It is not in the nine-row pin. | live book slot. `governance()` is governanceTimelock, so this row is not the CORE-governance skip |
 | superseded Denylist | `0xF0f260967D377E07Bdd7840862508ddB23C012b8` | Ownable2Step, owner `CORE_TIMELOCK`, pending `0` | step `transfer`, then timelock `acceptOwnership` |
 | superseded Vault | `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` | Ownable2Step, owner `0x5D467FA00eC0E92044f779e495a17db66c5964aa`, pending `CORE_TIMELOCK` | step `transfer`: the EOA accepts, then queues the timelock |
 | retired BotAttestationEscrow | `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` | Ownable2Step, owner `CORE_TIMELOCK`, pending `0` | skipped unless `MIGRATE_ESCROWS=1`; if set, step `transfer` then timelock `acceptOwnership` |
@@ -27,7 +27,7 @@ This runbook does not create a Safe. `SAFE_ADDRESS` is an existing Safe. The scr
 
 ### Escrows are opt-in, and turning the flag on is the recommendation
 
-Live escrow `0x1069…298d` and retired escrow `0x1412…284c` store `governance() == CORE_TIMELOCK`. That address is immutable. `createEscrow` reverts `FundingBeforeGovernance` unless `owner() == governance`. `setDenylist`, `setVault`, and `setDisputePanel` revert `NotGovernance` unless the caller is `governance` and `owner()` is `governance`.
+The live escrow `0x3d66…4C42` stores `governance() ==` governanceTimelock `0xa1ab…ca33`. The retired escrows `0x1069…298d` and `0x1412…284c` store `governance() == CORE_TIMELOCK`. That address is immutable. `createEscrow` reverts `FundingBeforeGovernance` unless `owner() == governance`. `setDenylist`, `setVault`, and `setDisputePanel` revert `NotGovernance` unless the caller is `governance` and `owner()` is `governance`.
 
 `MIGRATE_ESCROWS` must be exactly `0` or `1`. The script reverts if it is unset or any other value. `1` is recommended. The log says why a row was skipped when the value is `0`: immutable governance; migrating bricks `createEscrow` and the setters.
 
@@ -203,7 +203,7 @@ This command does not broadcast. The same `NEW_TIMELOCK` checks run first. `post
 3. `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`
 4. `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`
 5. `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`
-6. `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`
+6. `0x3d660502D75f1e97b08c110255921b437A3C4C42`
 7. `0xF0f260967D377E07Bdd7840862508ddB23C012b8`
 8. `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7`
 9. `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`
@@ -317,11 +317,11 @@ The Safe proposes a new schedule on `NEW_TIMELOCK`, waits out `getMinDelay()`, t
 
 Live ETH balances on the enumerated contracts were 0 at the reading used for this runbook. `lockedValue()` on both escrows was 0.
 
-The value-at-risk rows below are the deployed escrow bytecode, not the current repo source. Current source is a later pull-payment design (payer-only `release`, `RULING_GRACE`, `withdraw` / `withdrawTo`). That is not what is on chain.
+The value-at-risk rows below describe the ESC-M-1 bytecode that was live when this migration was written. That contract is now retired at `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`. The current live escrow is `0x3d660502D75f1e97b08c110255921b437A3C4C42` (commit `7fe4a863e9bce0b70b629dab76ddd2728c97b536`), which is the pull-payment design (payer-only `release`, `RULING_GRACE`, `withdraw` / `withdrawTo`).
 
-Source of truth for live escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`:
+Source of truth for that retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`:
 
-- `deployments/base-sepolia.json` records commit `444c427` (`444c42734b414390416853c32df0c0395a3da74c`), deploy tx `0x7ab17bac1f046ad50299e905f6f5fed47455fdebd3e3004094b899c7f801d8aa`, block `47345163`.
+- `deployments/base-sepolia.json` `retired.BotAttestationEscrowEscM1` records commit `444c427` (`444c42734b414390416853c32df0c0395a3da74c`), deploy tx `0x7ab17bac1f046ad50299e905f6f5fed47455fdebd3e3004094b899c7f801d8aa`, block `47345163`.
 - `git show 444c427:contracts/BotAttestationEscrow.sol` matches the Blockscout-verified source (`BotAttestationEscrow`, solc `v0.8.20+commit.a1b79de6`, optimizer 200, shanghai). `cast code` matches that deployed bytecode.
 - Selectors present include `release(bytes32)` `0x67d42a8b` and `refund(bytes32)` `0x7249fbb6`. Selectors absent include `withdraw()` `0x3ccfd60b`, `withdrawTo(address)` `0x72b0d90c`, `totalOwed()` `0xe7fa9f7d`, and `RULING_GRACE()` `0x3cfbadae`.
 

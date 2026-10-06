@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, readFile } from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { RpcRequestError } from "viem";
 import { createAbuseGuard } from "../abuseLimits.mjs";
 import { createClaimRelayer } from "../app.mjs";
+import { startServer } from "../server.mjs";
 import { createSepoliaBroadcaster } from "../broadcast.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
@@ -35,7 +37,7 @@ describe("claim relayer HTTP", () => {
       assert.equal(health.json.fixture, true);
       assert.equal(health.json.escrowBooked, true);
       assert.equal(health.json.escrowSource, "address_book");
-      assert.equal(health.json.escrowAddress, "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d");
+      assert.equal(health.json.escrowAddress, "0x3d660502D75f1e97b08c110255921b437A3C4C42");
       assert.deepEqual(health.json.liveSubmitBlockers, ["spencer_run_auth_required", "live_submit_off"]);
       assert.equal(health.json.relayerAddress, "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861");
       assert.equal(health.json.liveSubmit, false);
@@ -264,7 +266,7 @@ describe("claim relayer HTTP", () => {
       assert.equal(claim.json.senderConstraint, "permissionless");
       assert.equal(sent.length, 1);
       assert.equal(sent[0].chainId, 84532);
-      assert.equal(sent[0].to, "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d");
+      assert.equal(sent[0].to, "0x3d660502D75f1e97b08c110255921b437A3C4C42");
       assert.equal(sent[0].valueWei, "0");
       assert.equal(JSON.stringify(claim.json).includes(SECRET), false);
 
@@ -314,7 +316,7 @@ describe("claim relayer HTTP", () => {
           nonce: "12",
           deadline: deadlineAt(120),
           chainId: 84532,
-          verifyingContract: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+          verifyingContract: "0x3d660502D75f1e97b08c110255921b437A3C4C42",
         },
       });
       assert.equal(created.status, 400);
@@ -381,7 +383,7 @@ describe("claim relayer HTTP", () => {
           nonce: "22",
           deadline: deadlineAt(120),
           chainId: 84532,
-          verifyingContract: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+          verifyingContract: "0x3d660502D75f1e97b08c110255921b437A3C4C42",
         },
       });
       assert.equal(create.status, 400);
@@ -826,7 +828,161 @@ describe("claim relayer HTTP", () => {
       await live.close();
     }
   });
+
+  it("boots with a retired ESCROW_ADDRESS, flags health, and refuses submit and broadcast", async () => {
+    const retired = [
+      "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+      "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c",
+    ];
+    for (const address of retired) {
+      const errors = [];
+      const original = console.error;
+      console.error = (...args) => {
+        errors.push(args.map(String).join(" "));
+      };
+      const dir = await mkdtemp(join(tmpdir(), "claim-relayer-retired-"));
+      const port = await freePort();
+      let server;
+      try {
+        server = startServer({
+          PORT: String(port),
+          HOST: "127.0.0.1",
+          ESCROW_ADDRESS: address,
+          KILL_SWITCH: "1",
+          LIVE_SUBMIT: "1",
+          SPENCER_RUN_AUTH: "1",
+          RELAYER_PRIVATE_KEY: SECRET,
+          CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+          INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
+        });
+        await once(server, "listening");
+        const health = await request(port, "GET", "/health");
+        assert.equal(health.status, 200);
+        assert.equal(health.json.ok, true);
+        assert.equal(health.json.escrowAddress, address);
+        assert.equal(health.json.escrowRetired, true);
+        assert.equal(health.json.submitsDisabled, true);
+        assert.equal(health.json.killSwitch, true);
+        assert.equal(health.json.liveSubmit, false);
+        assert.ok(health.json.liveSubmitBlockers.includes("escrow_retired"));
+        const live = await request(port, "POST", "/v1/claims", { claimId: "retired-live", live: true });
+        assert.equal(live.status, 409);
+        assert.equal(live.json.error, "retired_or_superseded_address");
+        assert.match(live.json.reason, new RegExp(address));
+        assert.match(live.json.reason, /ESCROW_ADDRESS/);
+        assert.equal(live.json.submitsDisabled, true);
+        assert.equal(live.json.txHash, null);
+        const fixture = await request(port, "POST", "/v1/claims", { claimId: "retired-fixture" });
+        assert.equal(fixture.status, 409);
+        assert.equal(fixture.json.error, "retired_or_superseded_address");
+        assert.equal(errors.length, 1);
+        assert.match(errors[0], /is retired/);
+        assert.match(errors[0], new RegExp(address));
+        assert.match(errors[0], /ESCROW_ADDRESS/);
+      } finally {
+        console.error = original;
+        if (server) {
+          await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+        }
+      }
+    }
+  });
+
+  it("boots a retired escrow when ESCROW_START_BLOCK is invalid or empty", async () => {
+    const address = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
+    for (const startBlock of ["abc", ""]) {
+      const errors = [];
+      const original = console.error;
+      console.error = (...args) => {
+        errors.push(args.map(String).join(" "));
+      };
+      const dir = await mkdtemp(join(tmpdir(), "claim-relayer-retired-start-"));
+      const port = await freePort();
+      let server;
+      try {
+        server = startServer({
+          PORT: String(port),
+          HOST: "127.0.0.1",
+          ESCROW_ADDRESS: address,
+          ESCROW_START_BLOCK: startBlock,
+          KILL_SWITCH: "0",
+          CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+          INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
+        });
+        await once(server, "listening");
+        const health = await request(port, "GET", "/health");
+        assert.equal(health.status, 200);
+        assert.equal(health.json.ok, true);
+        assert.equal(health.json.escrowRetired, true);
+        assert.equal(health.json.submitsDisabled, true);
+        assert.equal(health.json.escrowBooked, true);
+        assert.equal(health.json.escrowStartBlock, null);
+        assert.equal(health.json.escrowStartBlockSource, "retired");
+        assert.equal(errors.length, 1);
+        assert.match(errors[0], /is retired/);
+        assert.match(errors[0], /ESCROW_ADDRESS/);
+      } finally {
+        console.error = original;
+        if (server) {
+          await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+        }
+      }
+    }
+  });
+
+  it("refuses a live quote for a retired escrow when the kill switch is off", async () => {
+    const ctx = await boot({
+      ESCROW_ADDRESS: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+      KILL_SWITCH: "0",
+    });
+    try {
+      const quote = await request(ctx.port, "POST", "/v1/claims/quote", {
+        payer: PAYER,
+        payee: PAYEE,
+        claimId: "retired-quote",
+        live: true,
+      });
+      assert.equal(quote.status, 409);
+      assert.equal(quote.json.error, "retired_or_superseded_address");
+      assert.equal(quote.json.escrowRetired, true);
+      assert.equal(quote.json.submitsDisabled, true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("still claims in fixture mode for the new escrow and for an empty ESCROW_ADDRESS", async () => {
+    const cases = [{}, { ESCROW_ADDRESS: "0x3d660502D75f1e97b08c110255921b437A3C4C42" }];
+    for (const env of cases) {
+      const ctx = await boot(env);
+      try {
+        const health = await request(ctx.port, "GET", "/health");
+        assert.equal(health.status, 200);
+        assert.equal(health.json.escrowRetired, false);
+        assert.equal(health.json.submitsDisabled, false);
+        assert.equal(health.json.escrowAddress, "0x3d660502D75f1e97b08c110255921b437A3C4C42");
+        const claim = await request(ctx.port, "POST", "/v1/claims", { claimId: "claim-booked-ok" });
+        assert.equal(claim.status, 200);
+        assert.equal(claim.json.ok, true);
+        assert.equal(claim.json.txHash, null);
+        assert.equal(claim.json.error, undefined);
+      } finally {
+        await ctx.close();
+      }
+    }
+  });
 });
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close((err) => (err ? reject(err) : resolve(port)));
+    });
+    probe.on("error", reject);
+  });
+}
 
 function sepoliaBlock() {
   return {

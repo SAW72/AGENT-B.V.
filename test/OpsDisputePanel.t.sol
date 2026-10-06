@@ -35,28 +35,40 @@ contract OpsDisputePanelGuardTest is Test {
         assertEq(seatOp.LIVE_DISPUTE_PANEL(), livePanel);
         assertEq(
             book.readAddress(".BotAttestationEscrow.address"),
-            0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
+            0x3d660502D75f1e97b08c110255921b437A3C4C42
         );
         assertEq(
             book.readString(".BotAttestationEscrow.deployTx"),
-            "0x7ab17bac1f046ad50299e905f6f5fed47455fdebd3e3004094b899c7f801d8aa"
+            "0x0d39f2502956d1199bb9d264704aacab85ca7a5d54de3e1634b201c730b62b6c"
         );
-        assertEq(book.readUint(".BotAttestationEscrow.deployBlock"), 47345163);
-        assertEq(book.readUint(".BotAttestationEscrow.startBlock"), 47345163);
-        assertEq(book.readString(".BotAttestationEscrow.commit"), "444c427");
+        assertEq(book.readUint(".BotAttestationEscrow.deployBlock"), 47715415);
+        assertEq(book.readUint(".BotAttestationEscrow.startBlock"), 47715415);
+        assertEq(book.readString(".BotAttestationEscrow.commit"), "7fe4a863e9bce0b70b629dab76ddd2728c97b536");
         assertEq(book.readAddress(".BotAttestationEscrow.deployer"), 0x5D467FA00eC0E92044f779e495a17db66c5964aa);
         assertEq(book.readString(".BotAttestationEscrow.acceptOwnership"), "complete");
         assertEq(book.readAddress(".BotAttestationEscrow.owner"), book.readAddress(".governanceTimelock"));
         assertEq(book.readAddress(".BotAttestationEscrow.pendingOwner"), address(0));
         assertEq(
-            book.readString(".BotAttestationEscrow.acceptOwnershipTx"),
-            "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9"
+            book.readAddress(".BotAttestationEscrow.constructorArgs.governance"),
+            book.readAddress(".governanceTimelock")
         );
-        assertEq(book.readUint(".BotAttestationEscrow.acceptOwnershipBlock"), 47345442);
-        assertEq(book.readString(".BotAttestationEscrow.basescan"), "verified");
+        assertEq(
+            book.readString(".BotAttestationEscrow.acceptOwnershipTx"),
+            "0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769"
+        );
+        assertEq(book.readUint(".BotAttestationEscrow.acceptOwnershipBlock"), 47760929);
+        assertEq(book.readString(".BotAttestationEscrow.basescan"), "unconfirmed");
         assertEq(
             book.readString(".BotAttestationEscrow.basescanUrl"),
-            "https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code"
+            "https://sepolia.basescan.org/address/0x3d660502D75f1e97b08c110255921b437A3C4C42#code"
+        );
+        assertEq(
+            book.readAddress(".retired.BotAttestationEscrowEscM1.address"),
+            0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
+        );
+        assertEq(
+            book.readAddress(".retired.BotAttestationEscrowEscM1.supersededBy"),
+            0x3d660502D75f1e97b08c110255921b437A3C4C42
         );
         assertEq(
             book.readAddress(".retired.BotAttestationEscrow.address"),

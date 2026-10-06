@@ -21,7 +21,7 @@ import {
   previewRelease,
 } from "./preview"
 
-const escrow = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d" as const
+const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as const
 const panel = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb" as const
 const id = `0x${"ab".repeat(32)}` as const
 const other = `0x${"cd".repeat(32)}` as const
@@ -145,7 +145,7 @@ describe("calldata preview", () => {
   it("fills the dispute subject from the claim id and the time the claim was created", () => {
     const createdAt = 1_700_000_000n
     const subject = panelSubject(escrow, id, createdAt)
-    expect(subject).toBe("0xbb13800c96edf91bb23cf6e0b3563c7f804d0f2215f3c390d62689d2a4ca1d7a")
+    expect(subject).toBe("0x8dd3a572ef4dab46e92861d450fa3d1d64e3e54be19df8fe3c6e73a6ca5fd9eb")
     expect(subject).not.toBe(id)
     expect(panelSubject(escrow, id, createdAt)).toBe(subject)
     expect(panelSubject(escrow, other, createdAt)).not.toBe(subject)

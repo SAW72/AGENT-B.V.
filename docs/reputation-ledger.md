@@ -38,7 +38,7 @@ Addresses and start blocks (PR #28; Vault and Escrow blocks also appear in `cont
 | Contract | Address | Start block | Role |
 | --- | --- | --- | --- |
 | Vault | `0x1463D664fA467FBCDA4B05443434494f05e565bc` | 47294164 | O1 |
-| BotAttestationEscrow | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` | 47345163 | O2, O3, O4 link |
+| BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` | 47715415 | O2, O3, O4 link |
 | DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` | 47253020 | O4 resolution, O5, A1, A2 |
 | Denylist | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` | 47294163 | Signal only. Zero points. |
 
@@ -67,7 +67,7 @@ Ignored on purpose (unknown topic0 is skipped, not fatal):
 
 - `AccessGranted` (a view, absent from live bytecode, per PR #28).
 - Ownership events.
-- Retired escrow `VaultUpdated(address)` topic `0x161584aed96e7f34998117c9ad67e2d21ff46d2a42775c22b11ed282f3c7b2cd` and `DisputePanelUpdated(address)` topic `0x9d75f31e9d9860ecb2dbb146498bd73b67bd0a905f7670417df7b935a6ce3998` (contract `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, start block 47299930). The live escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (start block 47345163, commit `444c427`) and `main` emit the 4-field shapes `VaultUpdated(address,address,address,uint256)` topic `0x98bd850118a3b2adf2899b547ed110d0a68397fc64ca0b49a55802aeb08a385d` and `DisputePanelUpdated(address,address,address,uint256)` topic `0xf784fa686c25e5a523a9c6576fc20a1e0a5fc05d3f15b235d9d6d78ef8609758`. Neither shape is a reputation rule. A fixture with either topic does not throw.
+- Retired escrow `VaultUpdated(address)` topic `0x161584aed96e7f34998117c9ad67e2d21ff46d2a42775c22b11ed282f3c7b2cd` and `DisputePanelUpdated(address)` topic `0x9d75f31e9d9860ecb2dbb146498bd73b67bd0a905f7670417df7b935a6ce3998` (contract `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, start block 47299930). The live escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` (start block 47715415, commit `7fe4a863e9bce0b70b629dab76ddd2728c97b536`), the retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (start block 47345163, commit `444c427`), and `main` emit the 4-field shapes `VaultUpdated(address,address,address,uint256)` topic `0x98bd850118a3b2adf2899b547ed110d0a68397fc64ca0b49a55802aeb08a385d` and `DisputePanelUpdated(address,address,address,uint256)` topic `0xf784fa686c25e5a523a9c6576fc20a1e0a5fc05d3f15b235d9d6d78ef8609758`. Neither shape is a reputation rule. A fixture with either topic does not throw.
 - `Denylist.check` is a view and has no log. It credits nothing.
 
 `EscrowCreated` has no `createdAt`. The create-block timestamp is the block timestamp on that log. `expiresAt` is the event field. Set duration is `expiresAt` minus that timestamp.
@@ -78,7 +78,7 @@ The resolving vote's transaction emits `DisputeResolved` and then `VoteCast` (lo
 
 - PR #28 measured the DisputePanel deploy block as **47253020**. It is not in `deployments/base-sepolia.json`. This service uses 47253020 because that map is the indexer spec we were asked to follow. If Builder revises it, change `contracts.dispute_panel.start_block` only.
 - Finality lag of about 21 minutes is Builder's measurement, quoted by Tokenomics as unverified. This code does not assume a duration. The caller passes `safeBlock` and `finalizedBlock`.
-- PR #28's scan through block 47341332 found only deploy, ownership, wiring, and seat logs on DisputePanel, Vault, Denylist, and the retired escrow. The live escrow deploy block is 47345163, after that scan, so this service does not claim a scan of the live escrow. Ordering is from source, not from live transactions.
+- PR #28's scan through block 47341332 found only deploy, ownership, wiring, and seat logs on DisputePanel, Vault, Denylist, and the pre-ESC-M-1 escrow. That scan is before the retired ESC-M-1 deploy block 47345163 and before the live escrow deploy block 47715415, so this service does not claim a scan of the live escrow. Ordering is from source, not from live transactions.
 - `CORE_TIMELOCK` `0x10CC9474b45625ADfd05C209f2518023484878D9` is on the usage exclusion list. Whether the EIP-7702 delegation is intended governance is still for Spencer and BOB. This replay only excludes the address.
 
 ## Scoring

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { ESCROW_VIEW_SIGNATURES, PANEL_VIEW_SIGNATURES, selectorFor } from "../escrowCalldata.mjs";
 import { ALLOWED_RPC_METHODS, assessGovernance, assessOwner, readEscrowState, readExpectedOwner } from "../readonlyEscrow.mjs";
 
-const ESCROW = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
+const ESCROW = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
 const PANEL = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb";
 const TIMELOCK = "0x10CC9474b45625ADfd05C209f2518023484878D9";
 

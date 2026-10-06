@@ -1,6 +1,6 @@
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { healthPayload, httpError } from "./config.mjs";
+import { healthPayload, httpError, retiredEscrowError } from "./config.mjs";
 import { KILL_SWITCH } from "./killSwitch.mjs";
 import {
   assertBaseSepolia,
@@ -135,6 +135,10 @@ function errorBody(err) {
     "dryRun",
     "escrowBooked",
     "escrowAddress",
+    "escrowRetired",
+    "submitsDisabled",
+    "address",
+    "current",
     "action",
     "signature",
     "selector",
@@ -284,6 +288,7 @@ export function createClaimRelayer(deps) {
         if (refuseIfKilled(res, req)) return;
         const body = await readBody(req);
         assertBaseSepolia(body);
+        if (config.escrowRetired && wantsLiveSubmit(body)) throw retiredEscrowError(config);
         if (wantsLiveSubmit(body)) {
           if (!config.liveSubmit.allowed) rejectLive(config, body);
           rejectQuoteBroadcast(config, body);
@@ -295,6 +300,7 @@ export function createClaimRelayer(deps) {
       }
 
       if (req.method === "POST" && path === "/v1/claims") {
+        if (config.escrowRetired) throw retiredEscrowError(config);
         if (refuseIfKilled(res, req)) return;
         if (abuse && typeof abuse.takeIp === "function") {
           await abuse.takeIp(clientIp(req), now());

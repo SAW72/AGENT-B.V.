@@ -22,17 +22,17 @@ contract HardenGovernanceTimelockTest is Test {
         string memory json = vm.readFile("deployments/base-sepolia.json");
         assertEq(json.readUint(".governanceTimelockHardening.minDelayTarget"), 86_400);
         assertGt(json.readUint(".governanceTimelockHardening.minDelayTarget"), 300);
-        assertEq(json.readUint(".governanceTimelockHardening.liveMinDelay"), 300);
-        assertFalse(json.readBool(".governanceTimelockHardening.applied"));
+        assertEq(json.readUint(".governanceTimelockHardening.liveMinDelay"), 86_400);
+        assertTrue(json.readBool(".governanceTimelockHardening.applied"));
         assertEq(json.readAddress(".governanceTimelockHardening.executorTarget"), hard.PROPOSER());
         assertEq(json.readString(".governanceTimelockHardening.executorMode"), "closed");
-        assertEq(json.readString(".governanceTimelockHardening.liveExecutor"), "open");
-        assertEq(json.readString(".governanceTimelockHardening.status"), "target-not-applied");
+        assertEq(json.readString(".governanceTimelockHardening.liveExecutor"), "closed");
+        assertEq(json.readString(".governanceTimelockHardening.status"), "applied");
         assertEq(json.readAddress(".Denylist.owner"), hard.GOVERNANCE_TIMELOCK());
         assertEq(json.readAddress(".Vault.owner"), hard.GOVERNANCE_TIMELOCK());
         assertEq(json.readAddress(".BotAttestationEscrow.owner"), hard.GOVERNANCE_TIMELOCK());
         assertEq(json.readAddress(".BotAttestationEscrow.pendingOwner"), address(0));
-        assertEq(json.readAddress(".BotAttestationEscrow.constructorArgs.governance"), hard.CORE_TIMELOCK());
+        assertEq(json.readAddress(".BotAttestationEscrow.constructorArgs.governance"), hard.GOVERNANCE_TIMELOCK());
         assertEq(
             keccak256(bytes(json.readString(".governanceTimelockHardening.saltLabel"))),
             keccak256(bytes(hard.SALT_LABEL()))

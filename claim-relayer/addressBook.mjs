@@ -11,20 +11,23 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const BASE_SEPOLIA_CHAIN_ID = 84532;
 
 /**
- * Previous Denylist, Vault, and retired escrow. Same pins as wallet-ux SUPERSEDED.
+ * Previous Denylist, Vault, and retired escrows. Same pins as wallet-ux SUPERSEDED.
  * Blocked even when a book omits `retired` / `superseded`.
  */
 export const SUPERSEDED = {
   denylist: "0xF0f260967D377E07Bdd7840862508ddB23C012b8",
   vault: "0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7",
   botAttestationEscrow: "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c",
+  botAttestationEscrowEscM1: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
 };
 
 /** Live replacements for the pinned superseded contracts. */
+const LIVE_ESCROW = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
 const SUPERSEDED_CURRENT = {
   [SUPERSEDED.denylist.toLowerCase()]: "0xeE76876bECcFc1B58fC06fF4E654a517d784B224",
   [SUPERSEDED.vault.toLowerCase()]: "0x1463D664fA467FBCDA4B05443434494f05e565bc",
-  [SUPERSEDED.botAttestationEscrow.toLowerCase()]: "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  [SUPERSEDED.botAttestationEscrow.toLowerCase()]: LIVE_ESCROW,
+  [SUPERSEDED.botAttestationEscrowEscM1.toLowerCase()]: LIVE_ESCROW,
 };
 
 function bookError(error, extra = {}) {
@@ -134,6 +137,24 @@ export function replacementAddresses(raw) {
 }
 
 /**
+ * Follow supersededBy when it names another retired address.
+ * The historical successor of 0x141214… is 0x1069…, which is itself retired.
+ * @param {string} key lowercased retired address
+ * @param {Map<string, string>} replacements
+ */
+export function currentBooking(key, replacements) {
+  const seen = new Set();
+  let current = replacements.get(key);
+  while (typeof current === "string") {
+    const next = current.toLowerCase();
+    if (!replacements.has(next) || seen.has(next)) break;
+    seen.add(next);
+    current = replacements.get(next);
+  }
+  return current;
+}
+
+/**
  * Refuse a configured contract that matches retired.* or a superseded address.
  * Comparison is case-insensitive. The message names the rejected address and the current booking.
  * @param {string | null | undefined} address
@@ -146,7 +167,7 @@ export function rejectRetiredAddress(address, book = {}) {
   const forbidden = book.forbidden || forbiddenAddresses(null);
   if (!forbidden.has(key)) return;
   const replacements = book.replacements || replacementAddresses(null);
-  const current = replacements.get(key) || SUPERSEDED_CURRENT[SUPERSEDED.botAttestationEscrow.toLowerCase()];
+  const current = currentBooking(key, replacements) || SUPERSEDED_CURRENT[SUPERSEDED.botAttestationEscrow.toLowerCase()];
   const message = `${shown} is retired/superseded. Current booked address is ${current}.`;
   throw Object.assign(new Error(message), {
     status: 400,
@@ -187,6 +208,11 @@ export function loadAddressBook(filePath = DEFAULT_ADDRESS_BOOK) {
   const bvtRaw = raw.BVT && typeof raw.BVT === "object" ? raw.BVT.address : null;
   const forbidden = forbiddenAddresses(raw);
   const replacements = replacementAddresses(raw);
+  const retiredEscrows = new Set([
+    SUPERSEDED.botAttestationEscrow.toLowerCase(),
+    SUPERSEDED.botAttestationEscrowEscM1.toLowerCase(),
+  ]);
+  walkAddressFields(raw.retired, (node) => addAddress(retiredEscrows, node.address));
   return {
     chainId: BASE_SEPOLIA_CHAIN_ID,
     network: "base-sepolia",
@@ -202,5 +228,6 @@ export function loadAddressBook(filePath = DEFAULT_ADDRESS_BOOK) {
     bvtAddress: bvtRaw === null || bvtRaw === undefined || String(bvtRaw).trim() === "" ? null : optionalAddress(bvtRaw),
     forbidden,
     replacements,
+    retiredEscrows,
   };
 }

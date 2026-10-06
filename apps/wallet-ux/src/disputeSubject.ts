@@ -6,9 +6,9 @@ import { FORM_ERRORS } from "./submit"
 /**
  * Subject for openDispute.
  * A current escrow returns panelSubject(escrowId, createdAt) and that bytes32 is used as-is.
- * The booked escrow in the address book is source 444c427. It has no such view: eth_call
- * reverts with empty data while getCode is non-empty, and that contract requires the subject
- * to be the claim identifier. That fallback is only for ADDRESSES.botAttestationEscrow.
+ * The booked escrow in the address book is source 7fe4a863e9bce0b70b629dab76ddd2728c97b536.
+ * That contract exposes panelSubject. The claim-identifier fallback is only for
+ * ADDRESSES.botAttestationEscrow, and only when that view reverts with empty data.
  * viem wraps every eth_call failure in CallExecutionError. Classification uses err.walk()
  * and never treats that wrapper as a revert. A real empty revert is ExecutionRevertedError,
  * RawContractError, or ContractFunctionRevertedError with data "0x" or no data. That

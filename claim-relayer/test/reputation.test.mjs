@@ -214,7 +214,7 @@ describe("reputation config", () => {
     assert.equal(raw.floors.o3_min_set_duration_seconds.value, 3600);
     assert.equal(raw.day_implementation.value, "utc_day_by_block_timestamp");
     assert.equal(loaded.latest.contracts.vault.start_block, 47294164);
-    assert.equal(loaded.latest.contracts.escrow.start_block, 47345163);
+    assert.equal(loaded.latest.contracts.escrow.start_block, 47715415);
     assert.equal(loaded.latest.contracts.dispute_panel.start_block, 47253020);
     const book = JSON.parse(readFileSync(new URL("../../deployments/base-sepolia.json", import.meta.url), "utf8"));
     assert.equal(loaded.latest.contracts.vault.address, book.Vault.address);

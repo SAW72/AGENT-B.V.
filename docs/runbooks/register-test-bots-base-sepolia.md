@@ -74,7 +74,7 @@ No bot is registered. `Registered(bytes32,uint8,uint256)` topic `0x2578fc74812af
 
 ## What createEscrow actually checks
 
-`createEscrow(bytes32 escrowId, address payee, bytes32 payerBotId, bytes32 payeeBotId, uint256 durationSeconds)` on `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` reverts `InvalidParties` (`0xb6e500fe`) unless all of these hold:
+`createEscrow(bytes32 escrowId, address payee, bytes32 payerBotId, bytes32 payeeBotId, uint256 durationSeconds)` on `0x3d660502D75f1e97b08c110255921b437A3C4C42` reverts `InvalidParties` (`0xb6e500fe`) unless all of these hold:
 
 1. `payee` is not the zero address, and `payee` is not `msg.sender`.
 2. Both bot ids are non-zero, and they are different from each other.
@@ -91,7 +91,7 @@ Bot A is the payer bot. Its operator is Spencer's wallet, and that same wallet s
 | --- | --- |
 | Vault | `0x1463D664fA467FBCDA4B05443434494f05e565bc` |
 | Denylist | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` |
-| BotAttestationEscrow | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` |
+| BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |
 | CORE_TIMELOCK (registration sender) | `0x10CC9474b45625ADfd05C209f2518023484878D9` |
 | Payer operator, first smoke | `<SPENCER_PAYER_WALLET>` |
 | Payee operator | `<REAL_PAYEE_WALLET>` |
@@ -139,13 +139,13 @@ unset PAYER_OPERATOR PAYEE_OPERATOR
 
 Replace both angle-bracket tokens with checksummed addresses, then follow the numbers in order. Left as written, the two operator exports fail to parse (`<` is a redirection).
 
-Bash reads a paste one line at a time, so it reports a syntax error on the angle brackets and does not set the placeholders. zsh rejects that whole paste, so a previous valid address can remain if the clear step above was skipped. `ops_guard` does not rely on that `unset`. After checksum, and ignoring hex case, it rejects a payer or a payee that is blocklisted. That list is the `bEEF` placeholder, the zero address, the simulation stand-ins `0x1111111111111111111111111111111111111111` and `0x2222222222222222222222222222222222222222`, the live escrow, the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, the sample senders in `script/` (`0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001`, `0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38`, `0x0000000000000000000000000000000000000A11`, `0x0000000000000000000000000000000000000A22`, `0x0000000000000000000000000000000000000A33`, and `0x0000000000000000000000000000000000000001`), and these book addresses from `deployments/base-sepolia.json`: Vault `Vault.address` `0x1463D664fA467FBCDA4B05443434494f05e565bc`, Denylist `Denylist.address` `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`, DisputePanel `DisputePanel.address` `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`, the old Vault `superseded.Vault.address` `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7`, Liability `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and the old Denylist `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` and the escrow deployer stay allowed. They are EOAs. It also rejects either operator equal to the relayer, the two operators equal to each other, and a shell with no `cast`. Step 7 still prints both values and waits for `YES` before either registration `cast send`. That prompt is what stops a stale address that is not on the list. Both send pastes check `cast chain-id` and skip the send unless it is `84532`. A missing `cast` prints `cast is not installed` and does not report a wrong chain. The shell stays open.
+Bash reads a paste one line at a time, so it reports a syntax error on the angle brackets and does not set the placeholders. zsh rejects that whole paste, so a previous valid address can remain if the clear step above was skipped. `ops_guard` does not rely on that `unset`. After checksum, and ignoring hex case, it rejects a payer or a payee that is blocklisted. That list is the `bEEF` placeholder, the zero address, the simulation stand-ins `0x1111111111111111111111111111111111111111` and `0x2222222222222222222222222222222222222222`, the live escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`, the retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`, the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, the sample senders in `script/` (`0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001`, `0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38`, `0x0000000000000000000000000000000000000A11`, `0x0000000000000000000000000000000000000A22`, `0x0000000000000000000000000000000000000A33`, and `0x0000000000000000000000000000000000000001`), and these book addresses from `deployments/base-sepolia.json`: Vault `Vault.address` `0x1463D664fA467FBCDA4B05443434494f05e565bc`, Denylist `Denylist.address` `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`, DisputePanel `DisputePanel.address` `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`, the old Vault `superseded.Vault.address` `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7`, Liability `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and the old Denylist `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` and the escrow deployer stay allowed. They are EOAs. It also rejects either operator equal to the relayer, the two operators equal to each other, and a shell with no `cast`. Step 7 still prints both values and waits for `YES` before either registration `cast send`. That prompt is what stops a stale address that is not on the list. Both send pastes check `cast chain-id` and skip the send unless it is `84532`. A missing `cast` prints `cast is not installed` and does not report a wrong chain. The shell stays open.
 
 ```bash
 export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
 export VAULT=0x1463D664fA467FBCDA4B05443434494f05e565bc
 export DENYLIST=0xeE76876bECcFc1B58fC06fF4E654a517d784B224
-export ESCROW=0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
+export ESCROW=0x3d660502D75f1e97b08c110255921b437A3C4C42
 export CORE_TIMELOCK=0x10CC9474b45625ADfd05C209f2518023484878D9
 export PAYER_OPERATOR=<SPENCER_PAYER_WALLET>
 export PAYEE_OPERATOR=<REAL_PAYEE_WALLET>
@@ -278,6 +278,7 @@ ops_guard() {
 0x0000000000000000000000000000000000000000
 0x1111111111111111111111111111111111111111
 0x2222222222222222222222222222222222222222
+0x3d660502D75f1e97b08c110255921b437A3C4C42
 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c
 0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001
@@ -399,6 +400,7 @@ ops_guard() {
 0x0000000000000000000000000000000000000000
 0x1111111111111111111111111111111111111111
 0x2222222222222222222222222222222222222222
+0x3d660502D75f1e97b08c110255921b437A3C4C42
 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c
 0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001
@@ -579,6 +581,7 @@ ops_guard() {
 0x0000000000000000000000000000000000000000
 0x1111111111111111111111111111111111111111
 0x2222222222222222222222222222222222222222
+0x3d660502D75f1e97b08c110255921b437A3C4C42
 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c
 0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001
@@ -708,7 +711,7 @@ true
 
 ## Risks
 
-Retired by #46 (code path removed), not rotated. Tick only after CUTOVER.md (#51) step 1 has deleted the old values on Render, GitHub, and Cloudflare. The relayer still has no amount cap. At block `47392348` that balance was `413437500000000000` wei (about 0.413 ETH). `release` is permissionless and pays the payee. A payee address nobody controls burns those funds. A stale Pages deploy would send that path at the live escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` while the stale UI still shows the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`.
+Retired by #46 (code path removed), not rotated. Tick only after CUTOVER.md (#51) step 1 has deleted the old values on Render, GitHub, and Cloudflare. The relayer still has no amount cap. At block `47392348` that balance was `413437500000000000` wei (about 0.413 ETH). `release` is permissionless and pays the payee. A payee address nobody controls burns those funds. A stale Pages deploy would send that path at a retired escrow. The live escrow is `0x3d660502D75f1e97b08c110255921b437A3C4C42`. The ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is retired (2026-10-06). The stale UI still shows the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`.
 
 The first smoke therefore sets `PAYER_OPERATOR` to Spencer's own wallet (`<SPENCER_PAYER_WALLET>`). He calls `createEscrow` from that wallet. `msg.sender` has to equal `operator(payerBotId)`. The pasted guard rejects the relayer as either operator. Retired by #46 (code path removed), not rotated. Tick only after CUTOVER.md (#51) step 1 has deleted the old values on Render, GitHub, and Cloudflare.
 

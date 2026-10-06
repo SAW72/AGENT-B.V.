@@ -5,9 +5,10 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAddressBook, parseStartBlock } from "../addressBook.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_RELAYER_ADDRESS, buildMetadata, healthPayload, liveSubmitStatus, loadConfig } from "../config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_RELAYER_ADDRESS, RETIRED_SEPOLIA_ESCROWS, buildMetadata, healthPayload, liveSubmitStatus, loadConfig } from "../config.mjs";
 
 const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c";
+const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
 const SUPERSEDED_DENYLIST = "0xF0f260967D377E07Bdd7840862508ddB23C012b8";
 const CURRENT_DENYLIST = "0xeE76876bECcFc1B58fC06fF4E654a517d784B224";
 const LIVE_PANEL = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb";
@@ -21,8 +22,8 @@ describe("config gates", () => {
     assert.equal(config.relayerAddress, DEFAULT_RELAYER_ADDRESS);
     assert.equal(config.escrowBooked, true);
     assert.equal(config.escrowSource, "address_book");
-    assert.equal(config.escrowAddress, "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d");
-    assert.equal(config.escrowStartBlock, 47345163);
+    assert.equal(config.escrowAddress, "0x3d660502D75f1e97b08c110255921b437A3C4C42");
+    assert.equal(config.escrowStartBlock, 47715415);
     assert.equal(config.escrowStartBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
     assert.equal(config.escrowStartBlockSource, "address_book");
     const health = healthPayload(config, false);
@@ -99,6 +100,13 @@ describe("config gates", () => {
     assert.equal(book.BotAttestationEscrow.address, BOOKED_SEPOLIA_ESCROW);
     assert.equal(book.BotAttestationEscrow.startBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
     assert.equal(book.retired.BotAttestationEscrow.reason, "ESC-M-1 redeploy, retired 2026-09-26");
+    assert.equal(book.retired.BotAttestationEscrowEscM1.address, RETIRED_ESCROW_ESC_M1);
+    assert.equal(book.retired.BotAttestationEscrowEscM1.supersededBy, BOOKED_SEPOLIA_ESCROW);
+    assert.equal(book.retired.BotAttestationEscrowEscM1.reason, "Pull-payment redeploy, retired 2026-10-06");
+    assert.deepEqual(
+      RETIRED_SEPOLIA_ESCROWS.map((address) => address.toLowerCase()).sort(),
+      [RETIRED_ESCROW, RETIRED_ESCROW_ESC_M1].map((address) => address.toLowerCase()).sort(),
+    );
     assert.equal(book.claimRelayerWallet, DEFAULT_RELAYER_ADDRESS);
 
     const explicit = liveSubmitStatus(
@@ -181,22 +189,79 @@ describe("config gates", () => {
 });
 
 describe("retired and superseded addresses", () => {
-  it("refuses the retired escrow from ESCROW_ADDRESS at config load", () => {
-    const err = loadConfigError({ ESCROW_ADDRESS: RETIRED_ESCROW });
-    assert.equal(err.error, "retired_or_superseded_address");
-    assert.match(err.message, /retired\/superseded/);
-    assert.match(err.message, new RegExp(RETIRED_ESCROW));
-    assert.match(err.message, new RegExp(BOOKED_SEPOLIA_ESCROW));
-    assert.equal(err.current, BOOKED_SEPOLIA_ESCROW);
+  it("boots when ESCROW_ADDRESS is the retired pre-ESC-M-1 escrow and disables submits", () => {
+    const config = loadConfig({
+      ESCROW_ADDRESS: RETIRED_ESCROW,
+      LIVE_SUBMIT: "1",
+      SPENCER_RUN_AUTH: "1",
+    });
+    assert.equal(config.escrowRetired, true);
+    assert.equal(config.submitsDisabled, true);
+    assert.equal(config.escrowAddress, RETIRED_ESCROW);
+    assert.equal(config.retiredEscrowCurrent, BOOKED_SEPOLIA_ESCROW);
+    assert.match(config.escrowRetiredDetail, new RegExp(RETIRED_ESCROW));
+    assert.match(config.escrowRetiredDetail, /ESCROW_ADDRESS/);
+    assert.equal(config.liveSubmit.allowed, false);
+    assert.ok(config.liveSubmit.blockers.includes("escrow_retired"));
+    const health = healthPayload(config, true);
+    assert.equal(health.ok, true);
+    assert.equal(health.escrowRetired, true);
+    assert.equal(health.submitsDisabled, true);
+    assert.equal(health.killSwitch, true);
+    assert.equal(health.liveSubmit, false);
   });
 
-  it("refuses a mixed-case retired escrow", () => {
+  it("boots when ESCROW_ADDRESS is the retired ESC-M-1 escrow, any case", () => {
+    const config = loadConfig({ ESCROW_ADDRESS: RETIRED_ESCROW_ESC_M1 });
+    assert.equal(config.escrowRetired, true);
+    assert.equal(config.submitsDisabled, true);
+    assert.equal(config.retiredEscrowCurrent, BOOKED_SEPOLIA_ESCROW);
+    assert.match(config.escrowRetiredDetail, /ESCROW_ADDRESS/);
+    const mixed = "0x1069aa6597f08f1e8b8ad39aa40ede1d0c77298d";
+    const mixedConfig = loadConfig({ ESCROW_ADDRESS: mixed });
+    assert.equal(mixedConfig.escrowRetired, true);
+    assert.equal(mixedConfig.retiredEscrowCurrent, BOOKED_SEPOLIA_ESCROW);
+    const health = healthPayload(mixedConfig, false);
+    assert.equal(health.escrowRetired, true);
+    assert.equal(health.submitsDisabled, true);
+    assert.equal(health.escrowAddress, mixed);
+  });
+
+  it("skips ESCROW_START_BLOCK parsing when the configured escrow is retired", () => {
+    for (const address of [RETIRED_ESCROW_ESC_M1, RETIRED_ESCROW]) {
+      for (const startBlock of ["abc", ""]) {
+        const config = loadConfig({ ESCROW_ADDRESS: address, ESCROW_START_BLOCK: startBlock });
+        assert.equal(config.escrowRetired, true);
+        assert.equal(config.submitsDisabled, true);
+        assert.equal(config.escrowBooked, true);
+        assert.equal(config.escrowStartBlock, null);
+        assert.equal(config.escrowStartBlockSource, "retired");
+        const health = healthPayload(config, false);
+        assert.equal(health.escrowRetired, true);
+        assert.equal(health.submitsDisabled, true);
+        assert.equal(health.escrowBooked, true);
+      }
+    }
+    const booked = loadConfig({ ESCROW_ADDRESS: BOOKED_SEPOLIA_ESCROW, ESCROW_START_BLOCK: "abc" });
+    assert.equal(booked.escrowRetired, false);
+    assert.equal(booked.escrowStartBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
+    const fromBook = loadConfig({ ESCROW_START_BLOCK: "abc" });
+    assert.equal(fromBook.escrowRetired, false);
+    assert.equal(fromBook.escrowStartBlock, BOOKED_SEPOLIA_ESCROW_START_BLOCK);
+  });
+
+  it("boots on a mixed-case retired escrow and keeps the healthy path clear", () => {
     const mixed = "0x141214f04b0E1d949b6e6bf32D019Ad7Ab5B284C";
-    const err = loadConfigError({ ESCROW_ADDRESS: mixed });
-    assert.equal(err.error, "retired_or_superseded_address");
-    assert.match(err.message, /retired\/superseded/);
-    assert.ok(err.message.includes(mixed));
-    assert.match(err.message, new RegExp(BOOKED_SEPOLIA_ESCROW));
+    const config = loadConfig({ ESCROW_ADDRESS: mixed });
+    assert.equal(config.escrowRetired, true);
+    assert.match(config.escrowRetiredDetail, new RegExp(mixed));
+    assert.match(config.escrowRetiredDetail, new RegExp(BOOKED_SEPOLIA_ESCROW));
+    const healthy = loadConfig({});
+    assert.equal(healthy.escrowRetired, false);
+    assert.equal(healthy.submitsDisabled, false);
+    assert.equal(healthy.escrowAddress, BOOKED_SEPOLIA_ESCROW);
+    assert.equal(healthPayload(healthy, false).escrowRetired, false);
+    assert.equal(healthPayload(healthy, false).submitsDisabled, false);
   });
 
   it("refuses a superseded denylist address used as the escrow", () => {
@@ -217,29 +282,33 @@ describe("retired and superseded addresses", () => {
     assert.equal(config.escrowStartBlockSource, "address_book");
   });
 
-  it("refuses a book whose live escrow slot is retired", async () => {
+  it("boots when the book live escrow slot is retired", async () => {
     const filePath = await writeBook({
       BotAttestationEscrow: { address: RETIRED_ESCROW, startBlock: 47299930 },
     });
-    const err = loadConfigError({ ADDRESS_BOOK_PATH: filePath });
-    assert.equal(err.error, "retired_or_superseded_address");
-    assert.match(err.message, new RegExp(RETIRED_ESCROW));
-    assert.match(err.message, new RegExp(BOOKED_SEPOLIA_ESCROW));
+    const config = loadConfig({ ADDRESS_BOOK_PATH: filePath });
+    assert.equal(config.escrowRetired, true);
+    assert.equal(config.submitsDisabled, true);
+    assert.equal(config.escrowSource, "address_book");
+    assert.equal(config.escrowAddress, RETIRED_ESCROW);
+    assert.equal(config.retiredEscrowCurrent, BOOKED_SEPOLIA_ESCROW);
+    assert.match(config.escrowRetiredDetail, /ESCROW_ADDRESS/);
   });
 
-  it("refuses a retired address recorded only in the book", async () => {
+  it("boots when a retired address is recorded only in the book", async () => {
     const retired = "0x4444444444444444444444444444444444444444";
     const current = "0x5555555555555555555555555555555555555555";
     const filePath = await writeBook({
       BotAttestationEscrow: { address: retired, startBlock: 10 },
       retired: { BotAttestationEscrow: { address: retired, supersededBy: current } },
     });
-    const err = loadConfigError({ ADDRESS_BOOK_PATH: filePath });
-    assert.equal(err.error, "retired_or_superseded_address");
-    assert.match(err.message, /retired\/superseded/);
-    assert.match(err.message, new RegExp(retired));
-    assert.match(err.message, new RegExp(current));
-    assert.equal(err.current, current);
+    const config = loadConfig({ ADDRESS_BOOK_PATH: filePath });
+    assert.equal(config.escrowRetired, true);
+    assert.equal(config.submitsDisabled, true);
+    assert.equal(config.escrowAddress, retired);
+    assert.equal(config.retiredEscrowCurrent, current);
+    assert.match(config.escrowRetiredDetail, new RegExp(retired));
+    assert.match(config.escrowRetiredDetail, /ESCROW_ADDRESS/);
   });
 
   it("refuses a governanceTimelock on the forbidden list", async () => {

@@ -4,18 +4,18 @@ Gas and ops service for the Agent-BV (Agent Auditor) claim flow. Default mode is
 
 Public funding wallet (address only): `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` (`…31861`). The same EOA is booked as `claimRelayerWallet` in `deployments/base-sepolia.json`. It is not a contract. The hosted service derives it from `RELAYER_PRIVATE_KEY`. Never commit the private key.
 
-`BotAttestationEscrow` is booked in `deployments/base-sepolia.json` at `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`. The indexer and relayer start block is the deploy block `47345163` (`BOOKED_SEPOLIA_ESCROW_START_BLOCK`, also `BotAttestationEscrow.startBlock` in the address book). When `ESCROW_ADDRESS` is unset, health reports `escrowBooked: true` and that address (`escrowSource: "address_book"`) with `escrowStartBlock: 47345163` and `escrowStartBlockSource: "address_book"`. BVT is still null. Set `ESCROW_ADDRESS` to the zero address to force `escrowBooked: false` (`escrowStartBlockSource: "unbooked"`).
+`BotAttestationEscrow` is booked in `deployments/base-sepolia.json` at `0x3d660502D75f1e97b08c110255921b437A3C4C42`. The indexer and relayer start block is the deploy block `47715415` (`BOOKED_SEPOLIA_ESCROW_START_BLOCK`, also `BotAttestationEscrow.startBlock` in the address book). When `ESCROW_ADDRESS` is unset, health reports `escrowBooked: true` and that address (`escrowSource: "address_book"`) with `escrowStartBlock: 47715415` and `escrowStartBlockSource: "address_book"`. BVT is still null. Set `ESCROW_ADDRESS` to the zero address to force `escrowBooked: false` (`escrowStartBlockSource: "unbooked"`).
 
-The booked start block is used only when the configured escrow is that booked contract (address-book block, or the constant when the book omits one). An `ESCROW_ADDRESS` override that points at a different contract does not inherit `47345163`. Set `ESCROW_START_BLOCK` to a non-negative integer for that contract, or leave it unset. Unset means `escrowStartBlock: null` and `escrowStartBlockSource: "unset"` on `/health`, plus a startup log. It does not mean block 0. A JSON `null`, an empty string, or a missing book `deployBlock` / `startBlock` is missing, not block 0. A present non-integer or negative `ESCROW_START_BLOCK` refuses to boot (`invalid_escrow_start_block`).
+The booked start block is used only when the configured escrow is that booked contract (address-book block, or the constant when the book omits one). An `ESCROW_ADDRESS` override that points at a different contract does not inherit `47715415`. Set `ESCROW_START_BLOCK` to a non-negative integer for that contract, or leave it unset. Unset means `escrowStartBlock: null` and `escrowStartBlockSource: "unset"` on `/health`, plus a startup log. It does not mean block 0. A JSON `null`, an empty string, or a missing book `deployBlock` / `startBlock` is missing, not block 0. A present non-integer or negative `ESCROW_START_BLOCK` refuses to boot (`invalid_escrow_start_block`) only when the configured escrow is not retired and not the booked contract. A retired escrow skips that parse and still boots.
 
-Config load refuses any adopted address (escrow env or book, denylist, vault, dispute panel) that matches `retired.*`, `superseded.*`, or the wallet-ux superseded pins. Comparison ignores case and checksum. The previous escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is retired (ESC-M-1 redeploy, retired 2026-09-26). Setting it as `ESCROW_ADDRESS` fails at boot: `retired_or_superseded_address`, and the message names that address and the current booked address `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`.
+Config load still refuses a denylist, vault, or dispute panel that matches `retired.*`, `superseded.*`, or the wallet-ux superseded pins. Comparison ignores case and checksum. A configured escrow on the retired list does not exit. Retired escrows are `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` (ESC-M-1, retired 2026-10-06) and `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` (pre-ESC-M-1, retired 2026-09-26). If `ESCROW_ADDRESS` or the book slot is one of those, the process boots, logs one line naming that address and `ESCROW_ADDRESS`, and `/health` stays up with `escrowRetired: true` and `submitsDisabled: true`. Every `POST /v1/claims` returns `retired_or_superseded_address`. `broadcast.mjs` still refuses any `to` other than `0x3d660502D75f1e97b08c110255921b437A3C4C42`.
 
-The booked escrow is source `444c427`. A dispute on that bytecode links only when the panel subject is the claim identifier. A redeploy that replaces `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` changes the wallet book, this relayer book, the wallet deploy-guard pin (`apps/wallet-ux/scripts/guard-escrow-addresses.mjs`), and the superseded entry for `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` together. Do not move one of those pins alone.
+The booked escrow is source `7fe4a863e9bce0b70b629dab76ddd2728c97b536`. It exposes `panelSubject`. A later redeploy changes the wallet book, this relayer book, the wallet deploy-guard pin (`apps/wallet-ux/scripts/guard-escrow-addresses.mjs`), and the superseded entries for both retired escrows together. Do not move one of those pins alone.
 
 ## HARD STOP
 
 - **Base Sepolia only** (chain id **84532**). Ethereum mainnet (`1`), Base mainnet (`8453`), and every other chain are refused at boot and on every request. There is no mainnet send path.
-- **Live submit is off unless every gate passes:** `CHAIN_ID=84532`, `LIVE_SUBMIT=1`, `SPENCER_RUN_AUTH=1`, and the escrow is the booked Sepolia contract `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`. Health then reports `liveSubmit: true`, `mode: "live"`, and `liveSubmitBlockers: []`. Any missing gate keeps `liveSubmit: false`.
+- **Live submit is off unless every gate passes:** `CHAIN_ID=84532`, `LIVE_SUBMIT=1`, `SPENCER_RUN_AUTH=1`, and the escrow is the booked Sepolia contract `0x3d660502D75f1e97b08c110255921b437A3C4C42`. Health then reports `liveSubmit: true`, `mode: "live"`, and `liveSubmitBlockers: []`. Any missing gate keeps `liveSubmit: false`. A retired escrow adds `escrow_retired` and keeps submits disabled.
 - **Agents do not `--broadcast`.** Do not add forge broadcast scripts. Do not deploy Escrow or BVT from here. Live submit sends one escrow transaction through the relayer key. It does not deploy contracts.
 - **Never invent balances.** Quote amounts are echoed from the client. This service does not read wallet balances.
 - **Never commit secrets or private keys.** `RELAYER_PRIVATE_KEY` is a runtime environment variable only. It is read only when live submit is allowed, it is not written to disk or to the JSONL log, and it is stripped from errors.
@@ -56,9 +56,11 @@ Tests use Node's built-in runner. They do not touch the network.
   "stub": true,
   "fixture": true,
   "escrowBooked": true,
-  "escrowAddress": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  "escrowAddress": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
   "escrowSource": "address_book",
-  "escrowStartBlock": 47345163,
+  "escrowRetired": false,
+  "submitsDisabled": false,
+  "escrowStartBlock": 47715415,
   "escrowStartBlockSource": "address_book",
   "relayerAddress": "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861",
   "liveSubmit": false,
@@ -97,7 +99,7 @@ Response:
   "mode": "fixture",
   "dryRun": true,
   "escrowBooked": true,
-  "escrowAddress": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  "escrowAddress": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
   "relayerAddress": "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861",
   "relayerNonce": "0",
   "calldata": null,
@@ -122,7 +124,7 @@ Fixture response while Escrow is booked and Spencer has not authorized a run:
   "reason": "escrow_booked_spencer_run_auth_required",
   "dryRun": true,
   "escrowBooked": true,
-  "escrowAddress": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
+  "escrowAddress": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
   "calldata": null,
   "calldataStatus": "action_required"
 }
@@ -156,7 +158,7 @@ ECDSA signatures must be 65 bytes with `v` in `{0, 1, 27, 28}` and low `s` (`s` 
 
 Verification order, and only then simulate and broadcast the server-built calldata:
 
-1. Domain `chainId` and `verifyingContract` must equal configured `CHAIN_ID` and `ESCROW_ADDRESS`. The retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is rejected. Chain ids `1` and `8453` are rejected.
+1. Domain `chainId` and `verifyingContract` must equal configured `CHAIN_ID` and `ESCROW_ADDRESS`. The retired escrows `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` and `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` are rejected. Chain ids `1` and `8453` are rejected.
 2. `deadline` is in the future and at most 300 seconds ahead.
 3. `ecrecover` of the low-`s` signature equals `intent.sender`. ERC-1271 `isValidSignature` runs only when `ERC1271_ENABLED=1`, and only for a signature that is not a 65-byte ECDSA signature. The default is off.
 4. The server builds calldata from the signed `action` and `escrowId`. A supplied value is refused. Client calldata is checked and then discarded.
@@ -256,7 +258,7 @@ A live claim that fails while sending returns this body. `revert_data` is always
 }
 ```
 
-Startup with `CHAIN_ID` other than `84532` refuses to boot (`mainnet_refused` or `wrong_chain`). `RELAYER_KEY_FILE` / `RELAYER_PRIVATE_KEY_FILE` refuse to boot. A retired or superseded escrow, denylist, vault, or dispute panel refuses to boot (`retired_or_superseded_address`). A non-integer or negative `ESCROW_START_BLOCK` on a non-booked escrow refuses to boot (`invalid_escrow_start_block`). Keys stay in the environment.
+Startup with `CHAIN_ID` other than `84532` refuses to boot (`mainnet_refused` or `wrong_chain`). `RELAYER_KEY_FILE` / `RELAYER_PRIVATE_KEY_FILE` refuse to boot. A retired or superseded denylist, vault, or dispute panel refuses to boot (`retired_or_superseded_address`). A retired escrow (`0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` or `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`) boots with submits disabled (`escrowRetired` and `submitsDisabled` on `/health`) instead of exiting. A non-integer or negative `ESCROW_START_BLOCK` on a non-retired, non-booked escrow refuses to boot (`invalid_escrow_start_block`). A retired escrow skips start-block parsing and still boots. Keys stay in the environment.
 
 ## Kill switch
 
