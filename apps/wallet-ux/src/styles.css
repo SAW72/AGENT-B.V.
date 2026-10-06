@@ -166,6 +166,7 @@ label { display: block; margin-bottom: 4px; }
 .pill.bad { background: var(--bad-bg); color: var(--bad); }
 
 .bad { color: var(--bad); }
+.pin-match { color: var(--ok); }
 
 .error-notice {
   background: var(--bad-bg);

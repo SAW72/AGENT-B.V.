@@ -5,7 +5,18 @@ import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
 import { errorText, formatEth, shortAddress } from "./format"
-import { gateAOwnershipNotes, liabilityLinkNotes } from "./gate"
+import { PAGE_FOOTER } from "./brand"
+import {
+  GATE_OWNER_MATCH,
+  GATE_OWNER_MISMATCH,
+  GOVERNANCE_TIMELOCK_PIN,
+  GOVERNANCE_TIMELOCK_ROLE,
+  LINK_OWNER_MATCH,
+  LINK_OWNER_MISMATCH,
+  gateAOwnershipNotes,
+  liabilityLinkNotes,
+  liveExpectedOwner,
+} from "./gate"
 import { evaluateReadGuard, resolveWalletChainId } from "./guard"
 import { createSepoliaClient, panelNotSeated, readGateStatus, rpcHost, type GateStatus } from "./read"
 import { relayerConfigFromEnv } from "./relayer"
@@ -40,6 +51,34 @@ function BvtSlots() {
   )
 }
 
+export function BookOwners() {
+  const liveOwner = liveExpectedOwner()
+  return (
+    <section className="card" aria-labelledby="timelock-heading">
+      <h2 id="timelock-heading">{GOVERNANCE_TIMELOCK_ROLE}</h2>
+      <p className="muted" data-testid="address-source">
+        {addressBook.source === "src/base-sepolia.json"
+          ? "Addresses from src/base-sepolia.json. Superseded contracts are not read."
+          : "Deployment book failed validation. Using the corrected Gate A pin."}
+      </p>
+      {liveOwner ? (
+        <AddressRow label={GOVERNANCE_TIMELOCK_ROLE} value={liveOwner} testId="governance-timelock" />
+      ) : (
+        <p className="pill bad">The address book has no governance timelock.</p>
+      )}
+      <AddressRow label="coreTimelock" value={ADDRESSES.coreTimelock} testId="core-timelock" />
+    </section>
+  )
+}
+
+export function PageFooter() {
+  return (
+    <footer>
+      <p>{PAGE_FOOTER}</p>
+    </footer>
+  )
+}
+
 function walletStatus(connected: boolean, chainId: number | null | "conflict"): string {
   if (!connected) return "Disconnected"
   if (chainId === "conflict") return "Connected, chain id conflict"
@@ -48,19 +87,20 @@ function walletStatus(connected: boolean, chainId: number | null | "conflict"): 
   return `Connected on chain ${chainId}`
 }
 
-function LiveStatus({ status }: { status: GateStatus }) {
+export function LiveStatus({ status }: { status: GateStatus }) {
   const gateNotes = gateAOwnershipNotes(status)
   const linkNotes = liabilityLinkNotes(status)
   const unseated = panelNotSeated(status.disputePanel.arbitratorCount, status.disputePanel.panelSize)
+  const liveOwner = liveExpectedOwner() ?? undefined
 
   return (
     <>
       <section className="card" aria-labelledby="gate-heading" data-testid="gate-status">
         <h2 id="gate-heading">Gate A</h2>
         {gateNotes.length === 0 ? (
-          <p className="pill ok">Owner is CORE_TIMELOCK and pendingOwner is none on Denylist and Vault.</p>
+          <p className="pill ok">{GATE_OWNER_MATCH}</p>
         ) : (
-          <p className="pill bad">Live ownership does not match the Gate A pin.</p>
+          <p className="pill bad">{GATE_OWNER_MISMATCH}</p>
         )}
         <NoteList notes={gateNotes} />
         <h3>Denylist</h3>
@@ -68,13 +108,20 @@ function LiveStatus({ status }: { status: GateStatus }) {
         <AddressRow
           label="owner()"
           value={status.denylist.owner}
-          expected={ADDRESSES.coreTimelock}
+          expected={liveOwner}
+          pinName={GOVERNANCE_TIMELOCK_PIN}
           testId="denylist-owner"
         />
         <AddressRow label="pendingOwner()" value={status.denylist.pendingOwner} testId="denylist-pending" />
         <h3>Vault</h3>
         <AddressRow label="Contract" value={ADDRESSES.vault} />
-        <AddressRow label="owner()" value={status.vault.owner} expected={ADDRESSES.coreTimelock} />
+        <AddressRow
+          label="owner()"
+          value={status.vault.owner}
+          expected={liveOwner}
+          pinName={GOVERNANCE_TIMELOCK_PIN}
+          testId="vault-owner"
+        />
         <AddressRow label="pendingOwner()" value={status.vault.pendingOwner} />
         <AddressRow
           label="denylist()"
@@ -114,19 +161,31 @@ function LiveStatus({ status }: { status: GateStatus }) {
           the address balance. No claim signing.
         </p>
         {linkNotes.length === 0 ? (
-          <p className="pill ok">Owners match CORE_TIMELOCK and the liability link is mutual.</p>
+          <p className="pill ok">{LINK_OWNER_MATCH}</p>
         ) : (
-          <p className="pill bad">Live link does not match the pin.</p>
+          <p className="pill bad">{LINK_OWNER_MISMATCH}</p>
         )}
         <NoteList notes={linkNotes} />
         <h3>Liability</h3>
         <AddressRow label="Contract" value={ADDRESSES.liability} />
-        <AddressRow label="owner()" value={status.liability.owner} expected={ADDRESSES.coreTimelock} />
+        <AddressRow
+          label="owner()"
+          value={status.liability.owner}
+          expected={liveOwner}
+          pinName={GOVERNANCE_TIMELOCK_PIN}
+          testId="liability-owner"
+        />
         <AddressRow label="insurance()" value={status.liability.insurance} expected={ADDRESSES.insuranceFund} />
         <TextRow label="Native ETH" value={formatEth(status.liability.nativeBalanceWei)} />
         <h3>InsuranceFund</h3>
         <AddressRow label="Contract" value={ADDRESSES.insuranceFund} />
-        <AddressRow label="owner()" value={status.insuranceFund.owner} expected={ADDRESSES.coreTimelock} />
+        <AddressRow
+          label="owner()"
+          value={status.insuranceFund.owner}
+          expected={liveOwner}
+          pinName={GOVERNANCE_TIMELOCK_PIN}
+          testId="insurance-owner"
+        />
         <AddressRow label="liability()" value={status.insuranceFund.liability} expected={ADDRESSES.liability} />
         <TextRow label="balance()" value={formatEth(status.insuranceFund.recordedBalanceWei)} />
         <TextRow label="Native ETH" value={formatEth(status.insuranceFund.nativeBalanceWei)} />
@@ -265,15 +324,7 @@ export function App() {
         </div>
       ) : null}
 
-      <section className="card" aria-labelledby="timelock-heading">
-        <h2 id="timelock-heading">CORE_TIMELOCK</h2>
-        <p className="muted" data-testid="address-source">
-          {addressBook.source === "src/base-sepolia.json"
-            ? "Addresses from src/base-sepolia.json. Superseded contracts are not read."
-            : "Deployment book failed validation. Using the corrected Gate A pin."}
-        </p>
-        <AddressRow label="coreTimelock" value={ADDRESSES.coreTimelock} />
-      </section>
+      <BookOwners />
 
       {guard.ok && statusQuery.isPending ? <p className="banner info">Reading Base Sepolia contracts.</p> : null}
       {guard.ok && statusQuery.isError ? (
@@ -309,13 +360,7 @@ export function App() {
         relayerUrl={relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL }).url}
       />
 
-      <footer>
-        <p>
-          Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be
-          submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. This page
-          does not sign EIP-712 claims.
-        </p>
-      </footer>
+      <PageFooter />
     </div>
   )
 }

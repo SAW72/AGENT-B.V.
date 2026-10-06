@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react"
 import { type Address } from "viem"
 import { useAccount } from "wagmi"
 import { ADDRESSES } from "./addresses"
+import { GOVERNANCE_TIMELOCK_PIN, liveExpectedOwner } from "./gate"
 import { parseBytes32 } from "./bytes32"
 import { FlowPreview } from "./FlowPreview"
 import { errorText, formatEth, isZeroAddress, payeeOpenExpiryNotice } from "./format"
@@ -42,13 +43,31 @@ export function EscrowPanel({
   )
 }
 
-function EscrowReads({ status }: { status: EscrowStatus }) {
+export function EscrowReads({ status }: { status: EscrowStatus }) {
+  const liveOwner = liveExpectedOwner() ?? undefined
   return (
     <>
-      <AddressRow label="owner()" value={status.owner} expected={ADDRESSES.coreTimelock} testId="escrow-owner" />
+      <AddressRow
+        label="owner()"
+        value={status.owner}
+        expected={liveOwner}
+        pinName={GOVERNANCE_TIMELOCK_PIN}
+        testId="escrow-owner"
+      />
       <AddressRow label="pendingOwner()" value={status.pendingOwner} />
-      <AddressRow label="governance()" value={status.governance} expected={ADDRESSES.coreTimelock} />
-      <AddressRow label="disputePanel()" value={status.disputePanel} expected={ADDRESSES.disputePanel} testId="escrow-panel" />
+      <AddressRow
+        label="governance()"
+        value={status.governance}
+        expected={liveOwner}
+        pinName={GOVERNANCE_TIMELOCK_PIN}
+        testId="escrow-governance"
+      />
+      <AddressRow
+        label="disputePanel()"
+        value={status.disputePanel}
+        expected={ADDRESSES.disputePanel}
+        testId="escrow-panel"
+      />
       <AddressRow label="denylist()" value={status.denylist} expected={ADDRESSES.denylist} />
       <AddressRow label="vault()" value={status.vault} expected={ADDRESSES.vault} />
       <TextRow label="lockedValue()" value={formatEth(status.lockedValueWei)} />

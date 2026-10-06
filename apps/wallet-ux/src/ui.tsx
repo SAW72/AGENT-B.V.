@@ -31,14 +31,18 @@ export function AddressRow({
   label,
   value,
   expected,
+  pinName = "pin",
   testId,
 }: {
   label: string
   value: string
   expected?: string
+  /** What the expected address is, in plain words. Owner rows pass the book role. */
+  pinName?: string
   testId?: string
 }) {
-  const mismatch = expected != null && !sameAddress(value, expected)
+  const checked = expected != null
+  const mismatch = checked && !sameAddress(value, expected)
   return (
     <div className="kv-row">
       <div className="kv-label">{label}</div>
@@ -47,7 +51,11 @@ export function AddressRow({
           {shortAddress(value)}
         </span>
         {isZeroAddress(value) ? <span className="muted"> none</span> : null}
-        {mismatch ? <span className="bad"> does not match pin</span> : null}
+        {checked ? (
+          <span className={mismatch ? "bad" : "pin-match"} data-testid={testId ? `${testId}-pin` : undefined}>
+            {mismatch ? ` does not match ${pinName}` : ` matches ${pinName}`}
+          </span>
+        ) : null}
         <CopyButton value={value} />
         <a href={explorerUrl(value)} target="_blank" rel="noreferrer">
           View
