@@ -13,8 +13,10 @@ import {
   GATE_OWNER_MISMATCH,
   LINK_OWNER_MATCH,
   LINK_OWNER_MISMATCH,
+  MISSING_GOVERNANCE_TIMELOCK,
+  gateAOwnershipNotes,
+  liabilityLinkNotes,
   liveExpectedOwner,
-  retiredExpectedOwner,
 } from "./gate"
 import type { EscrowStatus, GateStatus } from "./read"
 
@@ -31,6 +33,7 @@ const OWNER_ROWS = [
 ] as const
 
 const OLD_FOOTER = "This page does not sign EIP-712 claims."
+const MISLEADING_SIGNING = "Signing alone moves no funds"
 
 function escrowStatus(owner: Address, governance: Address): EscrowStatus {
   return {
@@ -83,8 +86,6 @@ describe("live owner pin", () => {
     expect(liveExpectedOwner()).toBe(getAddress(deploymentBook.governanceTimelock))
     expect(liveExpectedOwner()).toBe(ADDRESSES.governanceTimelock)
     expect(liveExpectedOwner()).not.toBe(ADDRESSES.coreTimelock)
-    expect(retiredExpectedOwner()).toBe(ADDRESSES.coreTimelock)
-    expect(retiredExpectedOwner()).toBe(getAddress(deploymentBook.coreTimelock))
   })
 
   it("shows a match on every live owner row when owners are the governance timelock", () => {
@@ -136,17 +137,36 @@ describe("live owner pin", () => {
     expect(screen.getByTestId("escrow-governance-pin").textContent).toContain("does not match the governance timelock")
   })
 
-  it("keeps coreTimelock as the expected owner of retired contracts the book still assigns to it", () => {
-    expect(deploymentBook.superseded.Denylist.owner).toBe(retiredExpectedOwner())
-    expect(deploymentBook.retired.BotAttestationEscrow.owner).toBe(retiredExpectedOwner())
-    expect(deploymentBook.retired.BotAttestationEscrowEscM1.constructorArgs.governance).toBe(retiredExpectedOwner())
-
+  it("pins live book owners to the governance timelock", () => {
     expect(deploymentBook.Denylist.owner).toBe(liveExpectedOwner())
     expect(deploymentBook.Vault.owner).toBe(liveExpectedOwner())
     expect(deploymentBook.BotAttestationEscrow.owner).toBe(liveExpectedOwner())
     expect(deploymentBook.BotAttestationEscrow.constructorArgs.governance).toBe(liveExpectedOwner())
-    expect(deploymentBook.retired.BotAttestationEscrowEscM1.owner).toBe(liveExpectedOwner())
-    expect(deploymentBook.retired.BotAttestationEscrowEscM1.owner).not.toBe(retiredExpectedOwner())
+  })
+
+  it("fails closed when the address book has no governance timelock", () => {
+    const owner = liveExpectedOwner()
+    if (!owner) throw new Error("address book has no governanceTimelock")
+    const status = gateStatus(owner)
+    expect(gateAOwnershipNotes(status, null)).toEqual([MISSING_GOVERNANCE_TIMELOCK])
+    expect(liabilityLinkNotes(status, null)).toEqual([MISSING_GOVERNANCE_TIMELOCK])
+
+    render(
+      <>
+        <LiveStatus status={status} expectedOwner={null} />
+        {status.escrow ? <EscrowReads status={status.escrow} expectedOwner={null} /> : null}
+      </>,
+    )
+
+    expect(screen.getAllByText(MISSING_GOVERNANCE_TIMELOCK)).toHaveLength(2)
+    expect(screen.getByText(GATE_OWNER_MISMATCH)).toBeTruthy()
+    expect(screen.getByText(LINK_OWNER_MISMATCH)).toBeTruthy()
+    expect(screen.queryByText(GATE_OWNER_MATCH)).toBeNull()
+    expect(screen.queryByText(LINK_OWNER_MATCH)).toBeNull()
+    expect(document.body.textContent).not.toContain("matches the governance timelock")
+    for (const id of OWNER_ROWS) {
+      expect(screen.queryByTestId(`${id}-pin`)).toBeNull()
+    }
   })
 
   it("names the governance timelock from the book and still lists coreTimelock", () => {
@@ -156,7 +176,7 @@ describe("live owner pin", () => {
     const governance = screen.getByTestId("governance-timelock")
     expect(governance.getAttribute("title")).toBe(liveExpectedOwner())
     const core = screen.getByTestId("core-timelock")
-    expect(core.getAttribute("title")).toBe(retiredExpectedOwner())
+    expect(core.getAttribute("title")).toBe(ADDRESSES.coreTimelock)
     expect(core.getAttribute("title")).not.toBe(liveExpectedOwner())
   })
 })
@@ -167,11 +187,15 @@ describe("footer", () => {
     const footer = document.querySelector("footer")
     expect(footer?.textContent).toBe(PAGE_FOOTER)
     expect(PAGE_FOOTER).toBe(
-      "Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. To send a claim through the relayer, your wallet signs a typed (EIP-712) claim request. The relayer then submits the transaction and pays the gas. Signing alone moves no funds.",
+      "Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. To send a refund through the relayer, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The relayer can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately.",
     )
     expect(PAGE_FOOTER).not.toContain(OLD_FOOTER)
+    expect(PAGE_FOOTER).not.toContain(MISLEADING_SIGNING)
     expect(DISCLAIMER_LINE).not.toContain(OLD_FOOTER)
+    expect(DISCLAIMER_LINE).not.toContain(MISLEADING_SIGNING)
     expect(footer?.textContent).not.toContain(OLD_FOOTER)
+    expect(footer?.textContent).not.toContain(MISLEADING_SIGNING)
     expect(document.body.textContent).not.toContain(OLD_FOOTER)
+    expect(document.body.textContent).not.toContain(MISLEADING_SIGNING)
   })
 })

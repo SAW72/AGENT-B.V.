@@ -43,8 +43,14 @@ export function EscrowPanel({
   )
 }
 
-export function EscrowReads({ status }: { status: EscrowStatus }) {
-  const liveOwner = liveExpectedOwner() ?? undefined
+export function EscrowReads({
+  status,
+  expectedOwner = liveExpectedOwner(),
+}: {
+  status: EscrowStatus
+  expectedOwner?: Address | null
+}) {
+  const liveOwner = expectedOwner ?? undefined
   return (
     <>
       <AddressRow

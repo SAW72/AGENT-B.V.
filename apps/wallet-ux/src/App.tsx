@@ -1,4 +1,5 @@
 import { useMemo } from "react"
+import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
@@ -13,6 +14,7 @@ import {
   GOVERNANCE_TIMELOCK_ROLE,
   LINK_OWNER_MATCH,
   LINK_OWNER_MISMATCH,
+  MISSING_GOVERNANCE_TIMELOCK,
   gateAOwnershipNotes,
   liabilityLinkNotes,
   liveExpectedOwner,
@@ -51,8 +53,8 @@ function BvtSlots() {
   )
 }
 
-export function BookOwners() {
-  const liveOwner = liveExpectedOwner()
+export function BookOwners({ governanceTimelock = liveExpectedOwner() }: { governanceTimelock?: Address | null } = {}) {
+  const liveOwner = governanceTimelock
   return (
     <section className="card" aria-labelledby="timelock-heading">
       <h2 id="timelock-heading">{GOVERNANCE_TIMELOCK_ROLE}</h2>
@@ -64,7 +66,7 @@ export function BookOwners() {
       {liveOwner ? (
         <AddressRow label={GOVERNANCE_TIMELOCK_ROLE} value={liveOwner} testId="governance-timelock" />
       ) : (
-        <p className="pill bad">The address book has no governance timelock.</p>
+        <p className="pill bad">{MISSING_GOVERNANCE_TIMELOCK}</p>
       )}
       <AddressRow label="coreTimelock" value={ADDRESSES.coreTimelock} testId="core-timelock" />
     </section>
@@ -87,11 +89,17 @@ function walletStatus(connected: boolean, chainId: number | null | "conflict"): 
   return `Connected on chain ${chainId}`
 }
 
-export function LiveStatus({ status }: { status: GateStatus }) {
-  const gateNotes = gateAOwnershipNotes(status)
-  const linkNotes = liabilityLinkNotes(status)
+export function LiveStatus({
+  status,
+  expectedOwner = liveExpectedOwner(),
+}: {
+  status: GateStatus
+  expectedOwner?: Address | null
+}) {
+  const gateNotes = gateAOwnershipNotes(status, expectedOwner)
+  const linkNotes = liabilityLinkNotes(status, expectedOwner)
   const unseated = panelNotSeated(status.disputePanel.arbitratorCount, status.disputePanel.panelSize)
-  const liveOwner = liveExpectedOwner() ?? undefined
+  const liveOwner = expectedOwner ?? undefined
 
   return (
     <>
@@ -158,7 +166,7 @@ export function LiveStatus({ status }: { status: GateStatus }) {
         <h2 id="liability-heading">Liability and InsuranceFund</h2>
         <p className="muted">
           Read-only owner, insurance link, and balance. Recorded balance is InsuranceFund.balance(). Native ETH is
-          the address balance. No claim signing.
+          the address balance. This card does not sign anything.
         </p>
         {linkNotes.length === 0 ? (
           <p className="pill ok">{LINK_OWNER_MATCH}</p>

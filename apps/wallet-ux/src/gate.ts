@@ -30,24 +30,14 @@ export function liveExpectedOwner(): Address | null {
   return ADDRESSES.governanceTimelock
 }
 
-/**
- * coreTimelock from the address book. Still the expected owner where the
- * book records it: the superseded Denylist, the retired pre-ESC-M-1 escrow,
- * and governance() on the retired ESC-M-1 escrow. Live rows do not use this.
- */
-export function retiredExpectedOwner(): Address {
-  return ADDRESSES.coreTimelock
-}
-
 function ownerNote(name: string, actual: string, expected: Address | null): string | null {
   if (expected == null) return null
   if (!sameAddress(actual, expected)) return `${name} owner is not the governance timelock.`
   return null
 }
 
-export function gateAOwnershipNotes(status: GateStatus): string[] {
+export function gateAOwnershipNotes(status: GateStatus, expected: Address | null = liveExpectedOwner()): string[] {
   const notes: string[] = []
-  const expected = liveExpectedOwner()
   if (expected == null) notes.push(MISSING_GOVERNANCE_TIMELOCK)
   const denylist = ownerNote("Denylist", status.denylist.owner, expected)
   if (denylist) notes.push(denylist)
@@ -61,9 +51,8 @@ export function gateAOwnershipNotes(status: GateStatus): string[] {
   return notes
 }
 
-export function liabilityLinkNotes(status: GateStatus): string[] {
+export function liabilityLinkNotes(status: GateStatus, expected: Address | null = liveExpectedOwner()): string[] {
   const notes: string[] = []
-  const expected = liveExpectedOwner()
   if (expected == null) notes.push(MISSING_GOVERNANCE_TIMELOCK)
   const liability = ownerNote("Liability", status.liability.owner, expected)
   if (liability) notes.push(liability)
