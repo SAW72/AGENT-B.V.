@@ -85,6 +85,8 @@ export const RELAYER_PAUSED_NOTE = "The refund relayer is paused. Use your walle
 export const RELAYER_CHECKING_NOTE = "Checking whether the refund relayer is available."
 export const RELAYER_DOWN_NOTE = "The refund relayer is unavailable. Use your wallet to submit instead."
 export const RELAYER_CONNECT_NOTE = "Connect a wallet on Base Sepolia to sign this refund request."
+export const RELAYER_SERVICE_DOWN_TEXT =
+  "The refund service is not available right now. Nothing was sent. You can refund from your own wallet instead."
 export const RELAYER_TIMEOUT_TEXT =
   "The refund relayer didn't answer in time. It may still have submitted this transaction. Check the relayer wallet on Base Sepolia before you try again."
 export const RELAYER_RECEIPT_UNKNOWN_TEXT =
@@ -208,6 +210,7 @@ export const RELAYER_USER_TEXT = [
   RELAYER_PAUSED_NOTE,
   RELAYER_CHECKING_NOTE,
   RELAYER_DOWN_NOTE,
+  RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_CONNECT_NOTE,
   RELAYER_RECEIPT_UNKNOWN_TEXT,
   RELAYER_RECEIPT_REVERTED_TEXT,

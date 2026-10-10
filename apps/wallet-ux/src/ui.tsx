@@ -1,8 +1,43 @@
-import { useState } from "react"
-import { isZeroAddress, sameAddress, shortAddress } from "./format"
+import { Fragment, useState } from "react"
+import { chunkAddress, isZeroAddress, sameAddress, shortAddress } from "./format"
 
 export function explorerUrl(address: string): string {
   return `https://sepolia.basescan.org/address/${address}`
+}
+
+export function ChunkedHex({ parts }: { parts: string[] }) {
+  return (
+    <span className="chunked">
+      {parts.map((part, index) => (
+        <Fragment key={`${index}-${part}`}>
+          {index > 0 ? " " : null}
+          <span className="chunk">{part}</span>
+        </Fragment>
+      ))}
+    </span>
+  )
+}
+
+export function LabeledChunks({ label, address, testId }: { label: string; address: string; testId: string }) {
+  const { checksummed, parts } = chunkAddress(address)
+  return (
+    <div className="kv-row">
+      <div className="kv-label">{label}</div>
+      <div className="kv-value" data-testid={testId} data-address={checksummed}>
+        <ChunkedHex parts={parts} />
+        <CopyButton value={checksummed} />
+      </div>
+    </div>
+  )
+}
+
+export function CalldataDetails({ calldata }: { calldata: string }) {
+  return (
+    <details data-testid="calldata-details">
+      <summary>Details</summary>
+      <pre className="calldata">{calldata}</pre>
+    </details>
+  )
 }
 
 export function CopyButton({ value }: { value: string }) {

@@ -8,6 +8,7 @@ import { decodeFunctionData, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { disputePanelAbi, escrowAbi } from "./abi"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { carryDisputeId, resetCarriedIds } from "./carriedIds"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { ERROR_GLOSSARY } from "./preview"
 import { FORM_ERRORS } from "./submit"
@@ -197,6 +198,7 @@ function readCalls(name: string) {
 }
 
 beforeEach(() => {
+  resetCarriedIds()
   resetWorld()
   fetchSpy.mockReset()
   publicClient.call.mockClear()
@@ -215,6 +217,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  resetCarriedIds()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
@@ -233,8 +236,9 @@ describe("vote and withdraw screens", () => {
     const withdrawHeading = screen.getByRole("heading", { name: /withdraw/i })
     expect(voteHeading.textContent).toContain(VOTE_HEADING)
     expect(withdrawHeading.textContent).toContain(WITHDRAW_HEADING)
-    expect(within(voteHeading).getByTestId("vote-testnet-pill").textContent).toBe(TESTNET_LINE)
-    expect(within(withdrawHeading).getByTestId("withdraw-testnet-pill").textContent).toBe(TESTNET_LINE)
+    expect(within(voteHeading).queryByTestId("vote-testnet-pill")).toBeNull()
+    expect(within(withdrawHeading).queryByTestId("withdraw-testnet-pill")).toBeNull()
+    expect(screen.queryByTestId("action-testnet")).toBeNull()
     expect(screen.getByTestId("vote-test-only").textContent).toBe(WALLET_SIGNED_TEST_LINE)
     expect(screen.getByTestId("withdraw-test-only").textContent).toBe(WALLET_SIGNED_TEST_LINE)
 
@@ -447,7 +451,25 @@ describe("vote and withdraw screens", () => {
     const calldata = screen.getByTestId("withdraw-preview").querySelector("pre")?.textContent ?? ""
     const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
     expect(decoded.functionName).toBe("withdraw")
-    expect(screen.getByTestId("withdraw-preview").textContent).toContain(escrow)
+    expect(screen.getByTestId("withdraw-preview").querySelector("[data-testid=review-contract-address]")?.getAttribute("data-address")).toBe(escrow)
+  })
+
+  it("clears a prepared vote when a carried dispute id replaces the one on screen", async () => {
+    const first = `0x${"ab".repeat(32)}` as Hex
+    const second = `0x${"ef".repeat(32)}` as Hex
+    carryDisputeId(first)
+    renderScreens()
+    const vote = within(screen.getByTestId("vote-screen"))
+    await waitFor(() => expect((vote.getByLabelText("Dispute ID") as HTMLInputElement).value).toBe(first))
+    await waitFor(() => expect(vote.getByTestId("vote-tally")).toBeTruthy())
+    fireEvent.click(vote.getByLabelText(DEAL_STANDS_LABEL))
+    fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(vote.getByTestId("vote-preview")).toBeTruthy())
+    expect(vote.getByTestId("vote-preview").querySelector("pre")?.textContent).toContain(first.slice(2))
+    carryDisputeId(second)
+    await waitFor(() => expect((vote.getByLabelText("Dispute ID") as HTMLInputElement).value).toBe(second))
+    expect(vote.queryByTestId("vote-preview")).toBeNull()
+    expect(vote.queryByTestId("sepolia-submit")).toBeNull()
   })
 
   it("waits for the receipt, then shows the confirmed hash and re-reads", async () => {

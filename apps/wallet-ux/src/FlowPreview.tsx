@@ -12,22 +12,21 @@ import {
   ESCROW_ID_HINT,
   ESCROW_ID_LABEL,
   GENERATE_LABEL,
+  NO_WALLET_REASON,
   PAYEE_SELF_WARNING,
   USE_OWN_LABEL,
-  NEEDS_WALLET_LABEL,
   useWalletHint,
   type ActionButtonState,
 } from "./actionButton"
 import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
-import { PRODUCT_NAME, TESTNET_LINE } from "./brand"
 import { parseBytes32, randomBytes32 } from "./bytes32"
 import { carryDisputeId, carryEscrowId, readUrlBytes32, useCarriedIds } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
 import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, useEscrowActionGate } from "./escrowGate"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
 import { ErrorNotice } from "./ErrorNotice"
-import { chunkAddress, formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
+import { formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
 import { currentNowSeconds } from "./nowClock"
 import { clearPending, readPending, writePending } from "./pendingTx"
@@ -51,6 +50,7 @@ import {
   readRelayerHealth,
   RELAYER_CONFIRMED_TEXT,
   RELAYER_CONNECT_NOTE,
+  RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_SUBMITTED_TEXT,
   RELAYER_SUBMITTING_TEXT,
   RELAYER_TX_LINK_LABEL,
@@ -75,22 +75,15 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { CopyButton } from "./ui"
-import { TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
+import { CalldataDetails, LabeledChunks } from "./ui"
+import { isReceiptTimeout, TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
 }
 
 function ActionTestnet({ title }: { title: string }) {
-  return (
-    <h3 className="heading-with-pill">
-      <span>{title}</span>
-      <span className="pill info" data-testid="action-testnet">
-        {PRODUCT_NAME} · {TESTNET_LINE}
-      </span>
-    </h3>
-  )
+  return <h3>{title}</h3>
 }
 
 function SepoliaSubmit({
@@ -99,6 +92,7 @@ function SepoliaSubmit({
   panel,
   onConfirmed,
   resultId,
+  resultLabel,
   submitReason,
 }: {
   preview: CallPreview
@@ -106,6 +100,7 @@ function SepoliaSubmit({
   panel: Address
   onConfirmed?: () => void
   resultId?: string
+  resultLabel?: string
   submitReason?: string | null
 }) {
   const progress = actionProgress(preview.functionName)
@@ -127,6 +122,8 @@ function SepoliaSubmit({
   const [relayerHealth, setRelayerHealth] = useState<RelayerHealth>("unknown")
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
+  const [stalled, setStalled] = useState(false)
+  const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
   const relayerFlight = useRef(false)
   const ownedHash = useRef<Hex | null>(null)
   const onConfirmedRef = useRef(onConfirmed)
@@ -178,8 +175,12 @@ function SepoliaSubmit({
         setPhase("confirmed")
         onConfirmedRef.current?.()
       },
-      () => {
+      (cause) => {
         if (stop) return
+        if (isReceiptTimeout(cause)) {
+          setStalled(true)
+          return
+        }
         clearPending(slot)
         setPhase("idle")
         setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
@@ -195,6 +196,7 @@ function SepoliaSubmit({
     setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
+    setStalled(false)
     const current = evaluateEscrowSubmit({
       walletConnected: account.isConnected,
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
@@ -207,10 +209,10 @@ function SepoliaSubmit({
     }
     if (!tryHoldSubmit(submitSlot)) return
     let submitted: Hex | null = null
+    let keepLock = false
     try {
       assertSubmitTarget(preview.to, [escrow, panel])
       if (!publicClient) {
-        releaseSubmit(submitSlot)
         setTxHash(null)
         setPhase("idle")
         setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
@@ -238,7 +240,9 @@ function SepoliaSubmit({
       setStartedAt(stored.startedAt)
       setTxHash(hash)
       setPhase("pending")
+      keepLock = true
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      keepLock = false
       clearPending(slot)
       if (receipt.status !== "success") {
         setPhase("idle")
@@ -248,6 +252,13 @@ function SepoliaSubmit({
       setPhase("confirmed")
       onConfirmed?.()
     } catch (cause) {
+      if (submitted && isReceiptTimeout(cause)) {
+        setPhase("pending")
+        setStalled(true)
+        keepLock = true
+        return
+      }
+      keepLock = false
       setPhase("idle")
       if (submitted) {
         clearPending(slot)
@@ -260,12 +271,15 @@ function SepoliaSubmit({
         return
       }
       setSubmitError(presentError(cause))
+    } finally {
+      if (!keepLock) releaseSubmit(submitSlot)
     }
   }
 
   async function onRelayer() {
     if (relayerFlight.current) return
     setSubmitError(null)
+    setRelayerNotice(null)
     setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
@@ -281,6 +295,7 @@ function SepoliaSubmit({
     if (!tryHoldSubmit(submitSlot)) return
     if (!relayer.url || relayerHealth !== "ok") {
       releaseSubmit(submitSlot)
+      setRelayerNotice(RELAYER_SERVICE_DOWN_TEXT)
       return
     }
     if (!publicClient) {
@@ -352,11 +367,12 @@ function SepoliaSubmit({
           hash: txHash,
           label: progress.done,
           resultId,
+          resultLabel,
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }
       : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined }
+        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined, stalled }
         : waiting
           ? { status: "waiting-wallet" }
           : { status: "idle", label: "Submit on Base Sepolia" }
@@ -370,7 +386,7 @@ function SepoliaSubmit({
         : relayerPhase === "confirming" && pendingHash
           ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: startedAt ?? undefined }
           : confirmedHash
-            ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, nextHref: progress.next?.href, nextLabel: progress.next?.label }
+            ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, resultLabel, nextHref: progress.next?.href, nextLabel: progress.next?.label }
             : relayerHealth === "unknown"
               ? { status: "busy", label: CHECKING_LABEL }
               : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
@@ -387,7 +403,7 @@ function SepoliaSubmit({
             : blocked && walletState.status === "idle"
               ? ANOTHER_PENDING_REASON
               : walletState.status === "needs-wallet"
-                ? NEEDS_WALLET_LABEL
+                ? NO_WALLET_REASON
                 : null
         }
         disabled={
@@ -435,7 +451,7 @@ function SepoliaSubmit({
                 : relayerButton.disabled && relayerState.status === "idle"
                   ? relayerButton.note
                   : relayerState.status === "needs-wallet"
-                    ? NEEDS_WALLET_LABEL
+                    ? NO_WALLET_REASON
                     : null
             }
             disabled={blocked || isPending || (relayerButton.disabled && relayerState.status === "idle")}
@@ -447,6 +463,11 @@ function SepoliaSubmit({
               void onRelayer()
             }}
           />
+          {relayerNotice || relayerHealth === "down" || relayerHealth === "paused" ? (
+            <p className="hint" role="status" data-testid="relayer-unavailable">
+              {relayerNotice ?? RELAYER_SERVICE_DOWN_TEXT}
+            </p>
+          ) : null}
           <ActionStatus state={relayerState} walletHint={walletHint && relayerPhase === "submitting"} pendingTestId="relayer-pending-label" confirmedTestId="relayer-confirmed-label" />
         </div>
       ) : null}
@@ -484,6 +505,7 @@ function PreviewBlock({
   payee,
   durationSeconds,
   resultId,
+  resultLabel,
   submitReason,
 }: {
   preview: CallPreview | null
@@ -496,25 +518,19 @@ function PreviewBlock({
   payee?: Address | null
   durationSeconds?: number | null
   resultId?: string
+  resultLabel?: string
   submitReason?: string | null
 }) {
   if (!preview) return null
   const contractName = CONTRACT_LABELS.escrow
-  const payeeChunks = payee ? chunkAddress(payee) : null
   const expiry =
     durationSeconds != null ? formatLocalTimestamp(currentNowSeconds() + BigInt(durationSeconds)) : null
   return (
     <div className="preview" data-testid="calldata-preview" tabIndex={-1} aria-label={label} ref={nodeRef}>
       <p>{previewCardCopy(preview.functionName, relayerConfigured)}</p>
       <p data-testid="review-contract">{contractName}</p>
-      <p className="mono" data-testid="review-contract-address">
-        {preview.to} <CopyButton value={preview.to} />
-      </p>
-      {payeeChunks ? (
-        <p data-testid="review-payee">
-          <span className="mono">{payeeChunks.chunks}</span> <CopyButton value={payeeChunks.checksummed} />
-        </p>
-      ) : null}
+      <LabeledChunks label="Contract" address={preview.to} testId="review-contract-address" />
+      {payee ? <LabeledChunks label="Payee" address={payee} testId="review-payee" /> : null}
       {durationSeconds != null && expiry ? (
         <p data-testid="review-duration">
           Time window: {durationPhrase(durationSeconds)}. Ends {expiry}.
@@ -522,7 +538,7 @@ function PreviewBlock({
       ) : null}
       <p data-testid="review-amount">Amount {formatEther(preview.valueWei)} ETH</p>
       <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
-      <pre className="calldata">{preview.calldata}</pre>
+      <CalldataDetails calldata={preview.calldata} />
       <SepoliaSubmit
         key={preview.calldata}
         preview={preview}
@@ -530,6 +546,7 @@ function PreviewBlock({
         panel={panel}
         onConfirmed={onConfirmed}
         resultId={resultId}
+        resultLabel={resultLabel}
         submitReason={submitReason}
       />
     </div>
@@ -544,6 +561,7 @@ function Field({
   hint,
   readOnly = false,
   placeholder,
+  aside,
 }: {
   id: string
   label: string
@@ -552,10 +570,14 @@ function Field({
   hint?: string
   readOnly?: boolean
   placeholder?: string
+  aside?: ReactNode
 }) {
   return (
     <div className="field">
-      <label htmlFor={id}>{label}</label>
+      <div className="label-line">
+        <label htmlFor={id}>{label}</label>
+        {aside}
+      </div>
       <input
         id={id}
         value={value}
@@ -603,26 +625,30 @@ function IdField({
         }}
       />
       <p className="hint">{hint}</p>
-      <button
-        type="button"
-        className="secondary"
-        onClick={() => {
-          setOwn(false)
-          onChange(randomBytes32())
-        }}
-      >
-        {GENERATE_LABEL}
-      </button>
-      <button
-        type="button"
-        className="secondary"
-        onClick={() => {
-          setOwn(true)
-          onChange("")
-        }}
-      >
-        {USE_OWN_LABEL}
-      </button>
+      {generated ? (
+        <>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setOwn(false)
+              onChange(randomBytes32())
+            }}
+          >
+            {GENERATE_LABEL}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setOwn(true)
+              onChange("")
+            }}
+          >
+            {USE_OWN_LABEL}
+          </button>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -814,7 +840,6 @@ function CreateForm({
         valueWei,
       })
       preparedId.current = id
-      carryEscrowId(id)
       session.publish(null, next)
       onActivate("create")
     } catch (cause) {
@@ -898,6 +923,13 @@ function CreateForm({
           placeholder={AMOUNT_PLACEHOLDER}
           onChange={(next) => edit(() => setValue(next))}
           hint={AMOUNT_HINT}
+          aside={
+            account.address && balance.data?.value != null ? (
+              <span className="hint" data-testid="wallet-balance">
+                Balance: {formatEther(balance.data.value)} test ETH
+              </span>
+            ) : null
+          }
         />
         {overBalance ? (
           <p className="warn-note" role="status" data-testid="balance-warning">
@@ -921,6 +953,7 @@ function CreateForm({
             payee={payeeAddress}
             durationSeconds={shownDuration}
             resultId={parseBytes32(escrowId) ?? undefined}
+            resultLabel={ESCROW_ID_LABEL}
             onConfirmed={() => {
               if (preparedId.current) carryEscrowId(preparedId.current)
             }}
@@ -1294,6 +1327,7 @@ function OpenDisputeForm({
           label="Prepared dispute"
           nodeRef={session.setNode}
           resultId={parseBytes32(disputeId) ?? undefined}
+          resultLabel={DISPUTE_ID_LABEL}
           onConfirmed={() => {
             if (preparedDispute.current) carryDisputeId(preparedDispute.current)
           }}

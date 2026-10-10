@@ -20,13 +20,24 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
-/** Full checksummed address in groups of four hex characters. Copy uses the unspaced form. */
-export function chunkAddress(address: string): { checksummed: string; chunks: string } {
-  const checksummed = getAddress(address)
-  const body = checksummed.slice(2)
+/** Groups of four hex characters. The first group keeps the 0x prefix so a line wraps only between groups. */
+export function chunkHex(value: string): string[] {
+  const prefixed = value.startsWith("0x") || value.startsWith("0X")
+  const body = prefixed ? value.slice(2) : value
+  if (body.length === 0) return [value]
   const parts: string[] = []
-  for (let index = 0; index < body.length; index += 4) parts.push(body.slice(index, index + 4))
-  return { checksummed, chunks: `0x${parts.join(" ")}` }
+  for (let index = 0; index < body.length; index += 4) {
+    const slice = body.slice(index, index + 4)
+    parts.push(index === 0 && prefixed ? `0x${slice}` : slice)
+  }
+  return parts
+}
+
+/** Full checksummed address in groups of four hex characters. Copy uses the unspaced form. */
+export function chunkAddress(address: string): { checksummed: string; chunks: string; parts: string[] } {
+  const checksummed = getAddress(address)
+  const parts = chunkHex(checksummed)
+  return { checksummed, chunks: parts.join(" "), parts }
 }
 
 export function formatLocalTimestamp(seconds: bigint): string {

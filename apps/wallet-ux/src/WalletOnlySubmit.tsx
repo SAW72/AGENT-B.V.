@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { Address, Hex } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
-import { ActionButton, ActionStatus, NEEDS_WALLET_LABEL, useWalletHint, type ActionButtonState } from "./actionButton"
+import { ActionButton, ActionStatus, NO_WALLET_REASON, useWalletHint, type ActionButtonState } from "./actionButton"
 import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
@@ -13,7 +13,7 @@ import { submitAfterPreflight } from "./preflight"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { assertSubmitTarget, evaluateEscrowSubmit, submitControl, submitSenderNote } from "./submit"
 import { useConnectorChainId } from "./useWalletChain"
-import { TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
+import { isReceiptTimeout, TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
@@ -48,6 +48,7 @@ export function WalletOnlySubmit({
   const [txHash, setTxHash] = useState<Hex | null>(null)
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const [cancelled, setCancelled] = useState(false)
+  const [stalled, setStalled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const progress = actionProgress(preview.functionName)
   const slot = preview.functionName
@@ -80,8 +81,12 @@ export function WalletOnlySubmit({
         setPhase("confirmed")
         onConfirmedRef.current?.()
       },
-      () => {
+      (cause) => {
         if (stop) return
+        if (isReceiptTimeout(cause)) {
+          setStalled(true)
+          return
+        }
         clearPending(slot)
         setPhase("idle")
         setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
@@ -96,6 +101,7 @@ export function WalletOnlySubmit({
     if (hold || phase !== "idle" || blocked) return
     setSubmitError(null)
     setCancelled(false)
+    setStalled(false)
     const current = evaluateEscrowSubmit({
       walletConnected: account.isConnected,
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
@@ -108,10 +114,10 @@ export function WalletOnlySubmit({
     }
     if (!tryHoldSubmit(submitSlot)) return
     let submitted: Hex | null = null
+    let keepLock = false
     try {
       assertSubmitTarget(preview.to, allowed)
       if (!publicClient) {
-        releaseSubmit(submitSlot)
         setTxHash(null)
         setPhase("idle")
         setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
@@ -140,7 +146,9 @@ export function WalletOnlySubmit({
       setSigning(false)
       setTxHash(hash)
       setPhase("pending")
+      keepLock = true
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      keepLock = false
       clearPending(slot)
       if (receipt.status !== "success") {
         setPhase("idle")
@@ -151,6 +159,13 @@ export function WalletOnlySubmit({
       onConfirmed?.()
     } catch (cause) {
       setSigning(false)
+      if (submitted && isReceiptTimeout(cause)) {
+        setPhase("pending")
+        setStalled(true)
+        keepLock = true
+        return
+      }
+      keepLock = false
       if (submitted) {
         clearPending(slot)
         setPhase("idle")
@@ -164,6 +179,8 @@ export function WalletOnlySubmit({
         return
       }
       setSubmitError(presentError(cause))
+    } finally {
+      if (!keepLock) releaseSubmit(submitSlot)
     }
   }
 
@@ -180,7 +197,7 @@ export function WalletOnlySubmit({
           nextLabel: progress.next?.label,
         }
       : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined }
+        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined, stalled }
         : waiting
           ? { status: "waiting-wallet" }
           : { status: "idle", label: "Submit on Base Sepolia" }
@@ -197,7 +214,7 @@ export function WalletOnlySubmit({
             : hold && state.status === "idle"
               ? "This step is not available for the connected wallet."
               : state.status === "needs-wallet"
-                ? NEEDS_WALLET_LABEL
+                ? NO_WALLET_REASON
                 : null
         }
         disabled={disabled && state.status !== "wrong-network"}

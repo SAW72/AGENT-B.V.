@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { encodeFunctionResult, decodeFunctionData, type Address, type Hex } from "viem"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
+import { NO_WALLET_REASON } from "./actionButton"
 import { FlowPreview } from "./FlowPreview"
 import { FILE_DISPUTE_TEXT } from "./preview"
 import { FORM_ERRORS } from "./submit"
@@ -91,7 +92,14 @@ describe("dispute form", () => {
     const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
     expect(decoded.functionName).toBe("dispute")
     expect(decoded.args).toEqual([claim, caseId.value, "late delivery"])
-    expect(previews[0]?.textContent).toContain(escrow)
+    expect(previews[0]?.querySelector("[data-testid=review-contract-address]")?.getAttribute("data-address")).toBe(escrow)
+    expect(previews[0]?.querySelector("[data-testid=review-payee]")).toBeNull()
+    expect(within(previews[0]!).getByText("Contract")).toBeTruthy()
+    const details = within(previews[0]!).getByTestId("calldata-details") as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details.querySelector("summary")?.textContent).toBe("Details")
+    expect(within(previews[0]!).getByTestId("action-reason").textContent).toContain(NO_WALLET_REASON)
+    expect(within(previews[0]!).getByRole("button", { name: "Connect a wallet on Base Sepolia" })).toBeTruthy()
     expect(previews[0]?.textContent).not.toContain(panel)
   })
 })

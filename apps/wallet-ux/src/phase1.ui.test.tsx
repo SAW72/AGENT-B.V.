@@ -15,6 +15,9 @@ import {
   WALLET_HINT_TEXT,
 } from "./actionButton"
 import { resetCarriedIds } from "./carriedIds"
+import { readPending } from "./pendingTx"
+import { RELAYER_SERVICE_DOWN_TEXT } from "./relayer"
+import { TX_RECEIPT_UNREADABLE_TEXT, TX_STILL_PENDING_TEXT } from "./walletCopy"
 import { FlowPreview } from "./FlowPreview"
 import { FORM_ERRORS, durationValidationMessage } from "./submit"
 import { MAX_DURATION_SECONDS } from "./preview"
@@ -29,7 +32,7 @@ const disputeId = `0x${"cd".repeat(32)}` as Hex
 const payee = "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5A4" as Address
 const ZERO = "0x0000000000000000000000000000000000000000" as Address
 
-const { sendTransactionAsync, switchChain, releaseSend, escrowFixture } = vi.hoisted(() => {
+const { sendTransactionAsync, switchChain, releaseSend, escrowFixture, targetGate } = vi.hoisted(() => {
   let release: ((hash: Hex) => void) | null = null
   return {
     releaseSend: {
@@ -46,6 +49,21 @@ const { sendTransactionAsync, switchChain, releaseSend, escrowFixture } = vi.hoi
     escrowFixture: { expiresAt: 4_000_000_000n, state: 0 },
     sendTransactionAsync: vi.fn(async () => `0x${"11".repeat(32)}` as Hex),
     switchChain: vi.fn(),
+    targetGate: { refuse: false },
+  }
+})
+
+vi.mock("./submit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./submit")>()
+  return {
+    ...actual,
+    assertSubmitTarget(
+      to: Parameters<typeof actual.assertSubmitTarget>[0],
+      allowed: Parameters<typeof actual.assertSubmitTarget>[1],
+    ) {
+      if (targetGate.refuse) throw new Error("Submit target is not the booked Base Sepolia escrow or dispute panel.")
+      return actual.assertSubmitTarget(to, allowed)
+    },
   }
 })
 
@@ -115,7 +133,9 @@ async function fillCreate(scope: ReturnType<typeof within>) {
 }
 
 beforeEach(() => {
+  targetGate.refuse = false
   resetCarriedIds()
+  localStorage.clear()
   sendTransactionAsync.mockReset()
   sendTransactionAsync.mockResolvedValue(`0x${"11".repeat(32)}` as Hex)
   switchChain.mockReset()
@@ -127,7 +147,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetCarriedIds()
+  localStorage.clear()
   vi.useRealTimers()
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
   window.history.replaceState(null, "", "/")
 })
 
@@ -209,6 +232,124 @@ describe("phase 1 wallet forms", () => {
     await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
   })
 
+  it("releases the submit lock when the target check throws", async () => {
+    targetGate.refuse = true
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    const withdraw = within(screen.getByTestId("withdraw-screen"))
+    await waitFor(() => expect((withdraw.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
+    await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
+
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(release.getByRole("alert").textContent).toContain("Submit target"))
+    targetGate.refuse = false
+    await waitFor(() => expect((withdraw.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(withdraw.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
+
+    cleanup()
+    sendTransactionAsync.mockClear()
+    targetGate.refuse = true
+    renderSurfaces()
+    const payout = sectionOf("Prepare this payout")
+    fireEvent.change(payout.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(payout.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(payout.getByTestId("sepolia-submit")).toBeTruthy())
+    const second = within(screen.getByTestId("withdraw-screen"))
+    await waitFor(() => expect((second.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(second.getByRole("button", { name: "Prepare withdraw" }))
+    await waitFor(() => expect(second.getByTestId("sepolia-submit")).toBeTruthy())
+    fireEvent.click(second.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(second.getByRole("alert").textContent).toContain("Submit target"))
+    targetGate.refuse = false
+    await waitFor(() => expect((payout.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(payout.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
+  })
+
+  it("keeps a receipt that is still pending after the 180 second wait", async () => {
+    const original = publicClient.waitForTransactionReceipt
+    publicClient.waitForTransactionReceipt = async () => {
+      throw Object.assign(new Error("Timed out while waiting for transaction."), {
+        name: "WaitForTransactionReceiptTimeoutError",
+      })
+    }
+    try {
+      renderSurfaces()
+      const release = sectionOf("Prepare this payout")
+      fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+      fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+      await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+      fireEvent.click(release.getByTestId("sepolia-submit"))
+      await waitFor(() => expect(release.getByTestId("tx-still-pending").textContent).toBe(TX_STILL_PENDING_TEXT))
+      expect(release.getByTestId("tx-explorer").getAttribute("href")).toContain("https://sepolia.basescan.org/tx/")
+      expect(release.queryByText(TX_RECEIPT_UNREADABLE_TEXT)).toBeNull()
+      expect(release.getByTestId("tx-pending")).toBeTruthy()
+      expect(readPending("release")?.hash).toBe(`0x${"11".repeat(32)}`)
+    } finally {
+      publicClient.waitForTransactionReceipt = original
+    }
+  })
+
+  it("shows a plain message when the refund service is not available", async () => {
+    vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("down")
+      }),
+    )
+    escrowFixture.expiresAt = 1n
+    renderSurfaces()
+    const refund = sectionOf("Prepare this refund")
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(refund.getByRole("button", { name: "Prepare this refund" }))
+    await waitFor(() => expect(refund.getByTestId("relayer-submit")).toBeTruthy())
+    await waitFor(() => expect(refund.getByTestId("relayer-unavailable").textContent).toBe(RELAYER_SERVICE_DOWN_TEXT))
+    const button = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    fireEvent.click(button)
+    expect(refund.getByTestId("relayer-unavailable").textContent).toBe(RELAYER_SERVICE_DOWN_TEXT)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("labels review addresses, shows the balance, and keeps one sticky testnet label", async () => {
+    renderSurfaces()
+    const create = sectionOf("Prepare this escrow")
+    expect(create.getByTestId("wallet-balance").textContent).toBe("Balance: 1 test ETH")
+    expect(create.getByRole("button", { name: "Generate" })).toBeTruthy()
+    expect(sectionOf("Prepare this payout").queryByRole("button", { name: "Generate" })).toBeNull()
+    expect(sectionOf("Prepare this payout").queryByRole("button", { name: "Use my own" })).toBeNull()
+    expect(sectionOf("Prepare this refund").queryByRole("button", { name: "Use my own" })).toBeNull()
+    expect(sectionOf("Prepare this dispute").getAllByRole("button", { name: "Generate" })).toHaveLength(1)
+    const dir = dirname(fileURLToPath(import.meta.url))
+    const css = readFileSync(join(dir, "styles.css"), "utf8")
+    expect(css).toMatch(/\.site-header\s*\{[^}]*position:\s*sticky/)
+    const mobile = css.slice(css.indexOf("@media (max-width: 640px)"))
+    expect(mobile).not.toMatch(/\.site-header\s*\{[^}]*position:\s*static/)
+    expect(css).toMatch(/\.chunk\s*\{[^}]*display:\s*inline-block/)
+    expect(css).toMatch(/\.chunk\s*\{[^}]*white-space:\s*nowrap/)
+    expect(css).toMatch(/\.preview\s*\{[^}]*padding:\s*14px/)
+    expect(readFileSync(join(dir, "App.tsx"), "utf8")).toContain('data-testid="page-testnet"')
+    expect(screen.queryByTestId("action-testnet")).toBeNull()
+    await fillCreate(create)
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
+    await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
+    const preview = create.getByTestId("calldata-preview")
+    expect(within(preview).getByText("Contract")).toBeTruthy()
+    expect(within(preview).getByText("Payee")).toBeTruthy()
+    const payeeChunks = preview.querySelectorAll("[data-testid=review-payee] .chunk")
+    expect(payeeChunks).toHaveLength(10)
+    for (const chunk of payeeChunks) expect(chunk.textContent ?? "").not.toMatch(/\s/)
+    expect(preview.querySelector("[data-testid=review-payee]")?.getAttribute("data-address")).toBe(payee)
+    const details = within(preview).getByTestId("calldata-details") as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details.querySelector("summary")?.textContent).toBe("Details")
+  })
+
   it("starts the amount empty and rejects a blank amount", async () => {
     renderSurfaces()
     const create = sectionOf("Prepare this escrow")
@@ -266,17 +407,24 @@ describe("phase 1 wallet forms", () => {
     expect(sendTransactionAsync).not.toHaveBeenCalled()
   })
 
-  it("carries a prepared Escrow ID and Dispute ID forward without preparing the next form", async () => {
+  it("carries an escrow id only after funding is confirmed, and a dispute id when that dispute is prepared", async () => {
     renderSurfaces()
     const create = sectionOf("Prepare this escrow")
     await fillCreate(create)
     fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
-    expect((sectionOf("Prepare this payout").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
-    expect((sectionOf("Prepare this refund").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
+    const release = sectionOf("Prepare this payout")
+    const refund = sectionOf("Prepare this refund")
     const dispute = sectionOf("Prepare this dispute")
-    expect((dispute.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
+    expect((release.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe("")
+    expect((refund.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe("")
+    expect((dispute.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe("")
     expect(dispute.queryByTestId("calldata-preview")).toBeNull()
+    fireEvent.click(create.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(create.getByTestId("tx-confirmed")).toBeTruthy())
+    expect((release.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
+    expect((refund.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
+    expect((dispute.getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
 
     fireEvent.change(dispute.getByLabelText("Reason"), { target: { value: "late delivery" } })
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
@@ -284,7 +432,6 @@ describe("phase 1 wallet forms", () => {
     const vote = within(screen.getByTestId("vote-screen"))
     expect((vote.getByLabelText("Dispute ID") as HTMLInputElement).value).toMatch(/^0x[0-9a-f]{64}$/)
     expect(vote.queryByTestId("vote-preview")).toBeNull()
-    expect(sendTransactionAsync).not.toHaveBeenCalled()
   })
 
   it("checks the payee, the bots, and the 0x prefix, and clears a preview on edit", async () => {

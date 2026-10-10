@@ -1,9 +1,11 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
 import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
-import { CopyButton } from "./ui"
-import { txExplorerUrl, TX_CONFIRMED_TEXT, TX_LINK_LABEL, TX_PENDING_TEXT } from "./walletCopy"
+import { chunkHex, shortAddress } from "./format"
+import { ChunkedHex, CopyButton } from "./ui"
+import { txExplorerUrl, TX_CONFIRMED_TEXT, TX_LINK_LABEL, TX_PENDING_TEXT, TX_STILL_PENDING_TEXT } from "./walletCopy"
 
 export const NEEDS_WALLET_LABEL = "Connect a wallet on Base Sepolia"
+export const NO_WALLET_REASON = "No wallet connected"
 export const WRONG_NETWORK_LABEL = "Switch to Base Sepolia"
 export const CONFIRM_WALLET_LABEL = "Confirm in MetaMask…"
 export const WALLET_HINT_TEXT = "No MetaMask window? Click the MetaMask icon in your browser toolbar."
@@ -28,8 +30,16 @@ export type ActionButtonState =
   | { status: "wrong-network" }
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
-  | { status: "pending"; hash: string; label?: string; startedAt?: number }
-  | { status: "confirmed"; hash: string; label?: string; resultId?: string; nextHref?: string; nextLabel?: string }
+  | { status: "pending"; hash: string; label?: string; startedAt?: number; stalled?: boolean }
+  | {
+      status: "confirmed"
+      hash: string
+      label?: string
+      resultId?: string
+      resultLabel?: string
+      nextHref?: string
+      nextLabel?: string
+    }
   | { status: "error"; message: string }
 
 export function actionButtonLabel(state: ActionButtonState): string {
@@ -175,8 +185,11 @@ export function ActionStatus({
         </p>
         {slow ? (
           <p className="warn-note" data-testid="pending-slow">
-            <Mark kind="warn" glyph="!" /> {PENDING_SLOW_TEXT}
+            {PENDING_SLOW_TEXT}
           </p>
+        ) : null}
+        {state.stalled ? (
+          <p data-testid="tx-still-pending">{TX_STILL_PENDING_TEXT}</p>
         ) : null}
       </div>
     )
@@ -184,30 +197,38 @@ export function ActionStatus({
   if (state.status === "confirmed") {
     const done = state.label ?? DONE_LABEL
     return (
-      <div className="action-done" role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
-        <p>
+      <div role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
+        <p className="action-done">
           <Mark kind="ok" glyph="✓" /> <span data-testid={confirmedTestId}>{done}</span>
         </p>
         {state.resultId ? (
-          <p className="result-id" data-testid="result-id">
-            <span className="mono">{state.resultId}</span> <CopyButton value={state.resultId} />
-          </p>
+          <div className="kv-row" data-testid="result-id">
+            <div className="kv-label">{state.resultLabel ?? "Escrow ID"}</div>
+            <div className="kv-value">
+              <ChunkedHex parts={chunkHex(state.resultId)} />
+              <CopyButton value={state.resultId} />
+            </div>
+          </div>
         ) : null}
-        {state.nextHref && state.nextLabel ? (
+        <div className="kv-row">
+          <div className="kv-label">Transaction</div>
+          <div className="kv-value">
+            <span className="mono" data-testid="tx-hash">
+              {shortAddress(state.hash)}
+            </span>
+            <CopyButton value={state.hash} />
+            <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
+              {TX_LINK_LABEL}
+            </a>
+          </div>
+        </div>
+        {state.nextHref ? (
           <p>
-            <a href={state.nextHref} data-testid="next-step">
-              {state.nextLabel}
+            <a className="next-step" href={state.nextHref} data-testid="next-step" title={state.nextLabel}>
+              Next step
             </a>
           </p>
         ) : null}
-        <p className="mono" data-testid="tx-hash">
-          {state.hash}
-        </p>
-        <p>
-          <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
-            {TX_LINK_LABEL}
-          </a>
-        </p>
       </div>
     )
   }

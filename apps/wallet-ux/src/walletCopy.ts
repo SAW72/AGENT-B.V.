@@ -66,6 +66,14 @@ export const TX_REVERTED_TEXT = "This transaction reverted on Base Sepolia."
 
 export const TX_RECEIPT_UNREADABLE_TEXT = "This transaction was sent, but its receipt could not be read."
 
+export const TX_STILL_PENDING_TEXT = "This transaction is still pending. Check it on Basescan."
+
+/** viem stops waiting after 180 seconds and throws this name while the transaction can still be pending. */
+export function isReceiptTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("name" in error)) return false
+  return (error as { name: unknown }).name === "WaitForTransactionReceiptTimeoutError"
+}
+
 export function availableToWithdrawText(amount: string): string {
   return `Available to withdraw: ${amount}`
 }

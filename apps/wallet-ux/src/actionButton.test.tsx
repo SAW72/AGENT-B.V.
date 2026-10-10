@@ -14,6 +14,8 @@ import {
   WRONG_NETWORK_LABEL,
   type ActionButtonState,
 } from "./actionButton"
+import { PENDING_SLOW_TEXT } from "./actionProgress"
+import { shortAddress } from "./format"
 
 const HASH = `0x${"ab".repeat(32)}`
 
@@ -83,5 +85,43 @@ describe("ActionButton states", () => {
       expect(alert.textContent).toBe(state.message)
       expect(button.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
+  })
+
+  it("shows one warning icon on a slow pending note", () => {
+    render(<ActionStatus state={{ status: "pending", hash: HASH, startedAt: Date.now() - 70_000 }} />)
+    const note = screen.getByTestId("pending-slow")
+    expect(note.textContent).toBe(PENDING_SLOW_TEXT)
+    expect(note.querySelector(".mark")).toBeNull()
+    expect(note.classList.contains("warn-note")).toBe(true)
+  })
+
+  it("shows a confirmed result as labeled body-size rows", () => {
+    const escrowId = `0x${"cd".repeat(32)}`
+    render(
+      <ActionStatus
+        state={{
+          status: "confirmed",
+          hash: HASH,
+          label: "Escrow funded",
+          resultId: escrowId,
+          resultLabel: "Escrow ID",
+          nextHref: "#release-form",
+          nextLabel: "Next: release the payment",
+        }}
+      />,
+    )
+    const id = screen.getByTestId("result-id")
+    expect(id.textContent).toContain("Escrow ID")
+    expect(id.className).not.toContain("result-id")
+    expect(id.querySelectorAll(".chunk").length).toBeGreaterThan(1)
+    for (const chunk of id.querySelectorAll(".chunk")) {
+      expect(chunk.textContent ?? "").not.toMatch(/\s/)
+    }
+    expect(screen.getByTestId("tx-hash").textContent).toBe(shortAddress(HASH))
+    expect(screen.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${HASH}`)
+    const next = screen.getByTestId("next-step")
+    expect(next.textContent).toBe("Next step")
+    expect(next.getAttribute("href")).toBe("#release-form")
+    expect(screen.getByTestId("tx-confirmed").textContent).toBe("Escrow funded")
   })
 })

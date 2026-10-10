@@ -3,14 +3,14 @@ import type { Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
-import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
+import { WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
 import { ActionButton, ActionStatus } from "./actionButton"
 import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { previewCardCopy } from "./submit"
-import { AddressRow, CopyButton } from "./ui"
+import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
 import {
   NOTHING_TO_WITHDRAW_TEXT,
   WITHDRAW_CONNECT_TEXT,
@@ -26,12 +26,7 @@ import { WalletOnlySubmit } from "./WalletOnlySubmit"
 function TestnetHeading() {
   return (
     <>
-      <h2 id="withdraw-heading" className="heading-with-pill">
-        <span>{WITHDRAW_HEADING}</span>
-        <span className="pill info" data-testid="withdraw-testnet-pill">
-          {TESTNET_LINE}
-        </span>
-      </h2>
+      <h2 id="withdraw-heading">{WITHDRAW_HEADING}</h2>
       <p data-testid="withdraw-test-only">{WALLET_SIGNED_TEST_LINE}</p>
     </>
   )
@@ -192,11 +187,9 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
           >
             <p>{previewCardCopy(session.preview.functionName, false)}</p>
             <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
-            <p className="mono" data-testid="review-contract-address">
-              {session.preview.to} <CopyButton value={session.preview.to} />
-            </p>
+            <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
             <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
-            <pre className="calldata">{session.preview.calldata}</pre>
+            <CalldataDetails calldata={session.preview.calldata} />
             <WalletOnlySubmit
               key={session.preview.calldata}
               preview={session.preview}
