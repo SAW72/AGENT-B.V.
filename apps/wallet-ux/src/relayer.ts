@@ -168,7 +168,7 @@ const RELAYER_PLAIN: Record<string, string> = {
     "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled. Nothing was sent.",
   invalid_relayer_url: "The claim relayer address is not valid. Nothing was sent.",
   invalid_bytes32: "A required identifier is missing or not the right length. Nothing was sent.",
-  invalid_claim_id: "The claim identifier was not accepted. Nothing was sent.",
+  invalid_claim_id: "The Escrow ID was not accepted. Nothing was sent.",
   invalid_address: "A required wallet address is missing. Nothing was sent.",
   invalid_duration: "The time window for this claim is missing. Nothing was sent.",
   invalid_amount: "This claim needs an amount greater than zero. Nothing was sent.",

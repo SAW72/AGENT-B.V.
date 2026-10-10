@@ -8,7 +8,7 @@ import { EscrowPanel } from "./EscrowPanel"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
-import { PAGE_FOOTER } from "./brand"
+import { DISPLAY_NAME, PAGE_FOOTER, PRODUCT_NAME, TESTNET_LINE } from "./brand"
 import {
   GATE_OWNER_MATCH,
   GATE_OWNER_MISMATCH,
@@ -247,8 +247,15 @@ export function App() {
   return (
     <div className="wrap">
       <header>
-        <h1>Agent-BV</h1>
-        <p className="lede">Agent Auditor · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}</p>
+        <h1 className="heading-with-pill">
+          <span>{PRODUCT_NAME}</span>
+          <span className="pill info" data-testid="page-testnet">
+            {TESTNET_LINE}
+          </span>
+        </h1>
+        <p className="lede">
+          {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+        </p>
       </header>
 
       <section className="card" aria-labelledby="connection-heading">

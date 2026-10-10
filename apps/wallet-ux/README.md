@@ -1,6 +1,6 @@
 # Wallet UX (Base Sepolia only)
 
-Gate A status for the Agent-BV (Agent Auditor) contracts on **Base Sepolia (chain id 84532)**.
+Gate A status for the Agent-BV contracts on **Base Sepolia (chain id 84532)**. The display name lives in `src/brand.ts`.
 
 This app connects an injected wallet (MetaMask), checks the wallet chain, and reads the live contracts through a Base Sepolia RPC. Claim and dispute forms build calldata, then the connected wallet can submit that calldata when it is on Base Sepolia. Ethereum mainnet (chain id 1) and Base mainnet (chain id 8453) are refused. There is no mainnet config.
 

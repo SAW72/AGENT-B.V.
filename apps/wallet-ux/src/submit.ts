@@ -115,13 +115,16 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
 }
 
 export const FORM_ERRORS = {
-  createIds: "Enter the claim identifier and both bot identifiers before creating a claim.",
+  createIds: "Enter the Escrow ID and both bot identifiers before creating a claim.",
   payee: "Enter the payee wallet address.",
+  payeeZero: "Enter a payee wallet that is not the zero address.",
+  sameBots: "The payer bot and the payee bot must be different.",
+  valueEmpty: "Enter an amount of test ETH, such as 0.001.",
   valueFormat: "Enter an amount of ETH, such as 0.01.",
   valueZero: "Enter an amount greater than zero. Nothing was sent.",
-  releaseId: "Enter the claim identifier before releasing this claim.",
-  refundId: "Enter the claim identifier before refunding this claim.",
-  openIds: "Enter the claim identifier before opening a dispute.",
+  releaseId: "Enter the Escrow ID before releasing this claim.",
+  refundId: "Enter the Escrow ID before refunding this claim.",
+  openIds: "Enter the Escrow ID before opening a dispute.",
   openReason: "Enter a reason before opening a dispute.",
   subjectNetwork: "The network did not answer, so this dispute was not prepared.",
   subjectNoCode: "No escrow contract at this address on this network.",
@@ -133,11 +136,11 @@ export const FORM_ERRORS = {
   reasonTooLong: "The reason is longer than 256 bytes, so this dispute was not prepared.",
   subjectMissing: "This claim is not on the escrow yet, so this dispute was not prepared.",
   subjectPending: "The subject is still being read, so this dispute was not prepared.",
-  disputeClaim: "Enter the claim identifier before opening a dispute.",
-  disputeId: "Enter the dispute identifier before opening a dispute.",
+  disputeClaim: "Enter the Escrow ID before opening a dispute.",
+  disputeId: "Enter the Dispute ID before opening a dispute.",
   denylistHash: "Enter the identifier before looking it up.",
   denylistCheck: "Enter the weight, behavior, and prompt identifiers before checking the deny list.",
-  voteId: "Enter the dispute identifier before voting.",
+  voteId: "Enter the Dispute ID before voting.",
   voteChoice: VOTE_CHOICE_TEXT,
 } as const
 

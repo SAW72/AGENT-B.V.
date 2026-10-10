@@ -61,8 +61,8 @@ export const FILE_DISPUTE_TEXT =
   "One transaction files this dispute. The identifier is random, so it cannot be guessed from the claim. If that identifier is already open, generate a new one. The claim stays open until a fresh identifier is filed."
 
 export const FILE_DISPUTE_BUTTON = "Prepare this dispute"
-export const NEW_CASE_ID_BUTTON = "Generate a new identifier"
-export const CASE_ID_HINT = "A new random identifier for this case. It is not taken from the claim or the clock."
+export const NEW_CASE_ID_BUTTON = "Generate"
+export const CASE_ID_HINT = "The Dispute ID is the arbitration case."
 
 /** Contract error ReleaseNotAuthorized. */
 export const RELEASE_NOT_AUTHORIZED_TEXT =
@@ -79,8 +79,8 @@ export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
   { name: "EscrowExpired", meaning: "This claim's time window has ended, so it can't be paid out that way. A dispute decided for the payee can still be paid out." },
   { name: "AttestationFailed", meaning: "This claim can't be created. The amount or the time window isn't allowed, or one of the bots is inactive, not approved for payments, blocked, or on the deny list." },
   { name: "InvalidParties", meaning: "The payer and payee aren't valid. They must be two different wallets, with two different bots, and the connected wallet must be allowed to act for the payer." },
-  { name: "Replay", meaning: "This claim identifier was already used. Choose a new one." },
-  { name: "InvalidDispute", meaning: "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created." },
+  { name: "Replay", meaning: "This Escrow ID was already used. Choose a new one." },
+  { name: "InvalidDispute", meaning: "This Dispute ID can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created." },
   { name: "DisputeAlreadyResolved", meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim." },
   { name: "DisputeVotesCast", meaning: DISPUTE_VOTES_CAST_TEXT },
   { name: "DisputePredatesEscrow", meaning: "Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim." },

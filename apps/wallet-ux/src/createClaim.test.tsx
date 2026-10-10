@@ -107,11 +107,10 @@ vi.mock("./read", async (importOriginal) => {
 })
 
 const EXACT = {
-  "Claim identifier": CLAIM,
+  "Escrow ID": CLAIM,
   "Payee wallet": PAYEE,
   "Payer bot identifier": PAYER_BOT,
   "Payee bot identifier": PAYEE_BOT,
-  "Time window in seconds": "86400",
   "Amount in ETH": "0.001",
 } as const
 
@@ -134,6 +133,7 @@ function createScope() {
 
 function fillCreate(values: Record<string, string>) {
   const scope = createScope()
+  fireEvent.click(scope.getByRole("button", { name: "Use my own" }))
   for (const [label, value] of Object.entries(values)) {
     fireEvent.change(scope.getByLabelText(label), { target: { value } })
   }
@@ -202,13 +202,14 @@ describe("prepare this claim", () => {
     ]
     for (const payee of payees) {
       const scope = fillCreate({
-        "Claim identifier": `  ${CLAIM.toUpperCase()} \n`,
+        "Escrow ID": `  ${CLAIM.toUpperCase()} \n`,
         "Payee wallet": payee,
         "Payer bot identifier": `\t${PAYER_BOT} `,
         "Payee bot identifier": ` ${PAYEE_BOT.toUpperCase()}\n`,
-        "Time window in seconds": " 86400 ",
         "Amount in ETH": " 0.001 ",
       })
+      fireEvent.click(scope.getByRole("radio", { name: "Custom" }))
+      fireEvent.change(scope.getByLabelText("Time window in seconds"), { target: { value: " 86400 " } })
       fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
       await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 

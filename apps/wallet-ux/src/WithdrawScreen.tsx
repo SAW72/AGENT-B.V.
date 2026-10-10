@@ -5,7 +5,8 @@ import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
-import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { ActionButton, ActionStatus } from "./actionButton"
+import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { previewCardCopy } from "./submit"
 import { AddressRow } from "./ui"
@@ -168,13 +169,17 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
       <p data-testid="withdraw-available">{availableText}</p>
       <form id="withdraw-form" onSubmit={(event) => void onWithdraw(event)}>
-        <button type="submit" disabled={session.preparing || !canPrepare} aria-busy={session.preparing}>
-          {session.preparing ? PREPARING_LABEL : canPrepare ? "Prepare withdraw" : blockedLabel}
-        </button>
+        <ActionButton
+          type="submit"
+          disabled={session.preparing || !canPrepare}
+          state={
+            session.preparing
+              ? { status: "busy", label: "Preparing…" }
+              : { status: "idle", label: canPrepare ? "Prepare withdraw" : blockedLabel }
+          }
+        />
         {session.error ? (
-          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-            {session.error}
-          </p>
+          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
         ) : session.preview ? (
           <div
             className="preview"

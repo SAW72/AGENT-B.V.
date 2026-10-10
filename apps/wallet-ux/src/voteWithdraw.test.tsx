@@ -124,6 +124,7 @@ vi.mock("wagmi", () => ({
   usePublicClient: () => publicClient,
   useSendTransaction: () => ({ sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({ data: { signTypedData } }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
 }))
 
 vi.mock("./useWalletChain", () => ({
@@ -180,7 +181,7 @@ function renderScreens() {
 }
 
 async function enterDispute(scope = within(screen.getByTestId("vote-screen"))) {
-  fireEvent.change(scope.getByLabelText("Dispute identifier"), { target: { value: disputeId } })
+  fireEvent.change(scope.getByLabelText("Dispute ID"), { target: { value: disputeId } })
   return scope
 }
 
@@ -394,6 +395,7 @@ describe("vote and withdraw screens", () => {
     await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(2))
+    await settleReceipt()
 
     await waitFor(() => expect(withdraw.getByTestId("withdraw-available").textContent).toBe("Available to withdraw: 1 ETH"))
     fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))

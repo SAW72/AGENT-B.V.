@@ -1,5 +1,18 @@
 const HEX_64 = /^[0-9a-fA-F]{64}$/
 
+/**
+ * Prefix rule for every hex field in this app: `0x` and `0X` are both
+ * prefixes and are normalized to `0x`. Bare hex is still accepted for a
+ * 32-byte id. The payee uses the same prefix rule and then the checksum rule.
+ */
+export function normalizeHexPrefix(raw: string): { prefixed: boolean; body: string } {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    return { prefixed: true, body: trimmed.slice(2) }
+  }
+  return { prefixed: false, body: trimmed }
+}
+
 /** 32 cryptographically random bytes. Not derived from a claim id or the clock. */
 export function randomBytes32(
   fill: (bytes: Uint8Array<ArrayBuffer>) => void = (bytes) => {
@@ -17,9 +30,9 @@ export function randomBytes32(
 export function parseBytes32(raw: string): `0x${string}` | null {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return null
-  const hex = trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.slice(2) : trimmed
-  if (!HEX_64.test(hex)) return null
-  return `0x${hex.toLowerCase()}`
+  const { body } = normalizeHexPrefix(trimmed)
+  if (!HEX_64.test(body)) return null
+  return `0x${body.toLowerCase()}`
 }
 
 const MATCH_LEVELS = ["None", "PromptBlock", "SignatureBlock", "ExactBlock"] as const

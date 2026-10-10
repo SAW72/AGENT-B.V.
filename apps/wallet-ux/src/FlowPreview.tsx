@@ -1,21 +1,39 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
-import { formatEther, getAddress, isAddress, parseEther, type Address, type Hex } from "viem"
-import { useAccount, usePublicClient, useSendTransaction, useWalletClient } from "wagmi"
+import { formatEther, parseEther, type Address, type Hex } from "viem"
+import { useAccount, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
+import {
+  ActionButton,
+  ActionStatus,
+  AMOUNT_HINT,
+  AMOUNT_PLACEHOLDER,
+  CHECKING_LABEL,
+  DISPUTE_ID_HINT,
+  DISPUTE_ID_LABEL,
+  ESCROW_ID_HINT,
+  ESCROW_ID_LABEL,
+  GENERATE_LABEL,
+  PAYEE_SELF_WARNING,
+  USE_OWN_LABEL,
+  useWalletHint,
+  type ActionButtonState,
+} from "./actionButton"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { PRODUCT_NAME, TESTNET_LINE } from "./brand"
 import { parseBytes32, randomBytes32 } from "./bytes32"
+import { carryDisputeId, carryEscrowId, readUrlBytes32, useCarriedIds } from "./carriedIds"
+import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
-import { currentNowSeconds } from "./nowClock"
 import { ErrorNotice } from "./ErrorNotice"
-import { presentError, type ErrorPresentation } from "./format"
-import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
+import { currentNowSeconds } from "./nowClock"
+import { parsePayeeAddress } from "./payeeAddress"
+import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
 import {
-  CASE_ID_HINT,
   ERROR_GLOSSARY,
   FILE_DISPUTE_BUTTON,
   FILE_DISPUTE_TEXT,
   MAX_DURATION_SECONDS,
-  NEW_CASE_ID_BUTTON,
   POST_EXPIRY_REFUND_INTRO,
   POST_EXPIRY_REFUND_ORDER,
   previewCreateEscrow,
@@ -50,36 +68,45 @@ import {
   submitControl,
   submitSenderNote,
 } from "./submit"
+import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
+import { TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
 }
 
-/** Trimmed 20-byte hex. Mixed case is accepted only with a valid checksum. */
-function parsePayeeAddress(raw: string): Address | null {
-  const trimmed = raw.trim()
-  if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) return null
-  const body = trimmed.slice(2)
-  try {
-    if (body === body.toLowerCase() || body === body.toUpperCase()) {
-      return getAddress(`0x${body.toLowerCase()}`)
-    }
-    if (!isAddress(trimmed, { strict: true })) return null
-    return getAddress(trimmed)
-  } catch {
-    return null
-  }
+function ActionTestnet({ title }: { title: string }) {
+  return (
+    <h3 className="heading-with-pill">
+      <span>{title}</span>
+      <span className="pill info" data-testid="action-testnet">
+        {PRODUCT_NAME} · {TESTNET_LINE}
+      </span>
+    </h3>
+  )
 }
 
-function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escrow: Address; panel: Address }) {
+function SepoliaSubmit({
+  preview,
+  escrow,
+  panel,
+  onConfirmed,
+}: {
+  preview: CallPreview
+  escrow: Address
+  panel: Address
+  onConfirmed?: () => void
+}) {
   const account = useAccount()
+  const { switchChain } = useSwitchChain()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
   const walletChainId = account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null
   const decision = evaluateEscrowSubmit({ walletConnected: account.isConnected, walletChainId })
   const publicClient = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const { data: walletClient } = useWalletClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const { sendTransactionAsync, isPending } = useSendTransaction()
+  const [phase, setPhase] = useState<"idle" | "waiting" | "pending" | "confirmed">("idle")
   const [txHash, setTxHash] = useState<Hex | null>(null)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const [relayerPhase, setRelayerPhase] = useState<RelayerPhase>("idle")
@@ -87,6 +114,9 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const relayerFlight = useRef(false)
+  const waiting = phase === "waiting" || (isPending && phase !== "pending" && phase !== "confirmed")
+  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || phase === "pending" || relayerPhase !== "idle")
+  const walletHint = useWalletHint(waiting || relayerPhase === "submitting")
   const relayer = relayerConfigFromEnv({
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   })
@@ -122,16 +152,22 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
     })
     if (!current.ok) {
       setTxHash(null)
+      setPhase("idle")
       setSubmitError(notice(current.reason))
       return
     }
+    if (!tryHoldSubmit(submitSlot)) return
+    let submitted: Hex | null = null
     try {
       assertSubmitTarget(preview.to, [escrow, panel])
       if (!publicClient) {
+        releaseSubmit(submitSlot)
         setTxHash(null)
+        setPhase("idle")
         setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
         return
       }
+      setPhase("waiting")
       const hash = await submitAfterPreflight({
         chainId: BASE_SEPOLIA_CHAIN_ID,
         client: publicClient,
@@ -147,8 +183,23 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
+      submitted = hash
       setTxHash(hash)
+      setPhase("pending")
+      const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      if (receipt.status !== "success") {
+        setPhase("idle")
+        setSubmitError(notice(TX_REVERTED_TEXT))
+        return
+      }
+      setPhase("confirmed")
+      onConfirmed?.()
     } catch (cause) {
+      setPhase("idle")
+      if (submitted) {
+        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
+        return
+      }
       setTxHash(null)
       setSubmitError(presentError(cause))
     }
@@ -168,13 +219,19 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
       setSubmitError(notice(gate.reason))
       return
     }
-    if (!relayer.url || relayerHealth !== "ok") return
+    if (!tryHoldSubmit(submitSlot)) return
+    if (!relayer.url || relayerHealth !== "ok") {
+      releaseSubmit(submitSlot)
+      return
+    }
     if (!publicClient) {
+      releaseSubmit(submitSlot)
       setTxHash(null)
       setSubmitError(notice("The network client isn't ready, so nothing was sent."))
       return
     }
     if (!account.address || !walletClient) {
+      releaseSubmit(submitSlot)
       setTxHash(null)
       setSubmitError(notice(RELAYER_CONNECT_NOTE))
       return
@@ -216,12 +273,48 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
     }
   }
 
+  const walletState: ActionButtonState = !decision.ok
+    ? decision.code === "disconnected"
+      ? { status: "needs-wallet" }
+      : { status: "wrong-network" }
+    : phase === "confirmed" && txHash
+      ? { status: "confirmed", hash: txHash }
+      : phase === "pending" && txHash
+        ? { status: "pending", hash: txHash }
+        : waiting
+          ? { status: "waiting-wallet" }
+          : { status: "idle", label: "Submit on Base Sepolia" }
+
+  const relayerState: ActionButtonState = !account.isConnected
+    ? { status: "needs-wallet" }
+    : !relayerGate.ok
+      ? { status: "wrong-network" }
+      : relayerPhase === "submitting"
+        ? { status: "waiting-wallet" }
+        : relayerPhase === "confirming" && pendingHash
+          ? { status: "pending", hash: pendingHash }
+          : confirmedHash
+            ? { status: "confirmed", hash: confirmedHash }
+            : relayerHealth === "unknown"
+              ? { status: "busy", label: CHECKING_LABEL }
+              : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit via claim relayer" }
+
   return (
     <div>
       <p>{submitSenderNote(preview.functionName)}</p>
-      <button type="button" data-testid={control.testId} disabled={control.disabled} onClick={() => void onClick()}>
-        {control.label}
-      </button>
+      <ActionButton
+        testId={control.testId}
+        state={walletState}
+        disabled={blocked || (decision.ok && control.disabled && walletState.status === "idle")}
+        onClick={() => {
+          if (walletState.status === "wrong-network") {
+            switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })
+            return
+          }
+          void onClick()
+        }}
+      />
+      <ActionStatus state={walletState} walletHint={walletHint} />
       {relayerButton.visible ? (
         <div data-testid="relayer-panel">
           <p>Submit through the claim relayer, or from your wallet.</p>
@@ -246,15 +339,19 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
               </p>
             </div>
           ) : null}
-          <button
-            type="button"
+          <ActionButton
             data-testid="relayer-submit"
-            disabled={relayerButton.disabled || isPending}
-            aria-busy={relayerBusy}
-            onClick={() => void onRelayer()}
-          >
-            {relayerButton.label}
-          </button>
+            state={relayerState}
+            disabled={blocked || isPending || (relayerButton.disabled && relayerState.status === "idle")}
+            onClick={() => {
+              if (relayerState.status === "wrong-network") {
+                switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })
+                return
+              }
+              void onRelayer()
+            }}
+          />
+          <ActionStatus state={relayerState} walletHint={walletHint && relayerPhase === "submitting"} pendingTestId="relayer-pending-label" confirmedTestId="relayer-confirmed-label" />
         </div>
       ) : null}
       {confirmedHash ? (
@@ -271,11 +368,6 @@ function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escro
       {submitError ? (
         <ErrorNotice main={submitError.main} detail={submitError.detail} link={submitError.link} />
       ) : null}
-      {txHash ? (
-        <p className="mono" data-testid="submit-tx">
-          Submitted {txHash}
-        </p>
-      ) : null}
     </div>
   )
 }
@@ -287,6 +379,7 @@ function PreviewBlock({
   relayerConfigured,
   label,
   nodeRef,
+  onConfirmed,
 }: {
   preview: CallPreview | null
   escrow: Address
@@ -294,6 +387,7 @@ function PreviewBlock({
   relayerConfigured: boolean
   label: string
   nodeRef: (node: HTMLElement | null) => void
+  onConfirmed?: () => void
 }) {
   if (!preview) return null
   return (
@@ -302,7 +396,7 @@ function PreviewBlock({
       <p className="mono">{preview.to}</p>
       <p>value {formatEther(preview.valueWei)} ETH</p>
       <pre className="calldata">{preview.calldata}</pre>
-      <SepoliaSubmit key={preview.calldata} preview={preview} escrow={escrow} panel={panel} />
+      <SepoliaSubmit key={preview.calldata} preview={preview} escrow={escrow} panel={panel} onConfirmed={onConfirmed} />
     </div>
   )
 }
@@ -314,6 +408,7 @@ function Field({
   onChange,
   hint,
   readOnly = false,
+  placeholder,
 }: {
   id: string
   label: string
@@ -321,6 +416,7 @@ function Field({
   onChange: (value: string) => void
   hint?: string
   readOnly?: boolean
+  placeholder?: string
 }) {
   return (
     <div className="field">
@@ -328,6 +424,7 @@ function Field({
       <input
         id={id}
         value={value}
+        placeholder={placeholder}
         spellCheck={false}
         autoComplete="off"
         readOnly={readOnly}
@@ -338,17 +435,77 @@ function Field({
   )
 }
 
+function IdField({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+  generated = false,
+}: {
+  id: string
+  label: string
+  hint: string
+  value: string
+  onChange: (value: string) => void
+  generated?: boolean
+}) {
+  const [own, setOwn] = useState(!generated)
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        value={value}
+        spellCheck={false}
+        autoComplete="off"
+        readOnly={generated && !own}
+        onChange={(event) => {
+          if (generated && !own) return
+          onChange(event.target.value)
+        }}
+      />
+      <p className="hint">{hint}</p>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => {
+          setOwn(false)
+          onChange(randomBytes32())
+        }}
+      >
+        {GENERATE_LABEL}
+      </button>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => {
+          setOwn(true)
+          onChange("")
+        }}
+      >
+        {USE_OWN_LABEL}
+      </button>
+    </div>
+  )
+}
+
 type PrepareSlot = "create" | "release" | "refund" | "dispute"
 
 export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address }) {
   const [active, setActive] = useState<PrepareSlot | null>(null)
+  const [escrowUrl] = useState(() => readUrlBytes32("escrow"))
   const relayerConfigured = relayerConfigFromEnv({
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   }).url != null
 
   return (
     <div>
-      <h3>Prepared transaction</h3>
+      {escrowUrl.notice ? (
+        <p className="banner" role="status" data-testid="url-escrow-notice">
+          {escrowUrl.notice}
+        </p>
+      ) : null}
       <p className="muted">
         These forms prepare a transaction, then the connected wallet can submit it on Base Sepolia, chain{" "}
         {BASE_SEPOLIA_CHAIN_ID}. Ethereum mainnet and Base mainnet are refused.
@@ -418,13 +575,24 @@ function CreateForm({
   active: PrepareSlot | null
   onActivate: (slot: PrepareSlot) => void
 }) {
-  const [escrowId, setEscrowId] = useState("")
+  const account = useAccount()
+  const [escrowId, setEscrowId] = useState<string>(() => randomBytes32())
   const [payee, setPayee] = useState("")
   const [payerBotId, setPayerBotId] = useState("")
   const [payeeBotId, setPayeeBotId] = useState("")
-  const [duration, setDuration] = useState("86400")
-  const [value, setValue] = useState("0.01")
+  const [preset, setPreset] = useState<number | "custom">(DEFAULT_DURATION_SECONDS)
+  const [customDuration, setCustomDuration] = useState("")
+  const [value, setValue] = useState("")
+  const preparedId = useRef<Hex | null>(null)
   const session = usePrepareSession<CallPreview>("create", active)
+  const payeeAddress = parsePayeeAddress(payee)
+  const payeeIsSelf =
+    payeeAddress != null && account.address != null && sameAddress(payeeAddress, account.address)
+
+  function edit(apply: () => void) {
+    apply()
+    session.clear()
+  }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -439,15 +607,31 @@ function CreateForm({
         onActivate("create")
         return
       }
-      const payeeAddress = parsePayeeAddress(payee)
-      if (!payeeAddress) {
+      if (payerBot.toLowerCase() === payeeBot.toLowerCase()) {
+        session.publish(FORM_ERRORS.sameBots, null)
+        onActivate("create")
+        return
+      }
+      const payeeParsed = parsePayeeAddress(payee)
+      if (!payeeParsed) {
         session.publish(FORM_ERRORS.payee, null)
         onActivate("create")
         return
       }
-      const durationSeconds = Number(duration.trim())
-      if (!Number.isInteger(durationSeconds) || durationSeconds <= 0 || durationSeconds > MAX_DURATION_SECONDS) {
+      if (isZeroAddress(payeeParsed)) {
+        session.publish(FORM_ERRORS.payeeZero, null)
+        onActivate("create")
+        return
+      }
+      const durationSeconds =
+        preset === "custom" ? parseWholeSeconds(customDuration, MAX_DURATION_SECONDS) : preset
+      if (durationSeconds == null || durationSeconds <= 0 || durationSeconds > MAX_DURATION_SECONDS) {
         session.publish(durationValidationMessage(MAX_DURATION_SECONDS), null)
+        onActivate("create")
+        return
+      }
+      if (value.trim() === "") {
+        session.publish(FORM_ERRORS.valueEmpty, null)
         onActivate("create")
         return
       }
@@ -467,12 +651,14 @@ function CreateForm({
       const next = previewCreateEscrow({
         escrow,
         escrowId: id,
-        payee: payeeAddress,
+        payee: payeeParsed,
         payerBotId: payerBot,
         payeeBotId: payeeBot,
         durationSeconds: BigInt(durationSeconds),
         valueWei,
       })
+      preparedId.current = id
+      carryEscrowId(id)
       session.publish(null, next)
       onActivate("create")
     } catch (cause) {
@@ -486,32 +672,83 @@ function CreateForm({
   return (
     <section aria-label="Create a claim">
       <form id="create-claim" onSubmit={(event) => void onSubmit(event)}>
-        <h3>Create a claim</h3>
-        <Field id="create-id" label="Claim identifier" value={escrowId} onChange={setEscrowId} />
-        <Field id="create-payee" label="Payee wallet" value={payee} onChange={setPayee} />
-        <Field id="create-payer-bot" label="Payer bot identifier" value={payerBotId} onChange={setPayerBotId} />
-        <Field id="create-payee-bot" label="Payee bot identifier" value={payeeBotId} onChange={setPayeeBotId} />
-        <Field
-          id="create-duration"
-          label="Time window in seconds"
-          value={duration}
-          onChange={setDuration}
-          hint={`Greater than 0 and at most ${MAX_DURATION_SECONDS}, which is 30 days.`}
+        <ActionTestnet title="Create a claim" />
+        <IdField
+          id="create-id"
+          label={ESCROW_ID_LABEL}
+          hint={ESCROW_ID_HINT}
+          value={escrowId}
+          generated
+          onChange={(next) => edit(() => setEscrowId(next))}
         />
+        <Field id="create-payee" label="Payee wallet" value={payee} onChange={(next) => edit(() => setPayee(next))} />
+        {payeeIsSelf ? (
+          <p className="warn-note" role="status" data-testid="payee-self-warning">
+            {PAYEE_SELF_WARNING}
+          </p>
+        ) : null}
+        <Field
+          id="create-payer-bot"
+          label="Payer bot identifier"
+          value={payerBotId}
+          onChange={(next) => edit(() => setPayerBotId(next))}
+        />
+        <Field
+          id="create-payee-bot"
+          label="Payee bot identifier"
+          value={payeeBotId}
+          onChange={(next) => edit(() => setPayeeBotId(next))}
+        />
+        <fieldset className="choice">
+          <legend>Time window</legend>
+          {DURATION_PRESETS.map((option) => (
+            <label key={option.id}>
+              <input
+                type="radio"
+                name="create-duration-preset"
+                value={String(option.seconds)}
+                checked={preset === option.seconds}
+                onChange={() => edit(() => setPreset(option.seconds))}
+              />
+              {option.label}
+            </label>
+          ))}
+          <label>
+            <input
+              type="radio"
+              name="create-duration-preset"
+              value="custom"
+              checked={preset === "custom"}
+              onChange={() => edit(() => setPreset("custom"))}
+            />
+            Custom
+          </label>
+        </fieldset>
+        {preset === "custom" ? (
+          <Field
+            id="create-duration"
+            label="Time window in seconds"
+            value={customDuration}
+            onChange={(next) => edit(() => setCustomDuration(next))}
+            hint={`Whole seconds only, from 1 through ${MAX_DURATION_SECONDS}, which is 30 days.`}
+          />
+        ) : (
+          <p className="hint">Whole seconds only. The contract allows at most 30 days.</p>
+        )}
         <Field
           id="create-value"
           label="Amount in ETH"
           value={value}
-          onChange={setValue}
-          hint="This amount is sent with the transaction on Base Sepolia. The connected wallet must be allowed to fund claims for the payer."
+          placeholder={AMOUNT_PLACEHOLDER}
+          onChange={(next) => edit(() => setValue(next))}
+          hint={AMOUNT_HINT}
         />
-        <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
-          {session.preparing ? PREPARING_LABEL : "Prepare this claim"}
-        </button>
+        <ActionButton
+          type="submit"
+          state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Prepare this claim" }}
+        />
         {session.error ? (
-          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-            {session.error}
-          </p>
+          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
         ) : (
           <PreviewBlock
             preview={session.preview}
@@ -520,6 +757,9 @@ function CreateForm({
             relayerConfigured={relayerConfigured}
             label="Prepared claim"
             nodeRef={session.setNode}
+            onConfirmed={() => {
+              if (preparedId.current) carryEscrowId(preparedId.current)
+            }}
           />
         )}
       </form>
@@ -574,8 +814,16 @@ function IdForm({
   onActivate: (slot: PrepareSlot) => void
   build: (escrowId: Hex) => CallPreview
 }) {
-  const [escrowId, setEscrowId] = useState("")
+  const carried = useCarriedIds()
+  const [urlEscrow] = useState(() => readUrlBytes32("escrow"))
+  const [escrowId, setEscrowId] = useState(urlEscrow.value ?? "")
+  const [touched, setTouched] = useState(false)
   const session = usePrepareSession<CallPreview>(slot, active)
+
+  useEffect(() => {
+    if (touched || !carried.escrowId) return
+    setEscrowId(carried.escrowId)
+  }, [carried.escrowId, touched])
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -601,16 +849,25 @@ function IdForm({
   return (
     <section aria-label={title}>
       <form onSubmit={(event) => void onSubmit(event)}>
-        <h3>{title}</h3>
+        <ActionTestnet title={title} />
         {intro}
-        <Field id={`${idPrefix}-id`} label="Claim identifier" value={escrowId} onChange={setEscrowId} />
-        <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
-          {session.preparing ? PREPARING_LABEL : buttonLabel}
-        </button>
+        <IdField
+          id={`${idPrefix}-id`}
+          label={ESCROW_ID_LABEL}
+          hint={ESCROW_ID_HINT}
+          value={escrowId}
+          onChange={(next) => {
+            setTouched(true)
+            setEscrowId(next)
+            session.clear()
+          }}
+        />
+        <ActionButton
+          type="submit"
+          state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: buttonLabel }}
+        />
         {session.error ? (
-          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-            {session.error}
-          </p>
+          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
         ) : (
           <PreviewBlock
             preview={session.preview}
@@ -640,8 +897,12 @@ function OpenDisputeForm({
   onActivate: (slot: PrepareSlot) => void
 }) {
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
-  const [disputeId, setDisputeId] = useState(() => randomBytes32())
-  const [claimId, setClaimId] = useState("")
+  const carried = useCarriedIds()
+  const [urlEscrow] = useState(() => readUrlBytes32("escrow"))
+  const [disputeId, setDisputeId] = useState<string>(() => randomBytes32())
+  const [claimId, setClaimId] = useState(urlEscrow.value ?? "")
+  const [claimTouched, setClaimTouched] = useState(false)
+  const preparedDispute = useRef<Hex | null>(null)
   const [reason, setReason] = useState("")
   const [resolution, setResolution] = useState<DisputeSubjectResult | null>(null)
   const [readingSubject, setReadingSubject] = useState(false)
@@ -656,6 +917,11 @@ function OpenDisputeForm({
   disputeIdRef.current = disputeId
   claimIdRef.current = claimId
   reasonRef.current = reason
+
+  useEffect(() => {
+    if (claimTouched || !carried.escrowId) return
+    setClaimId(carried.escrowId)
+  }, [carried.escrowId, claimTouched])
 
   useEffect(() => {
     if (!parsedClaim) {
@@ -714,10 +980,10 @@ function OpenDisputeForm({
     : resolution?.ok
       ? resolution.source === "view"
         ? "Read from the escrow. The panel stores this subject."
-        : "This escrow has no subject view, so the claim identifier is the subject."
+        : "This escrow has no subject view, so the Escrow ID is the subject."
       : resolution
         ? resolution.message
-        : "Filled from the escrow after the claim identifier is entered."
+        : "Filled from the escrow after the Escrow ID is entered."
 
   async function settleSubject() {
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -769,6 +1035,8 @@ function OpenDisputeForm({
         onActivate("dispute")
         return
       }
+      preparedDispute.current = id
+      carryDisputeId(id)
       session.publish(null, previewDispute(escrow, claim, id, trimmedReason))
       onActivate("dispute")
     } catch (cause) {
@@ -785,20 +1053,30 @@ function OpenDisputeForm({
       id="open-dispute"
       onSubmit={(event) => void onSubmit(event)}
     >
-      <h3>Open a dispute</h3>
+      <ActionTestnet title="Open a dispute" />
       <p className="muted">{FILE_DISPUTE_TEXT}</p>
-      <Field
+      <IdField
         id="open-dispute-id"
-        label="Case identifier"
+        label={DISPUTE_ID_LABEL}
+        hint={DISPUTE_ID_HINT}
         value={disputeId}
-        onChange={() => undefined}
-        readOnly
-        hint={CASE_ID_HINT}
+        generated
+        onChange={(next) => {
+          setDisputeId(next)
+          session.clear()
+        }}
       />
-      <button type="button" onClick={() => setDisputeId(randomBytes32())}>
-        {NEW_CASE_ID_BUTTON}
-      </button>
-      <Field id="open-claim-id" label="Claim identifier" value={claimId} onChange={setClaimId} />
+      <IdField
+        id="open-claim-id"
+        label={ESCROW_ID_LABEL}
+        hint={ESCROW_ID_HINT}
+        value={claimId}
+        onChange={(next) => {
+          setClaimTouched(true)
+          setClaimId(next)
+          session.clear()
+        }}
+      />
       <Field
         id="open-created-at"
         label="Time the claim was created"
@@ -815,14 +1093,21 @@ function OpenDisputeForm({
         readOnly
         hint={subjectHint}
       />
-      <Field id="open-reason" label="Reason" value={reason} onChange={setReason} />
-      <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
-        {session.preparing ? PREPARING_LABEL : FILE_DISPUTE_BUTTON}
-      </button>
+      <Field
+        id="open-reason"
+        label="Reason"
+        value={reason}
+        onChange={(next) => {
+          setReason(next)
+          session.clear()
+        }}
+      />
+      <ActionButton
+        type="submit"
+        state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: FILE_DISPUTE_BUTTON }}
+      />
       {session.error ? (
-        <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-          {session.error}
-        </p>
+        <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
       ) : (
         <PreviewBlock
           preview={session.preview}
@@ -831,6 +1116,9 @@ function OpenDisputeForm({
           relayerConfigured={relayerConfigured}
           label="Prepared dispute"
           nodeRef={session.setNode}
+          onConfirmed={() => {
+            if (preparedDispute.current) carryDisputeId(preparedDispute.current)
+          }}
         />
       )}
     </form>

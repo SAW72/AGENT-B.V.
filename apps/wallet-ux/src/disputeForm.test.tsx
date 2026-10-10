@@ -37,6 +37,7 @@ vi.mock("wagmi", () => ({
   }),
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({ data: undefined }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
 }))
 
 afterEach(() => {
@@ -56,12 +57,12 @@ describe("dispute form", () => {
     const form = document.getElementById("open-dispute")
     if (!form) throw new Error("missing dispute form")
     const dispute = within(form)
-    const caseId = dispute.getByLabelText("Case identifier") as HTMLInputElement
+    const caseId = dispute.getByLabelText("Dispute ID") as HTMLInputElement
     expect(caseId.readOnly).toBe(true)
     expect(caseId.value).toMatch(/^0x[0-9a-f]{64}$/)
     const firstId = caseId.value
 
-    fireEvent.click(dispute.getByRole("button", { name: "Generate a new identifier" }))
+    fireEvent.click(dispute.getAllByRole("button", { name: "Generate" })[0]!)
     expect(caseId.value).toMatch(/^0x[0-9a-f]{64}$/)
     expect(caseId.value).not.toBe(firstId)
 
@@ -72,7 +73,7 @@ describe("dispute form", () => {
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds))
 
-    fireEvent.change(dispute.getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.change(dispute.getByLabelText("Escrow ID"), { target: { value: claim } })
     await waitFor(() => {
       expect((dispute.getByLabelText("Subject") as HTMLInputElement).value).toBe(subject)
     })

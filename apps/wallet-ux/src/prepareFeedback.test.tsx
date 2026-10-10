@@ -99,6 +99,7 @@ vi.mock("wagmi", () => ({
   usePublicClient: () => publicClient,
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({ data: undefined }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
 }))
 
 function renderSurfaces() {
@@ -138,7 +139,8 @@ describe("prepare button feedback", () => {
     renderSurfaces()
     const { button, section } = namedSection("Prepare this claim")
     const scope = within(section)
-    fireEvent.change(scope.getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.click(scope.getByRole("button", { name: "Use my own" }))
+    fireEvent.change(scope.getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.change(scope.getByLabelText("Payee wallet"), { target: { value: ACCOUNT } })
     fireEvent.change(scope.getByLabelText("Payer bot identifier"), { target: { value: claim } })
     fireEvent.change(scope.getByLabelText("Payee bot identifier"), { target: { value: disputeId } })
@@ -176,7 +178,7 @@ describe("prepare button feedback", () => {
     renderSurfaces()
 
     const release = namedSection("Prepare this payout")
-    fireEvent.change(within(release.section).getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.change(within(release.section).getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.click(release.button)
     expect((within(release.section).getByRole("button", { name: PREPARING_LABEL }) as HTMLButtonElement).disabled).toBe(true)
     await waitFor(() => expect(document.activeElement).toBe(within(release.section).getByTestId("calldata-preview")))
@@ -187,7 +189,7 @@ describe("prepare button feedback", () => {
 
     scroll.mockClear()
     const refund = namedSection("Prepare this refund")
-    fireEvent.change(within(refund.section).getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.change(within(refund.section).getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.click(refund.button)
     expect((within(refund.section).getByRole("button", { name: PREPARING_LABEL }) as HTMLButtonElement).disabled).toBe(true)
     await waitFor(() => expect(document.activeElement).toBe(within(refund.section).getByTestId("calldata-preview")))
@@ -199,7 +201,7 @@ describe("prepare button feedback", () => {
 
     scroll.mockClear()
     const dispute = namedSection("Prepare this dispute")
-    fireEvent.change(within(dispute.section).getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.change(within(dispute.section).getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.change(within(dispute.section).getByLabelText("Reason"), { target: { value: "late delivery" } })
     await waitFor(() => expect(gate.code).toBeTruthy())
     fireEvent.click(dispute.button)
@@ -220,7 +222,7 @@ describe("prepare button feedback", () => {
     renderSurfaces()
     const vote = within(screen.getByTestId("vote-screen"))
     await waitFor(() => expect((vote.getByRole("button", { name: "Prepare this vote" }) as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.change(vote.getByLabelText("Dispute identifier"), { target: { value: disputeId } })
+    fireEvent.change(vote.getByLabelText("Dispute ID"), { target: { value: disputeId } })
     fireEvent.click(vote.getByLabelText("The deal stands: the payee gets paid"))
     await waitFor(() => expect(gate.disputes).toBeTruthy())
 

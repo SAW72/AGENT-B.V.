@@ -56,9 +56,9 @@ export const WITHDRAW_READING_TEXT = "Reading what is available to withdraw."
 
 export const WITHDRAW_HIDDEN_TEXT = "The Agent-BV escrow credit stays hidden while reads are refused."
 
-export const TX_PENDING_TEXT = "Pending. Waiting for this transaction on Base Sepolia."
+export const TX_PENDING_TEXT = "Waiting for Base Sepolia…"
 
-export const TX_CONFIRMED_TEXT = "Confirmed on Base Sepolia."
+export const TX_CONFIRMED_TEXT = "Done"
 
 export const TX_LINK_LABEL = "View this transaction on Base Sepolia"
 

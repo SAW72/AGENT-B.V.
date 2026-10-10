@@ -96,7 +96,7 @@ describe("calldata preview", () => {
       "The reason is longer than 256 bytes, so this dispute was not filed.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "InvalidDispute")?.meaning).toBe(
-      "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created.",
+      "This Dispute ID can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "exists")?.meaning).toBe(
       "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open.",
