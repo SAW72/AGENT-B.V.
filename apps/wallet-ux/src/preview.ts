@@ -29,12 +29,23 @@ export const RULING_PENDING_TEXT =
   "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled."
 
 /**
+ * Exact DisputePending sentence in claim-relayer/revertCopy.json.
+ * That file stays on the relayer wording. The wallet does not show this string.
+ */
+export const DISPUTE_PENDING_RELAYER_TEXT =
+  "Release stays blocked while the dispute is unresolved or was unwound. A refund before the claim ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal."
+
+/** Wallet display for DisputePending. The relayer sentence says "claim"; the page says "escrow". */
+export function disputePendingDisplay(relayerMeaning: string): string {
+  return relayerMeaning.replaceAll("before the claim ends", "before the escrow ends")
+}
+
+/**
  * `DisputePending` on the #56 escrow.
  * Release: a party while the linked case is unresolved or was unwound.
  * Refund: before the escrow ends, until the panel unwinds the deal; also whenever the panel upheld it.
  */
-export const DISPUTE_PENDING_TEXT =
-  "Release stays blocked while the dispute is unresolved or was unwound. A refund before the escrow ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal."
+export const DISPUTE_PENDING_TEXT = disputePendingDisplay(DISPUTE_PENDING_RELAYER_TEXT)
 
 /**
  * Filing opens the panel case in the same transaction.

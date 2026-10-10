@@ -8,7 +8,9 @@ import { randomBytes32 } from "./bytes32"
 import {
   ERROR_GLOSSARY,
   MAX_DURATION_SECONDS,
+  DISPUTE_PENDING_RELAYER_TEXT,
   DISPUTE_PENDING_TEXT,
+  disputePendingDisplay,
   DISPUTE_VOTES_CAST_TEXT,
   POST_EXPIRY_REFUND_ORDER,
   RELEASE_NOT_AUTHORIZED_TEXT,
@@ -110,9 +112,6 @@ describe("calldata preview", () => {
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "NotParty")?.meaning).toBe(
       "This wallet is not a party to this escrow.",
     )
-    expect(DISPUTE_PENDING_TEXT).toBe(
-      "Release stays blocked while the dispute is unresolved or was unwound. A refund before the escrow ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal.",
-    )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "DisputePending")?.meaning).toBe(DISPUTE_PENDING_TEXT)
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "RulingPending")?.meaning).toBe(RULING_PENDING_TEXT)
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "DisputeVotesCast")?.meaning).toBe(DISPUTE_VOTES_CAST_TEXT)
@@ -131,7 +130,13 @@ describe("calldata preview", () => {
     expect(toFunctionSelector("ReleaseNotAuthorized()")).toBe("0xfe28f476")
     expect(revertCopy.ReleaseNotAuthorized.meaning).toBe(RELEASE_NOT_AUTHORIZED_TEXT)
     expect(revertCopy.DisputePending.selector).toBe("0xfd29e9e5")
-    expect(revertCopy.DisputePending.meaning).toBe(DISPUTE_PENDING_TEXT)
+    expect(revertCopy.DisputePending.meaning).toBe(DISPUTE_PENDING_RELAYER_TEXT)
+    expect(DISPUTE_PENDING_TEXT).toBe(disputePendingDisplay(revertCopy.DisputePending.meaning))
+    expect(DISPUTE_PENDING_TEXT).toBe(
+      "Release stays blocked while the dispute is unresolved or was unwound. A refund before the escrow ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal.",
+    )
+    expect(DISPUTE_PENDING_TEXT).not.toMatch(/\bclaim\b/i)
+    expect(DISPUTE_PENDING_RELAYER_TEXT).toMatch(/\bclaim\b/)
     expect(toFunctionSelector("DisputePending()")).toBe("0xfd29e9e5")
     expect(toFunctionSelector("RulingPending()")).toBe("0x3a0621bd")
     expect(toFunctionSelector("RULING_GRACE()")).toBe("0x3cfbadae")
