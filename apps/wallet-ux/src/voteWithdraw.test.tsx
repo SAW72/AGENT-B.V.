@@ -5,9 +5,13 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { decodeFunctionData, type Address, type Hex } from "viem"
+import { shortHash } from "./format"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { disputePanelAbi, escrowAbi } from "./abi"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { carryDisputeId, resetCarriedIds } from "./carriedIds"
+import { resetSubmitLock } from "./submitLock"
+import { resetPendingRuntime } from "./usePendingReceipt"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { ERROR_GLOSSARY } from "./preview"
 import { FORM_ERRORS } from "./submit"
@@ -21,7 +25,6 @@ import {
   NOTHING_TO_WITHDRAW_TEXT,
   PANEL_SIZE_UNREADABLE_TEXT,
   RESOLVED_LEAD,
-  TX_CONFIRMED_TEXT,
   TX_PENDING_TEXT,
   UNDO_DEAL_LABEL,
   VOTE_CHOICE_TEXT,
@@ -124,6 +127,8 @@ vi.mock("wagmi", () => ({
   usePublicClient: () => publicClient,
   useSendTransaction: () => ({ sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({ data: { signTypedData } }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 vi.mock("./useWalletChain", () => ({
@@ -180,7 +185,7 @@ function renderScreens() {
 }
 
 async function enterDispute(scope = within(screen.getByTestId("vote-screen"))) {
-  fireEvent.change(scope.getByLabelText("Dispute identifier"), { target: { value: disputeId } })
+  fireEvent.change(scope.getByLabelText("Dispute ID"), { target: { value: disputeId } })
   return scope
 }
 
@@ -196,7 +201,11 @@ function readCalls(name: string) {
 }
 
 beforeEach(() => {
+  resetCarriedIds()
+  resetSubmitLock()
+  resetPendingRuntime()
   resetWorld()
+  localStorage.clear()
   fetchSpy.mockReset()
   publicClient.call.mockClear()
   publicClient.readContract.mockClear()
@@ -214,6 +223,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  resetCarriedIds()
+  resetSubmitLock()
+  resetPendingRuntime()
+  localStorage.clear()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
@@ -232,8 +245,9 @@ describe("vote and withdraw screens", () => {
     const withdrawHeading = screen.getByRole("heading", { name: /withdraw/i })
     expect(voteHeading.textContent).toContain(VOTE_HEADING)
     expect(withdrawHeading.textContent).toContain(WITHDRAW_HEADING)
-    expect(within(voteHeading).getByTestId("vote-testnet-pill").textContent).toBe(TESTNET_LINE)
-    expect(within(withdrawHeading).getByTestId("withdraw-testnet-pill").textContent).toBe(TESTNET_LINE)
+    expect(within(voteHeading).queryByTestId("vote-testnet-pill")).toBeNull()
+    expect(within(withdrawHeading).queryByTestId("withdraw-testnet-pill")).toBeNull()
+    expect(screen.queryByTestId("action-testnet")).toBeNull()
     expect(screen.getByTestId("vote-test-only").textContent).toBe(WALLET_SIGNED_TEST_LINE)
     expect(screen.getByTestId("withdraw-test-only").textContent).toBe(WALLET_SIGNED_TEST_LINE)
 
@@ -394,6 +408,7 @@ describe("vote and withdraw screens", () => {
     await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(2))
+    await settleReceipt()
 
     await waitFor(() => expect(withdraw.getByTestId("withdraw-available").textContent).toBe("Available to withdraw: 1 ETH"))
     fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
@@ -445,7 +460,25 @@ describe("vote and withdraw screens", () => {
     const calldata = screen.getByTestId("withdraw-preview").querySelector("pre")?.textContent ?? ""
     const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
     expect(decoded.functionName).toBe("withdraw")
-    expect(screen.getByTestId("withdraw-preview").textContent).toContain(escrow)
+    expect(screen.getByTestId("withdraw-preview").querySelector("[data-testid=review-contract-address]")?.getAttribute("data-address")).toBe(escrow)
+  })
+
+  it("clears a prepared vote when a carried dispute id replaces the one on screen", async () => {
+    const first = `0x${"ab".repeat(32)}` as Hex
+    const second = `0x${"ef".repeat(32)}` as Hex
+    carryDisputeId(first)
+    renderScreens()
+    const vote = within(screen.getByTestId("vote-screen"))
+    await waitFor(() => expect((vote.getByLabelText("Dispute ID") as HTMLInputElement).value).toBe(first))
+    await waitFor(() => expect(vote.getByTestId("vote-tally")).toBeTruthy())
+    fireEvent.click(vote.getByLabelText(DEAL_STANDS_LABEL))
+    fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(vote.getByTestId("vote-preview")).toBeTruthy())
+    expect(vote.getByTestId("vote-preview").querySelector("pre")?.textContent).toContain(first.slice(2))
+    carryDisputeId(second)
+    await waitFor(() => expect((vote.getByLabelText("Dispute ID") as HTMLInputElement).value).toBe(second))
+    expect(vote.queryByTestId("vote-preview")).toBeNull()
+    expect(vote.queryByTestId("sepolia-submit")).toBeNull()
   })
 
   it("waits for the receipt, then shows the confirmed hash and re-reads", async () => {
@@ -459,12 +492,13 @@ describe("vote and withdraw screens", () => {
     await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(vote.getByTestId("tx-pending").textContent).toBe(TX_PENDING_TEXT))
-    expect(vote.getByTestId("tx-hash").textContent).toBe(txHash)
+    expect(vote.getByTestId("tx-hash").textContent).toBe(shortHash(txHash))
+    expect(within(vote.getByTestId("action-pending")).getByRole("button", { name: "Copy" })).toBeTruthy()
     expect(vote.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${txHash}`)
     await settleReceipt()
-    await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe(TX_CONFIRMED_TEXT))
+    await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe("Vote cast"))
     await waitFor(() => expect(readCalls("disputes").length).toBeGreaterThan(disputesBefore))
-    expect(publicClient.waitForTransactionReceipt).toHaveBeenCalledWith({ hash: txHash })
+    expect(publicClient.waitForTransactionReceipt).toHaveBeenCalledWith({ hash: txHash, timeout: 180_000 })
 
     const withdraw = within(screen.getByTestId("withdraw-screen"))
     await waitFor(() => expect(withdraw.getByRole("button", { name: "Prepare withdraw" })).toBeTruthy())
@@ -474,7 +508,7 @@ describe("vote and withdraw screens", () => {
     fireEvent.click(withdraw.getByTestId("sepolia-submit"))
     await waitFor(() => expect(withdraw.getByTestId("tx-pending")).toBeTruthy())
     await settleReceipt()
-    await waitFor(() => expect(withdraw.getByTestId("tx-confirmed").textContent).toBe(TX_CONFIRMED_TEXT))
+    await waitFor(() => expect(withdraw.getByTestId("tx-confirmed").textContent).toBe("Withdrawn"))
     await waitFor(() => expect(readCalls("pendingWithdrawals").length).toBeGreaterThan(balanceBefore))
   })
 

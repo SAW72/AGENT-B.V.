@@ -5,7 +5,9 @@ export function useConnectorChainId(connector: Connector | undefined, connected:
   const [chainId, setChainId] = useState<number | null>(null)
 
   useEffect(() => {
-    if (!connector || !connected) {
+    // A reloaded page restores the connector from storage as plain data, with no
+    // methods. Calling getChainId on that object blanks the page.
+    if (!connector || !connected || typeof connector.getChainId !== "function" || !connector.emitter) {
       setChainId(null)
       return
     }

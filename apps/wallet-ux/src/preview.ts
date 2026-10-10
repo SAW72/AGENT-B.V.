@@ -29,12 +29,23 @@ export const RULING_PENDING_TEXT =
   "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled."
 
 /**
+ * Exact DisputePending sentence in claim-relayer/revertCopy.json.
+ * That file stays on the relayer wording. The wallet does not show this string.
+ */
+export const DISPUTE_PENDING_RELAYER_TEXT =
+  "Release stays blocked while the dispute is unresolved or was unwound. A refund before the claim ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal."
+
+/** Wallet display for DisputePending. The relayer sentence says "claim"; the page says "escrow". */
+export function disputePendingDisplay(relayerMeaning: string): string {
+  return relayerMeaning.replaceAll("before the claim ends", "before the escrow ends")
+}
+
+/**
  * `DisputePending` on the #56 escrow.
  * Release: a party while the linked case is unresolved or was unwound.
- * Refund: before the claim ends, until the panel unwinds the deal; also whenever the panel upheld it.
+ * Refund: before the escrow ends, until the panel unwinds the deal; also whenever the panel upheld it.
  */
-export const DISPUTE_PENDING_TEXT =
-  "Release stays blocked while the dispute is unresolved or was unwound. A refund before the claim ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal."
+export const DISPUTE_PENDING_TEXT = disputePendingDisplay(DISPUTE_PENDING_RELAYER_TEXT)
 
 /**
  * Filing opens the panel case in the same transaction.
@@ -43,14 +54,14 @@ export const DISPUTE_PENDING_TEXT =
 export const DISPUTE_VOTES_CAST_TEXT =
   "Filing opens the panel case in the same transaction. Votes cast on another case are not read."
 
-export const POST_EXPIRY_REFUND_INTRO = "After the claim ends, a refund is decided in this order."
+export const POST_EXPIRY_REFUND_INTRO = "After the escrow ends, a refund is decided in this order."
 
 /** Post-expiry refund checks, in contract order. */
 export const POST_EXPIRY_REFUND_ORDER = [
   { state: "Open", error: null, outcome: "The payer is refunded." },
   { state: "Disputed and upheld", error: "DisputePending", outcome: "The payee releases." },
   {
-    state: "Disputed, unresolved, within 7 days after the claim ends",
+    state: "Disputed, unresolved, within 7 days after the escrow ends",
     error: "RulingPending",
     outcome: RULING_PENDING_TEXT,
   },
@@ -58,11 +69,11 @@ export const POST_EXPIRY_REFUND_ORDER = [
 ] as const
 
 export const FILE_DISPUTE_TEXT =
-  "One transaction files this dispute. The identifier is random, so it cannot be guessed from the claim. If that identifier is already open, generate a new one. The claim stays open until a fresh identifier is filed."
+  "One transaction files this dispute. The identifier is random, so it cannot be guessed from the escrow. If that identifier is already open, generate a new one. The escrow stays open until a fresh identifier is filed."
 
 export const FILE_DISPUTE_BUTTON = "Prepare this dispute"
-export const NEW_CASE_ID_BUTTON = "Generate a new identifier"
-export const CASE_ID_HINT = "A new random identifier for this case. It is not taken from the claim or the clock."
+export const NEW_CASE_ID_BUTTON = "Generate"
+export const CASE_ID_HINT = "The Dispute ID is the arbitration case."
 
 /** Contract error ReleaseNotAuthorized. */
 export const RELEASE_NOT_AUTHORIZED_TEXT =
@@ -74,36 +85,36 @@ export const RELEASE_SENDER_NOTE = `${RELEASE_NOT_AUTHORIZED_TEXT} The connected
 
 /** Plain-English meanings for contract reverts. These builders do not submit. */
 export const ERROR_GLOSSARY: readonly ErrorGlossaryEntry[] = [
-  { name: "FundingBeforeGovernance", meaning: "New claims can't be created yet. The contract owner still needs to accept the governance handover." },
-  { name: "EscrowNotOpen", meaning: "This claim is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status." },
-  { name: "EscrowExpired", meaning: "This claim's time window has ended, so it can't be paid out that way. A dispute decided for the payee can still be paid out." },
-  { name: "AttestationFailed", meaning: "This claim can't be created. The amount or the time window isn't allowed, or one of the bots is inactive, not approved for payments, blocked, or on the deny list." },
+  { name: "FundingBeforeGovernance", meaning: "New escrows can't be created yet. The contract owner still needs to accept the governance handover." },
+  { name: "EscrowNotOpen", meaning: "This escrow is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status." },
+  { name: "EscrowExpired", meaning: "This escrow's time window has ended, so it can't be paid out that way. A dispute decided for the payee can still be paid out." },
+  { name: "AttestationFailed", meaning: "This escrow can't be created. The amount or the time window isn't allowed, or one of the bots is inactive, not approved for payments, blocked, or on the deny list." },
   { name: "InvalidParties", meaning: "The payer and payee aren't valid. They must be two different wallets, with two different bots, and the connected wallet must be allowed to act for the payer." },
-  { name: "Replay", meaning: "This claim identifier was already used. Choose a new one." },
-  { name: "InvalidDispute", meaning: "This dispute identifier can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created." },
-  { name: "DisputeAlreadyResolved", meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim." },
+  { name: "Replay", meaning: "This Escrow ID was already used. Choose a new one." },
+  { name: "InvalidDispute", meaning: "This Dispute ID can't be used. It is blank, or it matches the escrow, the subject stored for the panel, or the escrow mixed with the time the escrow was created." },
+  { name: "DisputeAlreadyResolved", meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow." },
   { name: "DisputeVotesCast", meaning: DISPUTE_VOTES_CAST_TEXT },
-  { name: "DisputePredatesEscrow", meaning: "Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim." },
+  { name: "DisputePredatesEscrow", meaning: "Filing opens the panel case in the same transaction. A case opened before this escrow is not opened on this escrow." },
   { name: "DisputeChallengerNotParty", meaning: "Filing opens the panel case in the same transaction. The escrow opens that case, and the caller is stored as the party." },
   { name: "ReleaseNotAuthorized", meaning: RELEASE_NOT_AUTHORIZED_TEXT },
   { name: "NotParty", meaning: "This wallet is not a party to this escrow." },
-  { name: "DisputeAfterExpiry", meaning: "The claim window has closed, so this dispute can't be filed." },
+  { name: "DisputeAfterExpiry", meaning: "The escrow window has closed, so this dispute can't be filed." },
   { name: "DisputeReasonTooLong", meaning: "The reason is longer than 256 bytes, so this dispute was not filed." },
   { name: "DisputePending", meaning: DISPUTE_PENDING_TEXT },
   { name: "RulingPending", meaning: RULING_PENDING_TEXT },
   { name: "ZeroAddress", meaning: "A required wallet address was left blank." },
   { name: "InvalidGovernance", meaning: "This contract was set up with its deployer as the governor, which isn't allowed." },
   { name: "NotGovernance", meaning: "Only the governor can do that, and the contract owner must already be the governor." },
-  { name: "DependencyChangeWhileFunded", meaning: "Those settings can't be changed while funds are still locked in claims." },
+  { name: "DependencyChangeWhileFunded", meaning: "Those settings can't be changed while funds are still locked in escrows." },
   { name: "DenylistUnchanged", meaning: "That deny list is already the one in use." },
   { name: "VaultUnchanged", meaning: "That vault is already the one in use." },
   { name: "DisputePanelUnchanged", meaning: "That dispute panel is already the one in use." },
-  { name: "not a party", meaning: "Only the payer or payee on this claim can open a dispute. Switch to that wallet." },
-  { name: "not expired", meaning: "This claim can't be refunded yet. Its time window is still open." },
+  { name: "not a party", meaning: "Only the payer or payee on this escrow can open a dispute. Switch to that wallet." },
+  { name: "not expired", meaning: "This escrow can't be refunded yet. Its time window is still open." },
   { name: "transfer failed", meaning: "Paying the payee didn't go through. No funds were released." },
   { name: "refund failed", meaning: "The refund didn't go through. No funds were returned." },
   { name: "panel not seated", meaning: "A dispute can't be opened yet. The panel doesn't have enough members." },
-  { name: "exists", meaning: "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open." },
+  { name: "exists", meaning: "A dispute with this identifier is already open. Generate a new identifier and file again. The escrow stays open." },
   { name: "not authorized", meaning: NOT_ARBITRATOR_TEXT },
   { name: "no dispute", meaning: NO_DISPUTE_TEXT },
   { name: "resolved", meaning: RESOLVED_LEAD },

@@ -7,7 +7,7 @@ import { FORM_ERRORS } from "./submit"
  * Subject for openDispute.
  * A current escrow returns panelSubject(escrowId, createdAt) and that bytes32 is used as-is.
  * The booked escrow in the address book is source 7fe4a863e9bce0b70b629dab76ddd2728c97b536.
- * That contract exposes panelSubject. The claim-identifier fallback is only for
+ * That contract exposes panelSubject. The escrow-identifier fallback is only for
  * ADDRESSES.botAttestationEscrow, and only when that view reverts with empty data.
  * viem wraps every eth_call failure in CallExecutionError. Classification uses err.walk()
  * and never treats that wrapper as a revert. A real empty revert is ExecutionRevertedError,
@@ -15,7 +15,7 @@ import { FORM_ERRORS } from "./submit"
  * includes JSON-RPC code 3 and code -32000 whose message is execution reverted. HTTP
  * failures, timeouts, websocket failures, code -32603, code -32005, and -32000 header
  * not found block with the network message. No code blocks with the no-code message.
- * An empty revert on any other address is rejected and blocks. A claim that is not open,
+ * An empty revert on any other address is rejected and blocks. An escrow that is not open,
  * or whose window is already past the exact expiry timestamp, blocks before the subject
  * read. The contract still allows a dispute at that exact timestamp.
  * A wrong subject would burn the random case identifier.

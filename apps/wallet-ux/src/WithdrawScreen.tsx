@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { formatEther, type Address } from "viem"
+import type { Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
-import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
+import { WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
-import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { ActionButton, ActionStatus } from "./actionButton"
+import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
+import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { previewCardCopy } from "./submit"
-import { AddressRow } from "./ui"
+import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
 import {
   NOTHING_TO_WITHDRAW_TEXT,
   WITHDRAW_CONNECT_TEXT,
@@ -24,12 +26,7 @@ import { WalletOnlySubmit } from "./WalletOnlySubmit"
 function TestnetHeading() {
   return (
     <>
-      <h2 id="withdraw-heading" className="heading-with-pill">
-        <span>{WITHDRAW_HEADING}</span>
-        <span className="pill info" data-testid="withdraw-testnet-pill">
-          {TESTNET_LINE}
-        </span>
-      </h2>
+      <h2 id="withdraw-heading">{WITHDRAW_HEADING}</h2>
       <p data-testid="withdraw-test-only">{WALLET_SIGNED_TEST_LINE}</p>
     </>
   )
@@ -44,7 +41,7 @@ export function WithdrawScreen({
 }) {
   if (escrow == null) {
     return (
-      <section className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
+      <section id="withdraw-screen" className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
         <TestnetHeading />
         <div className="empty" data-testid="withdraw-empty" role="status">
           <strong>Not deployed on Sepolia yet.</strong>
@@ -55,7 +52,7 @@ export function WithdrawScreen({
   }
 
   return (
-    <section className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
+    <section id="withdraw-screen" className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
       <TestnetHeading />
       <p className="muted" data-testid="withdraw-gas">
         {WITHDRAW_GAS_TEXT}
@@ -168,13 +165,18 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
       <p data-testid="withdraw-available">{availableText}</p>
       <form id="withdraw-form" onSubmit={(event) => void onWithdraw(event)}>
-        <button type="submit" disabled={session.preparing || !canPrepare} aria-busy={session.preparing}>
-          {session.preparing ? PREPARING_LABEL : canPrepare ? "Prepare withdraw" : blockedLabel}
-        </button>
+        <ActionButton
+          type="submit"
+          disabled={session.preparing || !canPrepare}
+          reason={canPrepare ? null : blockedLabel}
+          state={
+            session.preparing
+              ? { status: "busy", label: "Preparing…" }
+              : { status: "idle", label: canPrepare ? "Prepare withdraw" : blockedLabel }
+          }
+        />
         {session.error ? (
-          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-            {session.error}
-          </p>
+          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
         ) : session.preview ? (
           <div
             className="preview"
@@ -184,9 +186,10 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
             ref={session.setNode}
           >
             <p>{previewCardCopy(session.preview.functionName, false)}</p>
-            <p className="mono">{session.preview.to}</p>
-            <p>value {formatEther(session.preview.valueWei)} ETH</p>
-            <pre className="calldata">{session.preview.calldata}</pre>
+            <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
+            <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
+            <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
+            <CalldataDetails calldata={session.preview.calldata} />
             <WalletOnlySubmit
               key={session.preview.calldata}
               preview={session.preview}

@@ -41,12 +41,12 @@ describe("payee open expiry notice", () => {
       urgentText: "Less than a day remains. Dispute before 2023-11-14 22:13:20 UTC.",
     })
     expect(RULING_GRACE_SECONDS).toBe(7n * 24n * 60n * 60n)
-    expect(shown?.text).toContain("Open a dispute before this claim ends")
+    expect(shown?.text).toContain("Open a dispute before this escrow ends")
     expect(shown?.text).toContain("anyone can trigger the refund to the payer unless a dispute is already open")
     expect(PAYEE_OPEN_AFTER_EXPIRY_TEXT).toContain("Anyone can trigger the refund to the payer")
     expect(PAYEE_OPEN_BEFORE_EXPIRY_TEXT).not.toContain("the payer can refund")
     expect(PAYEE_OPEN_AFTER_EXPIRY_TEXT).not.toContain("the payer can refund")
-    expect(shown?.text).toContain("7 days after the claim ends")
+    expect(shown?.text).toContain("7 days after the escrow ends")
   })
 
   it("still treats the exact end second as before expiry", () => {

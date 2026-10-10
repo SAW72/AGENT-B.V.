@@ -95,6 +95,7 @@ button {
   border: 0;
   border-radius: 6px;
   padding: 8px 12px;
+  min-height: 44px;
   cursor: pointer;
 }
 
@@ -119,10 +120,18 @@ input {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   padding: 8px 10px;
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;
   color: var(--ink);
+}
+
+input.readonly,
+input[readonly] {
+  background: #f6f3ec;
+  color: var(--muted);
+  border-style: dashed;
 }
 
 label { display: block; margin-bottom: 4px; }
@@ -141,7 +150,8 @@ fieldset.choice label {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin: 6px 0;
+  margin: 2px 0;
+  min-height: 36px;
 }
 
 fieldset.choice input { width: auto; }
@@ -195,6 +205,8 @@ fieldset.choice input { width: auto; }
 .pill.bad { background: var(--bad-bg); color: var(--bad); }
 
 .bad { color: var(--bad); }
+.warn-note { color: var(--warn); margin: 0 0 8px; }
+.action-done { color: var(--ok); }
 .pin-match { color: var(--ok); }
 
 .error-notice {
@@ -241,7 +253,80 @@ fieldset.choice input { width: auto; }
 .result dt { min-width: 12rem; color: var(--muted); }
 .result dd { margin: 0; }
 
-.preview { margin: 12px 0; }
+.preview {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.chunked { word-break: normal; overflow-wrap: normal; }
+
+.chunk {
+  display: inline-block;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.label-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.label-line label { margin-bottom: 4px; }
+.label-line .hint { margin: 0 0 4px; }
+
+details > summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.calldata-details > summary {
+  list-style: none;
+}
+
+.calldata-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.calldata-details > summary::before {
+  content: "";
+  width: 0.45em;
+  height: 0.45em;
+  margin-right: 0.6em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  flex: 0 0 auto;
+}
+
+.calldata-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.may-confirm {
+  color: var(--warn);
+  margin: 8px 0;
+}
+
+a.next-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 8px 14px;
+  background: #243024;
+  color: #f7f4ee;
+  border-radius: 6px;
+  text-decoration: none;
+}
 .calldata {
   overflow: auto;
   background: #f6f3ec;
@@ -316,9 +401,114 @@ footer { color: var(--muted); font-size: 0.92rem; }
   padding: 10px 0;
 }
 
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  background: var(--bg);
+  padding: 8px 0;
+}
+
+.site-header .pill {
+  margin: 0;
+}
+
+.wordmark {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.wallet-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--card);
+}
+
+.wallet-chip.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: #e4c4a6;
+}
+
+.action-reason,
+.cancel-note {
+  color: var(--muted);
+  margin: 8px 0;
+}
+
+.mark { font-weight: 700; }
+
+.icon-bad::before,
+.warn-note::before {
+  content: "! ";
+  font-weight: 700;
+}
+
 @media (max-width: 640px) {
+  .wrap { padding: 12px 12px 48px; }
   .kv-row { grid-template-columns: 1fr; gap: 2px; }
   .status-list div { align-items: flex-start; }
   .rep-head { flex-direction: column; }
   .history-row { grid-template-columns: 1fr; }
+  .site-header {
+    align-items: center;
+    gap: 4px 8px;
+    padding: 4px 0;
+  }
+  .site-header .wordmark {
+    flex: 1 1 100%;
+    font-size: 0.92rem;
+    line-height: 1.15;
+  }
+  .site-header .pill {
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    line-height: 1.2;
+  }
+  .site-header .wallet-chip {
+    margin-left: 0;
+    width: auto;
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  form > button,
+  .preview button,
+  .card > button,
+  button.secondary,
+  a.next-step {
+    width: 100%;
+    margin-right: 0;
+  }
+}
+
+@media (min-width: 641px) {
+  fieldset.choice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 16px;
+    align-items: center;
+  }
+
+  fieldset.choice legend { width: 100%; }
+
+  fieldset.choice label {
+    width: auto;
+    margin: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }

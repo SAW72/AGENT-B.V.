@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { formatEther, type Address } from "viem"
+import type { Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { disputePanelAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
-import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
+import { WALLET_SIGNED_TEST_LINE } from "./brand"
 import { parseBytes32 } from "./bytes32"
-import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { ActionButton, ActionStatus, DISPUTE_ID_HINT, DISPUTE_ID_LABEL } from "./actionButton"
+import { CONTRACT_LABELS, GAS_FEE_TEXT, PREPARE_FIRST_REASON, VOTE_SEAT_REASON } from "./actionProgress"
+import { readUrlBytes32, useCarriedIds } from "./carriedIds"
+import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewVote, type CallPreview } from "./preview"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
-import { AddressRow } from "./ui"
+import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
 import {
   ALREADY_VOTED_TEXT,
   ARBITRATOR_READING_TEXT,
@@ -50,16 +53,19 @@ function Field({
   label,
   value,
   onChange,
+  hint,
 }: {
   id: string
   label: string
   value: string
   onChange: (value: string) => void
+  hint?: string
 }) {
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
       <input id={id} value={value} spellCheck={false} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
+      {hint ? <p className="hint">{hint}</p> : null}
     </div>
   )
 }
@@ -76,7 +82,10 @@ function caseBlockMessage(read: CaseRead): string | null {
 export function VoteScreen({ panel }: { panel: Address }) {
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
-  const [disputeId, setDisputeId] = useState("")
+  const carried = useCarriedIds()
+  const [urlDispute] = useState(() => readUrlBytes32("dispute"))
+  const [disputeId, setDisputeId] = useState(urlDispute.value ?? "")
+  const [touched, setTouched] = useState(false)
   const [choice, setChoice] = useState<"" | "payee" | "payer">("")
   const [arbitrator, setArbitrator] = useState<ArbitratorRead>("loading")
   const [caseRead, setCaseRead] = useState<CaseRead>({ status: "idle" })
@@ -91,6 +100,13 @@ export function VoteScreen({ panel }: { panel: Address }) {
   disputeIdRef.current = disputeId
   choiceRef.current = choice
   arbitratorRef.current = arbitrator
+
+  useEffect(() => {
+    if (touched || !carried.disputeId) return
+    if (carried.disputeId === disputeIdRef.current) return
+    setDisputeId(carried.disputeId)
+    session.clear()
+  }, [carried.disputeId, touched])
 
   useEffect(() => {
     const accountAddress = account.address
@@ -294,12 +310,7 @@ export function VoteScreen({ panel }: { panel: Address }) {
 
   return (
     <section className="card" aria-labelledby="vote-heading" data-testid="vote-screen">
-      <h2 id="vote-heading" className="heading-with-pill">
-        <span>{VOTE_HEADING}</span>
-        <span className="pill info" data-testid="vote-testnet-pill">
-          {TESTNET_LINE}
-        </span>
-      </h2>
+      <h2 id="vote-heading">{VOTE_HEADING}</h2>
       <p data-testid="vote-test-only">{WALLET_SIGNED_TEST_LINE}</p>
       <p className="muted">{VOTE_MUTED}</p>
       <p data-testid="vote-note">{VOTE_NOTE}</p>
@@ -311,15 +322,33 @@ export function VoteScreen({ panel }: { panel: Address }) {
       ) : null}
       <CaseStatus read={caseRead} />
       <form id="vote-form" onSubmit={(event) => void onSubmit(event)}>
+        {urlDispute.notice ? (
+          <p className="banner" role="status" data-testid="url-dispute-notice">
+            {urlDispute.notice}
+          </p>
+        ) : null}
         <Field
           id="vote-dispute-id"
-          label="Dispute identifier"
+          label={DISPUTE_ID_LABEL}
+          hint={DISPUTE_ID_HINT}
           value={disputeId}
           onChange={(value) => {
+            setTouched(true)
             setDisputeId(value)
             session.clear()
           }}
         />
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            setTouched(true)
+            setDisputeId("")
+            session.clear()
+          }}
+        >
+          Use my own
+        </button>
         <fieldset className="choice">
           <legend>Who gets the money</legend>
           <label>
@@ -349,19 +378,31 @@ export function VoteScreen({ panel }: { panel: Address }) {
             {UNDO_DEAL_LABEL}
           </label>
         </fieldset>
-        <button type="submit" disabled={session.preparing || !canPrepare} aria-busy={session.preparing}>
-          {session.preparing ? PREPARING_LABEL : "Prepare this vote"}
-        </button>
+        <ActionButton
+          type="submit"
+          disabled={session.preparing || !canPrepare}
+          reason={
+            canPrepare
+              ? null
+              : arbitrator === "loading"
+                ? ARBITRATOR_READING_TEXT
+                : arbitrator === "unreadable"
+                  ? ARBITRATOR_UNREADABLE_TEXT
+                  : arbitrator !== "yes"
+                    ? VOTE_SEAT_REASON
+                    : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
+          }
+          state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Prepare this vote" }}
+        />
         {session.error ? (
-          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
-            {session.error}
-          </p>
+          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
         ) : session.preview ? (
           <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
             <p>{previewCardCopy(session.preview.functionName, false)}</p>
-            <p className="mono">{session.preview.to}</p>
-            <p>value {formatEther(session.preview.valueWei)} ETH</p>
-            <pre className="calldata">{session.preview.calldata}</pre>
+            <p data-testid="review-contract">{CONTRACT_LABELS.panel}</p>
+            <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
+            <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
+            <CalldataDetails calldata={session.preview.calldata} />
             <WalletOnlySubmit
               key={session.preview.calldata}
               preview={session.preview}
@@ -373,9 +414,12 @@ export function VoteScreen({ panel }: { panel: Address }) {
         ) : null}
       </form>
       {session.preview ? null : (
-        <button type="button" data-testid="vote-submit-blocked" disabled>
-          Submit on Base Sepolia
-        </button>
+        <ActionButton
+          testId="vote-submit-blocked"
+          disabled
+          reason={PREPARE_FIRST_REASON}
+          state={{ status: "idle", label: "Submit on Base Sepolia" }}
+        />
       )}
     </section>
   )

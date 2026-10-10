@@ -3,12 +3,13 @@ import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { visibleConnectors } from "./connectors"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
-import { PAGE_FOOTER } from "./brand"
+import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
 import {
   GATE_OWNER_MATCH,
   GATE_OWNER_MISMATCH,
@@ -78,6 +79,7 @@ export function BookOwners({ governanceTimelock = liveExpectedOwner() }: { gover
 export function PageFooter() {
   return (
     <footer>
+      <p>{OPERATOR_LINE}</p>
       <p>{PAGE_FOOTER}</p>
     </footer>
   )
@@ -246,10 +248,37 @@ export function App() {
 
   return (
     <div className="wrap">
-      <header>
-        <h1>Agent-BV</h1>
-        <p className="lede">Agent Auditor · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}</p>
+      <header className="site-header">
+        <h1 className="wordmark">{DISPLAY_NAME}</h1>
+        <span className="pill info" data-testid="page-testnet">
+          {TESTNET_LINE}
+        </span>
+        <span className={showSwitch ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
+          {account.isConnected && account.address ? (
+            <span className="mono">{shortAddress(account.address)}</span>
+          ) : (
+            <span>No wallet</span>
+          )}
+          {account.isConnected ? (
+            showSwitch ? (
+              <button
+                type="button"
+                className="secondary"
+                data-testid="header-switch"
+                onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
+                disabled={switchPending}
+              >
+                {switchPending ? "Switching…" : "Switch to Base Sepolia"}
+              </button>
+            ) : (
+              <span>Base Sepolia</span>
+            )
+          ) : null}
+        </span>
       </header>
+      <p className="lede">
+        {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+      </p>
 
       <section className="card" aria-labelledby="connection-heading">
         <h2 id="connection-heading">Connection</h2>
@@ -259,7 +288,7 @@ export function App() {
               Disconnect
             </button>
           ) : (
-            connectors.map((connector) => (
+            visibleConnectors(connectors).map((connector) => (
               <button
                 key={connector.uid}
                 type="button"

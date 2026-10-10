@@ -100,14 +100,14 @@ describe("relayer config", () => {
     expect(relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: "  " })).toEqual({ url: null })
   })
 
-  it("keeps the public URL and does not read a claim secret", () => {
+  it("keeps the public URL and does not read an escrow secret", () => {
     expect(relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: `${relayerUrl}/` })).toEqual({ url: relayerUrl })
     expect(relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: relayerUrl })).not.toHaveProperty("secret")
   })
 })
 
 describe("relayer chain guard", () => {
-  it("requires a connected Base Sepolia wallet so the claim can be signed", () => {
+  it("requires a connected Base Sepolia wallet so the escrow can be signed", () => {
     const disconnected = relayerSubmitAllowed({ walletConnected: false, walletChainId: null })
     expect(disconnected).toEqual({ ok: false, reason: RELAYER_CONNECT_NOTE })
     expect(relayerSubmitAllowed({ walletConnected: true, walletChainId: 84532 })).toEqual({ ok: true })
@@ -127,7 +127,7 @@ describe("postLiveClaim", () => {
   const releasePreview = previewRefund(escrow, id)
   const release = liveBody(releasePreview)
 
-  it("posts a signed intent on chain 84532 and does not send a claim secret", async () => {
+  it("posts a signed intent on chain 84532 and does not send an escrow secret", async () => {
     const captured: { url: string; init: RequestInit } = { url: "", init: {} }
     const result = await postLiveClaim({
       url: relayerUrl,
@@ -270,7 +270,7 @@ describe("relayer broadcast failures", () => {
         jsonResponse(502, { error: "broadcast_failed", reason: "Execution reverted", revert_data: "0xf10068b5" }),
     }).catch((cause: unknown) => cause)
     const decoded = presentRelayerError(withData)
-    expect(decoded.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
+    expect(decoded.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.")
     expect(decoded.detail).toContain("DisputeAlreadyResolved")
     expect(decoded.detail).toContain("0xf10068b5")
     expect(decoded.detail).toContain("502 broadcast_failed")
@@ -307,7 +307,7 @@ describe("relayer broadcast failures", () => {
         }),
     }).catch((cause: unknown) => cause)
     const dataHit = presentRelayerError(fromData)
-    expect(dataHit.main).toBe("Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim.")
+    expect(dataHit.main).toBe("Filing opens the panel case in the same transaction. A case opened before this escrow is not opened on this escrow.")
     expect(dataHit.detail).toContain("0x9bc3a099")
     expect(dataHit.main).not.toContain("0x9bc3a099")
 
@@ -418,7 +418,7 @@ describe("release is not relayed", () => {
   })
 })
 
-describe("refund submit via the claim relayer", () => {
+describe("refund submit via the refund relayer", () => {
   const release = previewRefund(escrow, id)
 
   it("posts a signed refund and lets the relayer build the calldata", async () => {
@@ -496,7 +496,7 @@ describe("refund submit via the claim relayer", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.code).toBe("action_not_claim")
-      expect(result.presentation.main).toBe("This step has to be sent from your wallet, not the claim relayer.")
+      expect(result.presentation.main).toBe("This step has to be sent from your wallet, not the refund relayer.")
     }
     const dispute = await runRelayerSubmission({
       url: relayerUrl,
@@ -535,7 +535,7 @@ describe("refund submit via the claim relayer", () => {
     expect(client.waitForTransactionReceipt).not.toHaveBeenCalled()
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
+      expect(result.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.")
     }
   })
 
@@ -594,7 +594,7 @@ describe("refund submit via the claim relayer", () => {
     })
     expect(decoded.ok).toBe(false)
     if (decoded.ok) return
-    expect(decoded.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
+    expect(decoded.presentation.main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.")
     expect(decoded.presentation.link?.href).toBe(relayerTxUrl(txHash))
     expect(decoded.presentation.main).not.toMatch(/[()]/)
 
@@ -622,43 +622,43 @@ describe("relayer response copy", () => {
     {
       status: 400,
       body: { ok: false, error: "invalid_json" },
-      main: "The claim relayer could not accept this submission. Nothing was sent.",
+      main: "The refund relayer could not accept this submission. Nothing was sent.",
       detail: "Details: 400 invalid_json",
     },
     {
       status: 401,
       body: { ok: false, error: "unauthorized" },
-      main: "The claim relayer refused this request. Nothing was sent.",
+      main: "The refund relayer refused this request. Nothing was sent.",
       detail: "Details: 401 unauthorized",
     },
     {
       status: 403,
       body: { ok: false, error: "forbidden" },
-      main: "The claim relayer refused this request. Nothing was sent.",
+      main: "The refund relayer refused this request. Nothing was sent.",
       detail: "Details: 403 forbidden",
     },
     {
       status: 404,
       body: { ok: false, error: "not_found" },
-      main: "The claim relayer could not find that submission path. Nothing was sent.",
+      main: "The refund relayer could not find that submission path. Nothing was sent.",
       detail: "Details: 404 not_found",
     },
     {
       status: 409,
       body: { ok: false, error: "live_submit_blocked", reason: "live_submit_off", txHash: null },
-      main: "The claim relayer isn't accepting live submissions right now. Nothing was sent.",
+      main: "The refund relayer isn't accepting live submissions right now. Nothing was sent.",
       detail: "Details: 409 live_submit_blocked",
     },
     {
       status: 422,
       body: { ok: false, error: "unprocessable" },
-      main: "The claim relayer could not accept this submission. Nothing was sent.",
+      main: "The refund relayer could not accept this submission. Nothing was sent.",
       detail: "Details: 422 unprocessable",
     },
     {
       status: 429,
       body: { ok: false, error: "rate_limited" },
-      main: "The claim relayer is limiting submissions. Wait a moment and try again. Nothing was sent.",
+      main: "The refund relayer is limiting submissions. Wait a moment and try again. Nothing was sent.",
       detail: "Details: 429 rate_limited",
     },
     {
@@ -687,7 +687,7 @@ describe("relayer response copy", () => {
         address: retiredEscrow,
         current: escrow,
       },
-      main: "The claim relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
+      main: "The refund relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
       detail: "Details: 400 retired_or_superseded_address",
     },
     {
@@ -699,13 +699,13 @@ describe("relayer response copy", () => {
         escrowAddress: retiredEscrow,
         txHash: null,
       },
-      main: "The claim relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
+      main: "The refund relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
       detail: "Details: 409 live_submit_blocked",
     },
     {
       status: 503,
       body: { ok: false, error: "kill_switch" },
-      main: "The claim relayer is paused. Nothing was sent.",
+      main: "The refund relayer is paused. Nothing was sent.",
       detail: "Details: 503 kill_switch",
     },
   ]
@@ -745,7 +745,7 @@ describe("relayer response copy", () => {
       expect(result.ok).toBe(false)
       if (result.ok) return
       expect(result.code).toBe("retired_or_superseded_address")
-      expect(result.presentation.main).toBe("The claim relayer used a retired escrow. Check the transaction before you try again.")
+      expect(result.presentation.main).toBe("The refund relayer used a retired escrow. Check the transaction before you try again.")
       expect(result.presentation.main.toLowerCase()).not.toContain("nothing was sent")
       expect(result.presentation.link?.href).toBe(relayerTxUrl(txHash))
       expect(result.presentation.detail).toBe("Details: 200 retired_or_superseded_address")
@@ -754,7 +754,7 @@ describe("relayer response copy", () => {
 })
 
 describe("relayer button", () => {
-  it("hides the relayer when the URL is unset and when the action is not a claim", () => {
+  it("hides the relayer when the URL is unset and when the action is not an escrow", () => {
     expect(
       relayerButtonModel({
         url: null,
@@ -834,7 +834,7 @@ describe("relayer button", () => {
       gate: { ok: true },
       action: "refund",
     })
-    expect(ready).toMatchObject({ visible: true, disabled: false, label: "Submit via claim relayer", note: null })
+    expect(ready).toMatchObject({ visible: true, disabled: false, label: "Submit refund request", note: null })
   })
 
   it("disables the button while submitting and while waiting for confirmation", () => {
@@ -852,7 +852,7 @@ describe("relayer button", () => {
       gate: { ok: true },
       action: "refund",
     })
-    expect(submitting).toMatchObject({ disabled: true, label: "Submitting through the claim relayer…" })
+    expect(submitting).toMatchObject({ disabled: true, label: "Submitting the refund request…" })
     expect(waiting).toMatchObject({ disabled: true, label: "Waiting for confirmation…" })
   })
 })

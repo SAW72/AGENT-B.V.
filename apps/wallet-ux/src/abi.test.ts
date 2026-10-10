@@ -92,7 +92,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("wallet writes", () => {
-  it("limits sends to wallet submits on Base Sepolia and signs only a claim intent", () => {
+  it("limits sends to wallet submits on Base Sepolia and signs only an escrow intent", () => {
     const src = dirname(fileURLToPath(import.meta.url))
     const hits: string[] = []
     const sendHits: string[] = []

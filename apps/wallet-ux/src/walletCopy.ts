@@ -56,15 +56,39 @@ export const WITHDRAW_READING_TEXT = "Reading what is available to withdraw."
 
 export const WITHDRAW_HIDDEN_TEXT = "The Agent-BV escrow credit stays hidden while reads are refused."
 
-export const TX_PENDING_TEXT = "Pending. Waiting for this transaction on Base Sepolia."
+export const TX_PENDING_TEXT = "Waiting for Base Sepolia…"
 
-export const TX_CONFIRMED_TEXT = "Confirmed on Base Sepolia."
+export const TX_CONFIRMED_TEXT = "Done"
 
 export const TX_LINK_LABEL = "View this transaction on Base Sepolia"
 
 export const TX_REVERTED_TEXT = "This transaction reverted on Base Sepolia."
 
-export const TX_RECEIPT_UNREADABLE_TEXT = "This transaction was sent, but its receipt could not be read."
+export const RECEIPT_MAY_CONFIRM_TEXT = "It may still confirm. Check Basescan before trying again."
+
+export const PENDING_NOT_FOUND_TEXT = "Not found on Base Sepolia yet. Check Basescan before trying again."
+
+export function unconfirmedNote(notice: "not-found" | "may-confirm" | null): string {
+  return notice === "not-found" ? PENDING_NOT_FOUND_TEXT : RECEIPT_MAY_CONFIRM_TEXT
+}
+
+export const PENDING_CLOCK_TEXT = "Check Basescan before trying again."
+
+export const PENDING_UNSAVED_TEXT = "Couldn't save this for a reload."
+
+export const TRY_AGAIN_LABEL = "Try again anyway"
+
+export const PENDING_UNKNOWN_TEXT =
+  "This transaction was not found on Base Sepolia. Check Basescan before submitting again."
+
+export const PENDING_EXPIRED_TEXT =
+  "This step was left pending for more than 30 minutes. Check Basescan before submitting again."
+
+/** viem stops waiting after 180 seconds and throws this name while the transaction can still be pending. */
+export function isReceiptTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("name" in error)) return false
+  return (error as { name: unknown }).name === "WaitForTransactionReceiptTimeoutError"
+}
 
 export function availableToWithdrawText(amount: string): string {
   return `Available to withdraw: ${amount}`

@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { encodeFunctionResult, decodeFunctionData, type Address, type Hex } from "viem"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
+import { NO_WALLET_REASON } from "./actionButton"
 import { FlowPreview } from "./FlowPreview"
 import { FILE_DISPUTE_TEXT } from "./preview"
 import { FORM_ERRORS } from "./submit"
@@ -37,6 +38,8 @@ vi.mock("wagmi", () => ({
   }),
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({ data: undefined }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 afterEach(() => {
@@ -56,12 +59,12 @@ describe("dispute form", () => {
     const form = document.getElementById("open-dispute")
     if (!form) throw new Error("missing dispute form")
     const dispute = within(form)
-    const caseId = dispute.getByLabelText("Case identifier") as HTMLInputElement
+    const caseId = dispute.getByLabelText("Dispute ID") as HTMLInputElement
     expect(caseId.readOnly).toBe(true)
     expect(caseId.value).toMatch(/^0x[0-9a-f]{64}$/)
     const firstId = caseId.value
 
-    fireEvent.click(dispute.getByRole("button", { name: "Generate a new identifier" }))
+    fireEvent.click(dispute.getAllByRole("button", { name: "Generate" })[0]!)
     expect(caseId.value).toMatch(/^0x[0-9a-f]{64}$/)
     expect(caseId.value).not.toBe(firstId)
 
@@ -72,7 +75,7 @@ describe("dispute form", () => {
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds))
 
-    fireEvent.change(dispute.getByLabelText("Claim identifier"), { target: { value: claim } })
+    fireEvent.change(dispute.getByLabelText("Escrow ID"), { target: { value: claim } })
     await waitFor(() => {
       expect((dispute.getByLabelText("Subject") as HTMLInputElement).value).toBe(subject)
     })
@@ -89,7 +92,14 @@ describe("dispute form", () => {
     const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
     expect(decoded.functionName).toBe("dispute")
     expect(decoded.args).toEqual([claim, caseId.value, "late delivery"])
-    expect(previews[0]?.textContent).toContain(escrow)
+    expect(previews[0]?.querySelector("[data-testid=review-contract-address]")?.getAttribute("data-address")).toBe(escrow)
+    expect(previews[0]?.querySelector("[data-testid=review-payee]")).toBeNull()
+    expect(within(previews[0]!).getByText("Contract")).toBeTruthy()
+    const details = within(previews[0]!).getByTestId("calldata-details") as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details.querySelector("summary")?.textContent).toBe("Details (raw transaction data)")
+    expect(within(previews[0]!).getByTestId("action-reason").textContent).toContain(NO_WALLET_REASON)
+    expect(within(previews[0]!).getByRole("button", { name: "Connect a wallet on Base Sepolia" })).toBeTruthy()
     expect(previews[0]?.textContent).not.toContain(panel)
   })
 })

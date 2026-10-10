@@ -15,10 +15,20 @@ export function yieldPrepareTick(): Promise<void> {
   })
 }
 
+function inputIsFocused(): boolean {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return false
+  const tag = active.tagName
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+}
+
 export function revealResult(node: HTMLElement | null): void {
   if (!node) return
+  if (inputIsFocused()) return
+  const reduce =
+    typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   if (typeof node.scrollIntoView === "function") {
-    node.scrollIntoView({ block: "nearest", behavior: "smooth" })
+    node.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" })
   }
   node.focus()
 }

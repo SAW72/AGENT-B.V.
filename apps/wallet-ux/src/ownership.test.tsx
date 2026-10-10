@@ -5,7 +5,7 @@ import { getAddress, type Address } from "viem"
 import { afterEach, describe, expect, it } from "vitest"
 import { BookOwners, LiveStatus, PageFooter } from "./App"
 import { ADDRESSES } from "./addresses"
-import { DISCLAIMER_LINE, PAGE_FOOTER } from "./brand"
+import { DISCLAIMER_LINE, OPERATOR_LINE, PAGE_FOOTER } from "./brand"
 import deploymentBook from "./base-sepolia.json"
 import { EscrowReads } from "./EscrowPanel"
 import {
@@ -185,7 +185,11 @@ describe("footer", () => {
   it("pins the relayer signing sentence and drops the old claim denial", () => {
     render(<PageFooter />)
     const footer = document.querySelector("footer")
-    expect(footer?.textContent).toBe(PAGE_FOOTER)
+    expect(footer?.textContent).toContain(OPERATOR_LINE)
+    expect(footer?.textContent).toContain(PAGE_FOOTER)
+    expect(OPERATOR_LINE).toBe(
+      "Agent-BV (Agent Bot Verifier) is a product of Steward of the King LLC, an Ohio (USA) limited liability company.",
+    )
     expect(PAGE_FOOTER).toBe(
       "Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. To send a refund through the relayer, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The relayer can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately.",
     )

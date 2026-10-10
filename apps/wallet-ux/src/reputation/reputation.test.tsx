@@ -327,7 +327,7 @@ describe("reputation copy", () => {
 })
 
 describe("reputation URL", () => {
-  it("builds read URLs from the claim relayer base and keeps the cursor opaque", () => {
+  it("builds read URLs from the refund relayer base and keeps the cursor opaque", () => {
     expect(reputationRoot("https://relayer.example/v1/claims")).toBe("https://relayer.example")
     expect(reputationRoot("https://relayer.example/")).toBe("https://relayer.example")
     const history = reputationHistoryUrl("https://relayer.example", ADDRESS, "usage", "abc/def", 25)
