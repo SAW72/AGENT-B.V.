@@ -21,7 +21,6 @@ import {
   NOTHING_TO_WITHDRAW_TEXT,
   PANEL_SIZE_UNREADABLE_TEXT,
   RESOLVED_LEAD,
-  TX_CONFIRMED_TEXT,
   TX_PENDING_TEXT,
   UNDO_DEAL_LABEL,
   VOTE_CHOICE_TEXT,
@@ -125,6 +124,7 @@ vi.mock("wagmi", () => ({
   useSendTransaction: () => ({ sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({ data: { signTypedData } }),
   useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 vi.mock("./useWalletChain", () => ({
@@ -464,7 +464,7 @@ describe("vote and withdraw screens", () => {
     expect(vote.getByTestId("tx-hash").textContent).toBe(txHash)
     expect(vote.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${txHash}`)
     await settleReceipt()
-    await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe(TX_CONFIRMED_TEXT))
+    await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe("Vote cast"))
     await waitFor(() => expect(readCalls("disputes").length).toBeGreaterThan(disputesBefore))
     expect(publicClient.waitForTransactionReceipt).toHaveBeenCalledWith({ hash: txHash })
 
@@ -476,7 +476,7 @@ describe("vote and withdraw screens", () => {
     fireEvent.click(withdraw.getByTestId("sepolia-submit"))
     await waitFor(() => expect(withdraw.getByTestId("tx-pending")).toBeTruthy())
     await settleReceipt()
-    await waitFor(() => expect(withdraw.getByTestId("tx-confirmed").textContent).toBe(TX_CONFIRMED_TEXT))
+    await waitFor(() => expect(withdraw.getByTestId("tx-confirmed").textContent).toBe("Withdrawn"))
     await waitFor(() => expect(readCalls("pendingWithdrawals").length).toBeGreaterThan(balanceBefore))
   })
 

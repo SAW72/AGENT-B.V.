@@ -84,8 +84,8 @@ npm run build
 
 The workflow fails the deploy unless `dist/assets` contains the live BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` (case-insensitive) and both of these phrases from `src/`:
 
-- `Submitting through the claim relayer` (`src/relayer.ts`)
-- `Submit through the claim relayer, or from your wallet.` (`src/FlowPreview.tsx`)
+- `Submitting the refund request` (`src/relayer.ts`)
+- `Submit the refund request through the relayer, or send it from your wallet.` (`src/FlowPreview.tsx`)
 
 The job also fails if `dist` or a served bundle contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
 

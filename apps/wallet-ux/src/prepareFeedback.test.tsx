@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { encodeFunctionResult, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
+import { resetCarriedIds } from "./carriedIds"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { FlowPreview } from "./FlowPreview"
 import { PREPARING_LABEL } from "./prepareFeedback"
@@ -100,6 +101,7 @@ vi.mock("wagmi", () => ({
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({ data: undefined }),
   useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 function renderSurfaces() {
@@ -122,6 +124,7 @@ function namedSection(name: string) {
 let scroll: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  resetCarriedIds()
   gate.holdCode = false
   gate.code = null
   gate.holdDisputes = false
@@ -130,6 +133,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  escrowRow[6] = expiresAt
+  resetCarriedIds()
   scroll.mockRestore()
   cleanup()
 })
@@ -137,7 +142,7 @@ afterEach(() => {
 describe("prepare button feedback", () => {
   it("shows a busy create button, then focuses the preview directly under it", async () => {
     renderSurfaces()
-    const { button, section } = namedSection("Prepare this claim")
+    const { button, section } = namedSection("Prepare this escrow")
     const scope = within(section)
     fireEvent.click(scope.getByRole("button", { name: "Use my own" }))
     fireEvent.change(scope.getByLabelText("Escrow ID"), { target: { value: claim } })
@@ -154,14 +159,14 @@ describe("prepare button feedback", () => {
     const preview = scope.getByTestId("calldata-preview")
     expect(button.nextElementSibling).toBe(preview)
     expect(section.contains(preview)).toBe(true)
-    expect(preview.getAttribute("aria-label")).toBe("Prepared claim")
+    expect(preview.getAttribute("aria-label")).toBe("Prepared escrow")
     expect(scroll).toHaveBeenCalledWith(REVEAL)
-    expect(scope.getByRole("button", { name: "Prepare this claim" })).toBeTruthy()
+    expect(scope.getByRole("button", { name: "Prepare this escrow" })).toBeTruthy()
   })
 
   it("focuses a create error under the button", async () => {
     renderSurfaces()
-    const { button, section } = namedSection("Prepare this claim")
+    const { button, section } = namedSection("Prepare this escrow")
     fireEvent.click(button)
     expect((within(section).getByRole("button", { name: PREPARING_LABEL }) as HTMLButtonElement).disabled).toBe(true)
 
@@ -188,9 +193,14 @@ describe("prepare button feedback", () => {
     expect(scroll).toHaveBeenCalledWith(REVEAL)
 
     scroll.mockClear()
+    escrowRow[6] = 1n
     const refund = namedSection("Prepare this refund")
+    fireEvent.change(within(refund.section).getByLabelText("Escrow ID"), { target: { value: `${claim.slice(0, -2)}11` } })
     fireEvent.change(within(refund.section).getByLabelText("Escrow ID"), { target: { value: claim } })
-    fireEvent.click(refund.button)
+    await waitFor(() =>
+      expect((within(refund.section).getByRole("button", { name: "Prepare this refund" }) as HTMLButtonElement).disabled).toBe(false),
+    )
+    fireEvent.click(within(refund.section).getByRole("button", { name: "Prepare this refund" }))
     expect((within(refund.section).getByRole("button", { name: PREPARING_LABEL }) as HTMLButtonElement).disabled).toBe(true)
     await waitFor(() => expect(document.activeElement).toBe(within(refund.section).getByTestId("calldata-preview")))
     const refundPreview = within(refund.section).getByTestId("calldata-preview")
@@ -200,6 +210,7 @@ describe("prepare button feedback", () => {
     expect(scroll).toHaveBeenCalledWith(REVEAL)
 
     scroll.mockClear()
+    escrowRow[6] = expiresAt
     const dispute = namedSection("Prepare this dispute")
     fireEvent.change(within(dispute.section).getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.change(within(dispute.section).getByLabelText("Reason"), { target: { value: "late delivery" } })

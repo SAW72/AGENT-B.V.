@@ -36,7 +36,7 @@ const ESC_M1 = [
   {
     name: "DisputeAlreadyResolved",
     selector: "0xf10068b5",
-    meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.",
+    meaning: "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.",
   },
   {
     name: "DisputeVotesCast",
@@ -46,7 +46,7 @@ const ESC_M1 = [
   {
     name: "DisputePredatesEscrow",
     selector: "0x9bc3a099",
-    meaning: "Filing opens the panel case in the same transaction. A case opened before this claim is not opened on this claim.",
+    meaning: "Filing opens the panel case in the same transaction. A case opened before this escrow is not opened on this escrow.",
   },
   {
     name: "DisputeChallengerNotParty",
@@ -56,7 +56,7 @@ const ESC_M1 = [
   {
     name: "DisputeAfterExpiry",
     selector: "0xaf6c5d51",
-    meaning: "The claim window has closed, so this dispute can't be filed.",
+    meaning: "The escrow window has closed, so this dispute can't be filed.",
   },
   {
     name: "RulingPending",
@@ -126,7 +126,7 @@ describe("ESC-M-1 revert text", () => {
   it("renders Error(string) from the glossary, with the name only in the details", () => {
     const data = encodeErrorResult({ abi: errorStringAbi, args: ["not a party"] })
     const presented = presentError(rpcRevert(data))
-    expect(presented.main).toBe("Only the payer or payee on this claim can open a dispute. Switch to that wallet.")
+    expect(presented.main).toBe("Only the payer or payee on this escrow can open a dispute. Switch to that wallet.")
     expect(presented.detail).toBe("Details: Error (0x08c379a0)")
     expect(presented.main).not.toContain("0x08c379a0")
     expect(presented.main).not.toContain("()")
@@ -197,9 +197,9 @@ describe("ESC-M-1 revert text", () => {
 
     for (const error of [rejected, wrapped, coded, stringCode, actionRejected, nestedInfo]) {
       const presented = presentError(error)
-      expect(presented.main).toBe("You cancelled in your wallet")
+      expect(presented.main).toBe("You cancelled. Nothing was sent.")
       expect(presented.detail).toBeNull()
-      expect(errorText(error)).toBe("You cancelled in your wallet")
+      expect(errorText(error)).toBe("You cancelled. Nothing was sent.")
       expect(errorText(error)).not.toContain("secret/wallet.js")
       expect(errorText(error)).not.toContain(" at ")
     }
@@ -268,7 +268,7 @@ describe("preflight", () => {
       })
     } catch (cause) {
       expect(presentError(cause).main).toBe(
-        "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.",
+        "Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.",
       )
     }
   })
@@ -344,7 +344,7 @@ describe("preflight", () => {
     expect(source).toContain("relayerFlight")
   })
 
-  it("does not post to the claim relayer when the relayer-wallet simulation reverts", async () => {
+  it("does not post to the refund relayer when the relayer-wallet simulation reverts", async () => {
     const post = vi.fn()
     const client = {
       call: vi.fn(async () => {
@@ -371,7 +371,7 @@ describe("preflight", () => {
     try {
       await submitRelayerAfterPreflight({ client, to: escrow, data: calldata, value: 0n, post })
     } catch (cause) {
-      expect(presentError(cause).main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this claim.")
+      expect(presentError(cause).main).toBe("Filing opens the panel case in the same transaction. A case that is already resolved is not opened on this escrow.")
     }
   })
 })
@@ -412,8 +412,8 @@ describe("end-user main text", () => {
       ...actions.map((action) => previewCardCopy(action, false)),
       "This check only runs on the Base Sepolia network. Nothing was sent.",
       "The network client isn't ready, so nothing was sent.",
-      "Only the payer or payee on this claim can open a dispute. Switch to that wallet.",
-      "This claim is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
+      "Only the payer or payee on this escrow can open a dispute. Switch to that wallet.",
+      "This escrow is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
       RULING_PENDING_TEXT,
       POST_EXPIRY_REFUND_INTRO,
       ...POST_EXPIRY_REFUND_ORDER.map((step) => step.state),
@@ -443,10 +443,10 @@ describe("end-user main text", () => {
     expect(REVERT_FALLBACK_TEXT).toContain("No funds moved")
     expect(RELAYER_RECEIPT_REVERTED_TEXT).not.toContain("No funds moved")
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "not a party")?.meaning).toBe(
-      "Only the payer or payee on this claim can open a dispute. Switch to that wallet.",
+      "Only the payer or payee on this escrow can open a dispute. Switch to that wallet.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "EscrowNotOpen")?.meaning).toBe(
-      "This claim is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
+      "This escrow is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
     )
   })
 })

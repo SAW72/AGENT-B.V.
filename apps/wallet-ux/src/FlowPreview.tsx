@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
-import { useAccount, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
+import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import {
   ActionButton,
   ActionStatus,
@@ -14,18 +14,23 @@ import {
   GENERATE_LABEL,
   PAYEE_SELF_WARNING,
   USE_OWN_LABEL,
+  NEEDS_WALLET_LABEL,
   useWalletHint,
   type ActionButtonState,
 } from "./actionButton"
+import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { PRODUCT_NAME, TESTNET_LINE } from "./brand"
 import { parseBytes32, randomBytes32 } from "./bytes32"
 import { carryDisputeId, carryEscrowId, readUrlBytes32, useCarriedIds } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
+import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, useEscrowActionGate } from "./escrowGate"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
 import { ErrorNotice } from "./ErrorNotice"
-import { isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
+import { chunkAddress, formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
+import { isWalletCancel } from "./revert"
 import { currentNowSeconds } from "./nowClock"
+import { clearPending, readPending, writePending } from "./pendingTx"
 import { parsePayeeAddress, payeeHasChecksumError } from "./payeeAddress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
@@ -70,6 +75,7 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
+import { CopyButton } from "./ui"
 import { TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
@@ -92,12 +98,18 @@ function SepoliaSubmit({
   escrow,
   panel,
   onConfirmed,
+  resultId,
+  submitReason,
 }: {
   preview: CallPreview
   escrow: Address
   panel: Address
   onConfirmed?: () => void
+  resultId?: string
+  submitReason?: string | null
 }) {
+  const progress = actionProgress(preview.functionName)
+  const slot = preview.functionName
   const account = useAccount()
   const { switchChain } = useSwitchChain()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
@@ -108,12 +120,17 @@ function SepoliaSubmit({
   const { sendTransactionAsync, isPending } = useSendTransaction()
   const [phase, setPhase] = useState<"idle" | "waiting" | "pending" | "confirmed">("idle")
   const [txHash, setTxHash] = useState<Hex | null>(null)
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const [relayerPhase, setRelayerPhase] = useState<RelayerPhase>("idle")
   const [relayerHealth, setRelayerHealth] = useState<RelayerHealth>("unknown")
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const relayerFlight = useRef(false)
+  const ownedHash = useRef<Hex | null>(null)
+  const onConfirmedRef = useRef(onConfirmed)
+  onConfirmedRef.current = onConfirmed
   const waiting = phase === "waiting" || (isPending && phase !== "pending" && phase !== "confirmed")
   const { id: submitSlot, blocked } = useSubmitBlocked(waiting || phase === "pending" || relayerPhase !== "idle")
   const walletHint = useWalletHint(waiting || relayerPhase === "submitting")
@@ -142,8 +159,40 @@ function SepoliaSubmit({
     }
   }, [relayer.url])
 
+  useEffect(() => {
+    const saved = readPending(slot)
+    if (!saved || !publicClient || ownedHash.current === saved.hash) return
+    let stop = false
+    setTxHash(saved.hash)
+    setStartedAt(saved.startedAt)
+    setPhase("pending")
+    void publicClient.waitForTransactionReceipt({ hash: saved.hash }).then(
+      (receipt) => {
+        if (stop) return
+        clearPending(slot)
+        if (receipt.status !== "success") {
+          setPhase("idle")
+          setSubmitError(notice(TX_REVERTED_TEXT))
+          return
+        }
+        setPhase("confirmed")
+        onConfirmedRef.current?.()
+      },
+      () => {
+        if (stop) return
+        clearPending(slot)
+        setPhase("idle")
+        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
+      },
+    )
+    return () => {
+      stop = true
+    }
+  }, [publicClient, slot])
+
   async function onClick() {
     setSubmitError(null)
+    setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
     const current = evaluateEscrowSubmit({
@@ -184,9 +233,13 @@ function SepoliaSubmit({
           }),
       })
       submitted = hash
+      ownedHash.current = hash
+      const stored = writePending(slot, hash)
+      setStartedAt(stored.startedAt)
       setTxHash(hash)
       setPhase("pending")
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      clearPending(slot)
       if (receipt.status !== "success") {
         setPhase("idle")
         setSubmitError(notice(TX_REVERTED_TEXT))
@@ -197,10 +250,15 @@ function SepoliaSubmit({
     } catch (cause) {
       setPhase("idle")
       if (submitted) {
+        clearPending(slot)
         setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
         return
       }
       setTxHash(null)
+      if (isWalletCancel(cause)) {
+        setCancelled(true)
+        return
+      }
       setSubmitError(presentError(cause))
     }
   }
@@ -208,6 +266,7 @@ function SepoliaSubmit({
   async function onRelayer() {
     if (relayerFlight.current) return
     setSubmitError(null)
+    setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
     const gate = relayerSubmitAllowed({
@@ -253,9 +312,14 @@ function SepoliaSubmit({
         client: publicClient,
         onPhase: (phase, hash) => {
           setRelayerPhase(phase)
-          if (hash) setPendingHash(hash)
+          if (hash) {
+            const stored = writePending(`${slot}:relayer`, hash)
+            setStartedAt(stored.startedAt)
+            setPendingHash(hash)
+          }
         },
       })
+      clearPending(`${slot}:relayer`)
       if (outcome.ok) {
         setPendingHash(null)
         setConfirmedHash(outcome.txHash)
@@ -266,6 +330,11 @@ function SepoliaSubmit({
       if (outcome.code === "kill_switch") setRelayerHealth("paused")
     } catch (cause) {
       setPendingHash(null)
+      clearPending(`${slot}:relayer`)
+      if (isWalletCancel(cause)) {
+        setCancelled(true)
+        return
+      }
       setSubmitError(presentError(cause))
     } finally {
       relayerFlight.current = false
@@ -278,9 +347,16 @@ function SepoliaSubmit({
       ? { status: "needs-wallet" }
       : { status: "wrong-network" }
     : phase === "confirmed" && txHash
-      ? { status: "confirmed", hash: txHash }
+      ? {
+          status: "confirmed",
+          hash: txHash,
+          label: progress.done,
+          resultId,
+          nextHref: progress.next?.href,
+          nextLabel: progress.next?.label,
+        }
       : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash }
+        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined }
         : waiting
           ? { status: "waiting-wallet" }
           : { status: "idle", label: "Submit on Base Sepolia" }
@@ -292,12 +368,12 @@ function SepoliaSubmit({
       : relayerPhase === "submitting"
         ? { status: "waiting-wallet" }
         : relayerPhase === "confirming" && pendingHash
-          ? { status: "pending", hash: pendingHash }
+          ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: startedAt ?? undefined }
           : confirmedHash
-            ? { status: "confirmed", hash: confirmedHash }
+            ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, nextHref: progress.next?.href, nextLabel: progress.next?.label }
             : relayerHealth === "unknown"
               ? { status: "busy", label: CHECKING_LABEL }
-              : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit via claim relayer" }
+              : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
 
   return (
     <div>
@@ -305,7 +381,18 @@ function SepoliaSubmit({
       <ActionButton
         testId={control.testId}
         state={walletState}
-        disabled={blocked || (decision.ok && control.disabled && walletState.status === "idle")}
+        reason={
+          submitReason && walletState.status === "idle"
+            ? submitReason
+            : blocked && walletState.status === "idle"
+              ? ANOTHER_PENDING_REASON
+              : walletState.status === "needs-wallet"
+                ? NEEDS_WALLET_LABEL
+                : null
+        }
+        disabled={
+          Boolean(submitReason) || blocked || (decision.ok && control.disabled && walletState.status === "idle")
+        }
         onClick={() => {
           if (walletState.status === "wrong-network") {
             switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })
@@ -314,10 +401,10 @@ function SepoliaSubmit({
           void onClick()
         }}
       />
-      <ActionStatus state={walletState} walletHint={walletHint} />
+      <ActionStatus state={walletState} walletHint={walletHint} cancelled={cancelled && relayerPhase === "idle" && !pendingHash} />
       {relayerButton.visible ? (
         <div data-testid="relayer-panel">
-          <p>Submit through the claim relayer, or from your wallet.</p>
+          <p>Submit the refund request through the relayer, or send it from your wallet.</p>
           {relayerButton.note ? (
             <p className="relayer-pending" role="status" data-testid="relayer-note">
               {relayerButton.note}
@@ -342,6 +429,15 @@ function SepoliaSubmit({
           <ActionButton
             data-testid="relayer-submit"
             state={relayerState}
+            reason={
+              blocked && relayerState.status === "idle"
+                ? ANOTHER_PENDING_REASON
+                : relayerButton.disabled && relayerState.status === "idle"
+                  ? relayerButton.note
+                  : relayerState.status === "needs-wallet"
+                    ? NEEDS_WALLET_LABEL
+                    : null
+            }
             disabled={blocked || isPending || (relayerButton.disabled && relayerState.status === "idle")}
             onClick={() => {
               if (relayerState.status === "wrong-network") {
@@ -372,6 +468,11 @@ function SepoliaSubmit({
   )
 }
 
+function durationPhrase(seconds: number): string {
+  const preset = DURATION_PRESETS.find((item) => item.seconds === seconds)
+  return preset ? `${preset.label}, ${seconds} seconds` : `${seconds} seconds`
+}
+
 function PreviewBlock({
   preview,
   escrow,
@@ -380,6 +481,10 @@ function PreviewBlock({
   label,
   nodeRef,
   onConfirmed,
+  payee,
+  durationSeconds,
+  resultId,
+  submitReason,
 }: {
   preview: CallPreview | null
   escrow: Address
@@ -388,15 +493,45 @@ function PreviewBlock({
   label: string
   nodeRef: (node: HTMLElement | null) => void
   onConfirmed?: () => void
+  payee?: Address | null
+  durationSeconds?: number | null
+  resultId?: string
+  submitReason?: string | null
 }) {
   if (!preview) return null
+  const contractName = CONTRACT_LABELS.escrow
+  const payeeChunks = payee ? chunkAddress(payee) : null
+  const expiry =
+    durationSeconds != null ? formatLocalTimestamp(currentNowSeconds() + BigInt(durationSeconds)) : null
   return (
     <div className="preview" data-testid="calldata-preview" tabIndex={-1} aria-label={label} ref={nodeRef}>
       <p>{previewCardCopy(preview.functionName, relayerConfigured)}</p>
-      <p className="mono">{preview.to}</p>
-      <p>value {formatEther(preview.valueWei)} ETH</p>
+      <p data-testid="review-contract">{contractName}</p>
+      <p className="mono" data-testid="review-contract-address">
+        {preview.to} <CopyButton value={preview.to} />
+      </p>
+      {payeeChunks ? (
+        <p data-testid="review-payee">
+          <span className="mono">{payeeChunks.chunks}</span> <CopyButton value={payeeChunks.checksummed} />
+        </p>
+      ) : null}
+      {durationSeconds != null && expiry ? (
+        <p data-testid="review-duration">
+          Time window: {durationPhrase(durationSeconds)}. Ends {expiry}.
+        </p>
+      ) : null}
+      <p data-testid="review-amount">Amount {formatEther(preview.valueWei)} ETH</p>
+      <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
       <pre className="calldata">{preview.calldata}</pre>
-      <SepoliaSubmit key={preview.calldata} preview={preview} escrow={escrow} panel={panel} onConfirmed={onConfirmed} />
+      <SepoliaSubmit
+        key={preview.calldata}
+        preview={preview}
+        escrow={escrow}
+        panel={panel}
+        onConfirmed={onConfirmed}
+        resultId={resultId}
+        submitReason={submitReason}
+      />
     </div>
   )
 }
@@ -428,6 +563,7 @@ function Field({
         spellCheck={false}
         autoComplete="off"
         readOnly={readOnly}
+        className={readOnly ? "readonly" : undefined}
         onChange={(event) => onChange(event.target.value)}
       />
       {hint ? <p className="hint">{hint}</p> : null}
@@ -460,6 +596,7 @@ function IdField({
         spellCheck={false}
         autoComplete="off"
         readOnly={generated && !own}
+        className={generated && !own ? "readonly" : undefined}
         onChange={(event) => {
           if (generated && !own) return
           onChange(event.target.value)
@@ -520,7 +657,7 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
       <IdForm
         slot="release"
         idPrefix="release"
-        title="Release a claim"
+        title="Release a payment"
         buttonLabel="Prepare this payout"
         missingId={FORM_ERRORS.releaseId}
         action="payout"
@@ -535,7 +672,7 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
       <IdForm
         slot="refund"
         idPrefix="refund"
-        title="Refund a claim"
+        title="Refund a payment"
         buttonLabel="Prepare this refund"
         missingId={FORM_ERRORS.refundId}
         action="refund"
@@ -576,6 +713,11 @@ function CreateForm({
   onActivate: (slot: PrepareSlot) => void
 }) {
   const account = useAccount()
+  const balance = useBalance({
+    address: account.address,
+    chainId: BASE_SEPOLIA_CHAIN_ID,
+    query: { enabled: Boolean(account.address) },
+  })
   const [escrowId, setEscrowId] = useState<string>(() => randomBytes32())
   const [payee, setPayee] = useState("")
   const [payerBotId, setPayerBotId] = useState("")
@@ -588,6 +730,15 @@ function CreateForm({
   const payeeAddress = parsePayeeAddress(payee)
   const payeeIsSelf =
     payeeAddress != null && account.address != null && sameAddress(payeeAddress, account.address)
+  const shownDuration = preset === "custom" ? parseWholeSeconds(customDuration, MAX_DURATION_SECONDS) : preset
+  let overBalance = false
+  if (balance.data?.value != null && value.trim() !== "") {
+    try {
+      overBalance = parseEther(value.trim()) > balance.data.value
+    } catch {
+      overBalance = false
+    }
+  }
 
   function edit(apply: () => void) {
     apply()
@@ -667,7 +818,7 @@ function CreateForm({
       session.publish(null, next)
       onActivate("create")
     } catch (cause) {
-      session.publish(prepareFailure("claim", cause), null)
+      session.publish(prepareFailure("escrow", cause), null)
       onActivate("create")
     } finally {
       session.finish()
@@ -675,9 +826,9 @@ function CreateForm({
   }
 
   return (
-    <section aria-label="Create a claim">
+    <section id="fund-form" aria-label="Fund an escrow">
       <form id="create-claim" onSubmit={(event) => void onSubmit(event)}>
-        <ActionTestnet title="Create a claim" />
+        <ActionTestnet title="Fund an escrow" />
         <IdField
           id="create-id"
           label={ESCROW_ID_LABEL}
@@ -748,9 +899,14 @@ function CreateForm({
           onChange={(next) => edit(() => setValue(next))}
           hint={AMOUNT_HINT}
         />
+        {overBalance ? (
+          <p className="warn-note" role="status" data-testid="balance-warning">
+            {BALANCE_WARN_TEXT}
+          </p>
+        ) : null}
         <ActionButton
           type="submit"
-          state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Prepare this claim" }}
+          state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Prepare this escrow" }}
         />
         {session.error ? (
           <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
@@ -760,8 +916,11 @@ function CreateForm({
             escrow={escrow}
             panel={panel}
             relayerConfigured={relayerConfigured}
-            label="Prepared claim"
+            label="Prepared escrow"
             nodeRef={session.setNode}
+            payee={payeeAddress}
+            durationSeconds={shownDuration}
+            resultId={parseBytes32(escrowId) ?? undefined}
             onConfirmed={() => {
               if (preparedId.current) carryEscrowId(preparedId.current)
             }}
@@ -820,10 +979,14 @@ function IdForm({
   build: (escrowId: Hex) => CallPreview
 }) {
   const carried = useCarriedIds()
+  const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [urlEscrow] = useState(() => readUrlBytes32("escrow"))
   const [escrowId, setEscrowId] = useState(urlEscrow.value ?? "")
   const [touched, setTouched] = useState(false)
   const session = usePrepareSession<CallPreview>(slot, active)
+  const gate = useEscrowActionGate(client, escrow, panel, escrowId)
+  const decision = slot === "release" ? gate.release : gate.refund
+  const gated = gate.status === "ready" && !decision.allowed
 
   useEffect(() => {
     if (touched || !carried.escrowId) return
@@ -852,7 +1015,7 @@ function IdForm({
   }
 
   return (
-    <section aria-label={title}>
+    <section id={`${slot}-form`} aria-label={title}>
       <form onSubmit={(event) => void onSubmit(event)}>
         <ActionTestnet title={title} />
         {intro}
@@ -867,8 +1030,16 @@ function IdForm({
             session.clear()
           }}
         />
+        {gate.status === "reading" && parseBytes32(escrowId) ? <p className="hint">{READING_ESCROW_TEXT}</p> : null}
+        {gate.status === "unread" ? (
+          <p className="warn-note" role="status">
+            {ESCROW_UNREAD_TEXT}
+          </p>
+        ) : null}
         <ActionButton
           type="submit"
+          disabled={gated}
+          reason={gated ? decision.reason : null}
           state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: buttonLabel }}
         />
         {session.error ? (
@@ -881,6 +1052,7 @@ function IdForm({
             relayerConfigured={relayerConfigured}
             label={resultLabel}
             nodeRef={session.setNode}
+            submitReason={gated ? decision.reason : null}
           />
         )}
       </form>
@@ -1053,7 +1225,7 @@ function OpenDisputeForm({
   }
 
   return (
-    <section aria-label="Open a dispute">
+    <section id="dispute-form" aria-label="Open a dispute">
     <form
       id="open-dispute"
       onSubmit={(event) => void onSubmit(event)}
@@ -1084,11 +1256,11 @@ function OpenDisputeForm({
       />
       <Field
         id="open-created-at"
-        label="Time the claim was created"
+        label="Time the escrow was created"
         value={createdAt}
         onChange={() => undefined}
         readOnly
-        hint="Read from the claim. This time is not typed."
+        hint="Read from the escrow. This time is not typed."
       />
       <Field
         id="open-subject"
@@ -1121,6 +1293,7 @@ function OpenDisputeForm({
           relayerConfigured={relayerConfigured}
           label="Prepared dispute"
           nodeRef={session.setNode}
+          resultId={parseBytes32(disputeId) ?? undefined}
           onConfirmed={() => {
             if (preparedDispute.current) carryDisputeId(preparedDispute.current)
           }}

@@ -13,7 +13,7 @@ export function normalizeHexPrefix(raw: string): { prefixed: boolean; body: stri
   return { prefixed: false, body: trimmed }
 }
 
-/** 32 cryptographically random bytes. Not derived from a claim id or the clock. */
+/** 32 cryptographically random bytes. Not derived from an escrow id or the clock. */
 export function randomBytes32(
   fill: (bytes: Uint8Array<ArrayBuffer>) => void = (bytes) => {
     crypto.getRandomValues(bytes)

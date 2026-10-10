@@ -1,4 +1,4 @@
-import { formatEther } from "viem"
+import { formatEther, getAddress } from "viem"
 import { ZERO_ADDRESS } from "./addresses"
 import { presentError } from "./revert"
 
@@ -20,6 +20,21 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
+/** Full checksummed address in groups of four hex characters. Copy uses the unspaced form. */
+export function chunkAddress(address: string): { checksummed: string; chunks: string } {
+  const checksummed = getAddress(address)
+  const body = checksummed.slice(2)
+  const parts: string[] = []
+  for (let index = 0; index < body.length; index += 4) parts.push(body.slice(index, index + 4))
+  return { checksummed, chunks: `0x${parts.join(" ")}` }
+}
+
+export function formatLocalTimestamp(seconds: bigint): string {
+  const ms = seconds * 1000n
+  if (ms < 0n || ms > BigInt(Number.MAX_SAFE_INTEGER)) return "an unknown time"
+  return new Date(Number(ms)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+}
+
 export function formatEth(wei: bigint): string {
   return `${formatEther(wei)} ETH`
 }
@@ -28,14 +43,14 @@ export function isZeroAddress(address: string): boolean {
   return sameAddress(address, ZERO_ADDRESS)
 }
 
-/** Seven days. Refund stays blocked for this long after the claim ends while a dispute is unresolved. */
+/** Seven days. Refund stays blocked for this long after the escrow ends while a dispute is unresolved. */
 export const RULING_GRACE_SECONDS = 7n * 24n * 60n * 60n
 
 export const PAYEE_OPEN_BEFORE_EXPIRY_TEXT =
-  "Open a dispute before this claim ends. After that time, anyone can trigger the refund to the payer unless a dispute is already open. While a dispute is unresolved, a refund stays blocked until 7 days after the claim ends."
+  "Open a dispute before this escrow ends. After that time, anyone can trigger the refund to the payer unless a dispute is already open. While a dispute is unresolved, a refund stays blocked until 7 days after the escrow ends."
 
 export const PAYEE_OPEN_AFTER_EXPIRY_TEXT =
-  "This claim has ended, so a dispute can no longer be opened. Anyone can trigger the refund to the payer unless a dispute is already open. While a dispute is unresolved, a refund stays blocked until 7 days after the claim ends."
+  "This escrow has ended, so a dispute can no longer be opened. Anyone can trigger the refund to the payer unless a dispute is already open. While a dispute is unresolved, a refund stays blocked until 7 days after the escrow ends."
 
 export const PAYEE_EXPIRY_URGENT_LEAD = "Less than a day remains."
 

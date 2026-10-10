@@ -38,6 +38,7 @@ vi.mock("wagmi", () => ({
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({ data: undefined }),
   useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 afterEach(() => {

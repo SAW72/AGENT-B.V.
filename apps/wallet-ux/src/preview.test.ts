@@ -96,10 +96,10 @@ describe("calldata preview", () => {
       "The reason is longer than 256 bytes, so this dispute was not filed.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "InvalidDispute")?.meaning).toBe(
-      "This Dispute ID can't be used. It is blank, or it matches the claim, the subject stored for the panel, or the claim mixed with the time the claim was created.",
+      "This Dispute ID can't be used. It is blank, or it matches the escrow, the subject stored for the panel, or the escrow mixed with the time the escrow was created.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "exists")?.meaning).toBe(
-      "A dispute with this identifier is already open. Generate a new identifier and file again. The claim stays open.",
+      "A dispute with this identifier is already open. Generate a new identifier and file again. The escrow stays open.",
     )
     expect(RELEASE_NOT_AUTHORIZED_TEXT).toBe(
       "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee.",
@@ -111,7 +111,7 @@ describe("calldata preview", () => {
       "This wallet is not a party to this escrow.",
     )
     expect(DISPUTE_PENDING_TEXT).toBe(
-      "Release stays blocked while the dispute is unresolved or was unwound. A refund before the claim ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal.",
+      "Release stays blocked while the dispute is unresolved or was unwound. A refund before the escrow ends stays blocked until the panel unwinds the deal. A refund also stays blocked when the panel upheld the deal.",
     )
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "DisputePending")?.meaning).toBe(DISPUTE_PENDING_TEXT)
     expect(ERROR_GLOSSARY.find((entry) => entry.name === "RulingPending")?.meaning).toBe(RULING_PENDING_TEXT)
@@ -144,7 +144,7 @@ describe("calldata preview", () => {
     expect(POST_EXPIRY_REFUND_ORDER.map((step) => step.state)).toEqual([
       "Open",
       "Disputed and upheld",
-      "Disputed, unresolved, within 7 days after the claim ends",
+      "Disputed, unresolved, within 7 days after the escrow ends",
       "Otherwise",
     ])
     expect(POST_EXPIRY_REFUND_ORDER.map((step) => step.outcome)).toEqual([
@@ -158,7 +158,7 @@ describe("calldata preview", () => {
     expect(flow).toContain("POST_EXPIRY_REFUND_ORDER")
   })
 
-  it("fills the dispute subject from the claim id and the time the claim was created", () => {
+  it("fills the dispute subject from the escrow id and the time the escrow was created", () => {
     const createdAt = 1_700_000_000n
     const subject = panelSubject(escrow, id, createdAt)
     expect(subject).toBe("0x8dd3a572ef4dab46e92861d450fa3d1d64e3e54be19df8fe3c6e73a6ca5fd9eb")
@@ -171,7 +171,7 @@ describe("calldata preview", () => {
     expect(source).toContain('id="open-subject"')
     expect(source).toContain('id="open-created-at"')
     expect(source).toContain("readOnly")
-    expect(source).not.toContain("Use the claim identifier. The panel stores this as the subject.")
+    expect(source).not.toContain("Use the escrow identifier. The panel stores this as the subject.")
     const openForm = source.slice(source.indexOf("function OpenDisputeForm"))
     expect(openForm).toContain("readDisputeSubject")
     expect(openForm).toContain("currentNowSeconds()")

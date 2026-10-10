@@ -238,7 +238,7 @@ describe("dispute subject", () => {
     expect(result).toEqual({ ok: false, message: FORM_ERRORS.subjectNetwork })
   })
 
-  it("falls back to the claim identifier only for an empty revert on the booked escrow", async () => {
+  it("falls back to the escrow identifier only for an empty revert on the booked escrow", async () => {
     for (const fault of emptyReverts) {
       const rpc = await startRpc({ subjectFault: fault })
       const result = await readDisputeSubject(clientFor(rpc.url), escrow, escrowId, now)

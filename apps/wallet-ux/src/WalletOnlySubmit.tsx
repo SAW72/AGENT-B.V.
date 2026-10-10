@@ -1,9 +1,12 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { Address, Hex } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
-import { ActionButton, ActionStatus, useWalletHint, type ActionButtonState } from "./actionButton"
+import { ActionButton, ActionStatus, NEEDS_WALLET_LABEL, useWalletHint, type ActionButtonState } from "./actionButton"
+import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
+import { isWalletCancel } from "./revert"
+import { clearPending, readPending, writePending } from "./pendingTx"
 import { resolveWalletChainId } from "./guard"
 import type { CallPreview } from "./preview"
 import { submitAfterPreflight } from "./preflight"
@@ -20,7 +23,7 @@ type Phase = "idle" | "pending" | "confirmed"
 
 /**
  * Submit one prepared call from the connected wallet on Base Sepolia.
- * This control does not import the claim relayer and does not collect key material.
+ * This control does not import the refund relayer and does not collect key material.
  */
 export function WalletOnlySubmit({
   preview,
@@ -43,7 +46,14 @@ export function WalletOnlySubmit({
   const [phase, setPhase] = useState<Phase>("idle")
   const [signing, setSigning] = useState(false)
   const [txHash, setTxHash] = useState<Hex | null>(null)
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
+  const progress = actionProgress(preview.functionName)
+  const slot = preview.functionName
+  const ownedHash = useRef<Hex | null>(null)
+  const onConfirmedRef = useRef(onConfirmed)
+  onConfirmedRef.current = onConfirmed
   const waiting = signing || (isPending && phase === "idle")
   const { id: submitSlot, blocked } = useSubmitBlocked(waiting || phase === "pending")
   const walletHint = useWalletHint(waiting)
@@ -51,9 +61,41 @@ export function WalletOnlySubmit({
   const control = submitControl(decision, busy)
   const disabled = (decision.ok && (control.disabled || hold || phase !== "idle" || signing)) || blocked
 
+  useEffect(() => {
+    const saved = readPending(slot)
+    if (!saved || !publicClient || ownedHash.current === saved.hash) return
+    let stop = false
+    setTxHash(saved.hash)
+    setStartedAt(saved.startedAt)
+    setPhase("pending")
+    void publicClient.waitForTransactionReceipt({ hash: saved.hash }).then(
+      (receipt) => {
+        if (stop) return
+        clearPending(slot)
+        if (receipt.status !== "success") {
+          setPhase("idle")
+          setSubmitError(notice(TX_REVERTED_TEXT))
+          return
+        }
+        setPhase("confirmed")
+        onConfirmedRef.current?.()
+      },
+      () => {
+        if (stop) return
+        clearPending(slot)
+        setPhase("idle")
+        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
+      },
+    )
+    return () => {
+      stop = true
+    }
+  }, [publicClient, slot])
+
   async function onClick() {
     if (hold || phase !== "idle" || blocked) return
     setSubmitError(null)
+    setCancelled(false)
     const current = evaluateEscrowSubmit({
       walletConnected: account.isConnected,
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
@@ -92,10 +134,14 @@ export function WalletOnlySubmit({
           }),
       })
       submitted = hash
+      ownedHash.current = hash
+      const stored = writePending(slot, hash)
+      setStartedAt(stored.startedAt)
       setSigning(false)
       setTxHash(hash)
       setPhase("pending")
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
+      clearPending(slot)
       if (receipt.status !== "success") {
         setPhase("idle")
         setSubmitError(notice(TX_REVERTED_TEXT))
@@ -106,12 +152,17 @@ export function WalletOnlySubmit({
     } catch (cause) {
       setSigning(false)
       if (submitted) {
+        clearPending(slot)
         setPhase("idle")
         setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
         return
       }
       setTxHash(null)
       setPhase("idle")
+      if (isWalletCancel(cause)) {
+        setCancelled(true)
+        return
+      }
       setSubmitError(presentError(cause))
     }
   }
@@ -121,9 +172,15 @@ export function WalletOnlySubmit({
       ? { status: "needs-wallet" }
       : { status: "wrong-network" }
     : phase === "confirmed" && txHash
-      ? { status: "confirmed", hash: txHash }
+      ? {
+          status: "confirmed",
+          hash: txHash,
+          label: progress.done,
+          nextHref: progress.next?.href,
+          nextLabel: progress.next?.label,
+        }
       : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash }
+        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined }
         : waiting
           ? { status: "waiting-wallet" }
           : { status: "idle", label: "Submit on Base Sepolia" }
@@ -134,6 +191,15 @@ export function WalletOnlySubmit({
       <ActionButton
         testId={control.testId}
         state={state}
+        reason={
+          blocked && state.status === "idle"
+            ? ANOTHER_PENDING_REASON
+            : hold && state.status === "idle"
+              ? "This step is not available for the connected wallet."
+              : state.status === "needs-wallet"
+                ? NEEDS_WALLET_LABEL
+                : null
+        }
         disabled={disabled && state.status !== "wrong-network"}
         onClick={() => {
           if (state.status === "wrong-network") {
@@ -143,7 +209,7 @@ export function WalletOnlySubmit({
           void onClick()
         }}
       />
-      <ActionStatus state={state} walletHint={walletHint} />
+      <ActionStatus state={state} walletHint={walletHint} cancelled={cancelled} />
       {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
       {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
       {submitError?.link ? (

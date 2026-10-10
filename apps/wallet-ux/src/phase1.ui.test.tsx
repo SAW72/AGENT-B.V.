@@ -29,7 +29,7 @@ const disputeId = `0x${"cd".repeat(32)}` as Hex
 const payee = "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5A4" as Address
 const ZERO = "0x0000000000000000000000000000000000000000" as Address
 
-const { sendTransactionAsync, switchChain, releaseSend } = vi.hoisted(() => {
+const { sendTransactionAsync, switchChain, releaseSend, escrowFixture } = vi.hoisted(() => {
   let release: ((hash: Hex) => void) | null = null
   return {
     releaseSend: {
@@ -43,6 +43,7 @@ const { sendTransactionAsync, switchChain, releaseSend } = vi.hoisted(() => {
         release = null
       },
     },
+    escrowFixture: { expiresAt: 4_000_000_000n, state: 0 },
     sendTransactionAsync: vi.fn(async () => `0x${"11".repeat(32)}` as Hex),
     switchChain: vi.fn(),
   }
@@ -66,7 +67,7 @@ const publicClient = {
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
     }
     if (functionName === "escrows") {
-      return [escrow, escrow, claim, claim, 1n, 1_700_000_000n, 4_000_000_000n, 0, `0x${"00".repeat(32)}`, ZERO]
+      return [escrow, escrow, claim, claim, 1n, 1_700_000_000n, escrowFixture.expiresAt, escrowFixture.state, `0x${"00".repeat(32)}`, ZERO]
     }
     return 0n
   },
@@ -84,6 +85,7 @@ vi.mock("wagmi", () => ({
   useSendTransaction: () => ({ sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({ data: undefined }),
   useSwitchChain: () => ({ switchChain, isPending: false, error: null }),
+  useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
 function renderSurfaces() {
@@ -117,6 +119,8 @@ beforeEach(() => {
   sendTransactionAsync.mockReset()
   sendTransactionAsync.mockResolvedValue(`0x${"11".repeat(32)}` as Hex)
   switchChain.mockReset()
+  escrowFixture.expiresAt = 4_000_000_000n
+  escrowFixture.state = 0
   window.history.replaceState(null, "", "/")
 })
 
@@ -128,9 +132,14 @@ afterEach(() => {
 })
 
 describe("phase 1 wallet forms", () => {
+  it("does not show the word claim", () => {
+    renderSurfaces()
+    expect(document.body.textContent ?? "").not.toMatch(/\bclaim\b/i)
+  })
+
   it("uses ActionButton for every prepare and submit control", async () => {
     renderSurfaces()
-    for (const name of ["Prepare this claim", "Prepare this payout", "Prepare this refund", "Prepare this dispute"]) {
+    for (const name of ["Prepare this escrow", "Prepare this payout", "Prepare this refund", "Prepare this dispute"]) {
       const button = screen.getByRole("button", { name })
       expect(button.getAttribute("data-action-button")).toBe("idle")
     }
@@ -202,14 +211,14 @@ describe("phase 1 wallet forms", () => {
 
   it("starts the amount empty and rejects a blank amount", async () => {
     renderSurfaces()
-    const create = sectionOf("Prepare this claim")
+    const create = sectionOf("Prepare this escrow")
     const amount = create.getByLabelText("Amount in ETH") as HTMLInputElement
     expect(amount.value).toBe("")
     expect(amount.placeholder).toBe(AMOUNT_PLACEHOLDER)
     expect(create.getByText(AMOUNT_HINT)).toBeTruthy()
     await fillCreate(create)
     fireEvent.change(amount, { target: { value: "  " } })
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByRole("alert").textContent).toBe(FORM_ERRORS.valueEmpty))
     expect(create.queryByTestId("calldata-preview")).toBeNull()
     expect((create.getByLabelText("Amount in ETH") as HTMLInputElement).value).toBe("  ")
@@ -217,19 +226,19 @@ describe("phase 1 wallet forms", () => {
 
   it("rejects custom durations that are not whole seconds", async () => {
     renderSurfaces()
-    const create = sectionOf("Prepare this claim")
+    const create = sectionOf("Prepare this escrow")
     await fillCreate(create)
     fireEvent.click(create.getByRole("radio", { name: "Custom" }))
     for (const raw of ["0x15180", "8.64e4", "1.5", "-5"]) {
       fireEvent.change(create.getByLabelText("Time window in seconds"), { target: { value: raw } })
-      fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+      fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
       await waitFor(() =>
         expect(create.getByRole("alert").textContent).toBe(durationValidationMessage(MAX_DURATION_SECONDS)),
       )
       expect(create.queryByTestId("calldata-preview")).toBeNull()
     }
     fireEvent.click(create.getByRole("radio", { name: "1 day" }))
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
   })
 
@@ -259,9 +268,9 @@ describe("phase 1 wallet forms", () => {
 
   it("carries a prepared Escrow ID and Dispute ID forward without preparing the next form", async () => {
     renderSurfaces()
-    const create = sectionOf("Prepare this claim")
+    const create = sectionOf("Prepare this escrow")
     await fillCreate(create)
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
     expect((sectionOf("Prepare this payout").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
     expect((sectionOf("Prepare this refund").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
@@ -280,31 +289,31 @@ describe("phase 1 wallet forms", () => {
 
   it("checks the payee, the bots, and the 0x prefix, and clears a preview on edit", async () => {
     renderSurfaces()
-    const create = sectionOf("Prepare this claim")
+    const create = sectionOf("Prepare this escrow")
     await fillCreate(create)
     fireEvent.change(create.getByLabelText("Payee wallet"), { target: { value: ZERO } })
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByRole("alert").textContent).toBe(FORM_ERRORS.payeeZero))
 
     fireEvent.change(create.getByLabelText("Payee wallet"), { target: { value: ACCOUNT } })
     expect(create.getByTestId("payee-self-warning").textContent).toBe(PAYEE_SELF_WARNING)
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
 
     fireEvent.change(create.getByLabelText("Payee bot identifier"), { target: { value: claim } })
     expect(create.queryByTestId("calldata-preview")).toBeNull()
     expect(create.queryByTestId("sepolia-submit")).toBeNull()
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByRole("alert").textContent).toBe(FORM_ERRORS.sameBots))
 
     fireEvent.change(create.getByLabelText("Payee bot identifier"), { target: { value: disputeId } })
     fireEvent.change(create.getByLabelText("Escrow ID"), { target: { value: `0X${claim.slice(2).toUpperCase()}` } })
     fireEvent.change(create.getByLabelText("Payee wallet"), { target: { value: `0X${payee.slice(2).toLowerCase()}` } })
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
 
     fireEvent.change(create.getByLabelText("Payee wallet"), { target: { value: "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4" } })
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByRole("alert").textContent).toBe(FORM_ERRORS.payeeChecksum))
     expect(create.queryByTestId("calldata-preview")).toBeNull()
     expect(create.queryByTestId("sepolia-submit")).toBeNull()
@@ -312,9 +321,9 @@ describe("phase 1 wallet forms", () => {
 
   it("clears the preview when create, release, refund, or dispute inputs change", async () => {
     renderSurfaces()
-    const create = sectionOf("Prepare this claim")
+    const create = sectionOf("Prepare this escrow")
     await fillCreate(create)
-    fireEvent.click(create.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(create.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(create.getByTestId("calldata-preview")).toBeTruthy())
     fireEvent.change(create.getByLabelText("Amount in ETH"), { target: { value: "0.002" } })
     expect(create.queryByTestId("calldata-preview")).toBeNull()
@@ -327,13 +336,18 @@ describe("phase 1 wallet forms", () => {
     expect(release.queryByTestId("calldata-preview")).toBeNull()
 
     const refund = sectionOf("Prepare this refund")
+    escrowFixture.expiresAt = 1n
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: `${claim.slice(0, -2)}11` } })
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await waitFor(() => expect((refund.getByRole("button", { name: "Prepare this refund" }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(refund.getByRole("button", { name: "Prepare this refund" }))
     await waitFor(() => expect(refund.getByTestId("calldata-preview")).toBeTruthy())
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: `${claim.slice(0, -2)}ef` } })
     expect(refund.queryByTestId("calldata-preview")).toBeNull()
 
+    escrowFixture.expiresAt = 4_000_000_000n
     const dispute = sectionOf("Prepare this dispute")
+    fireEvent.change(dispute.getByLabelText("Escrow ID"), { target: { value: `${claim.slice(0, -2)}22` } })
     fireEvent.change(dispute.getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.change(dispute.getByLabelText("Reason"), { target: { value: "late delivery" } })
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))

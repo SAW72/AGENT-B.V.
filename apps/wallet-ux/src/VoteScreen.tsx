@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { formatEther, type Address } from "viem"
+import type { Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { disputePanelAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { parseBytes32, randomBytes32 } from "./bytes32"
 import { ActionButton, ActionStatus, DISPUTE_ID_HINT, DISPUTE_ID_LABEL } from "./actionButton"
+import { CONTRACT_LABELS, GAS_FEE_TEXT, PREPARE_FIRST_REASON, VOTE_SEAT_REASON } from "./actionProgress"
 import { readUrlBytes32, useCarriedIds } from "./carriedIds"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewVote, type CallPreview } from "./preview"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
-import { AddressRow } from "./ui"
+import { AddressRow, CopyButton } from "./ui"
 import {
   ALREADY_VOTED_TEXT,
   ARBITRATOR_READING_TEXT,
@@ -394,6 +395,17 @@ export function VoteScreen({ panel }: { panel: Address }) {
         <ActionButton
           type="submit"
           disabled={session.preparing || !canPrepare}
+          reason={
+            canPrepare
+              ? null
+              : arbitrator === "loading"
+                ? ARBITRATOR_READING_TEXT
+                : arbitrator === "unreadable"
+                  ? ARBITRATOR_UNREADABLE_TEXT
+                  : arbitrator !== "yes"
+                    ? VOTE_SEAT_REASON
+                    : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
+          }
           state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Prepare this vote" }}
         />
         {session.error ? (
@@ -401,8 +413,11 @@ export function VoteScreen({ panel }: { panel: Address }) {
         ) : session.preview ? (
           <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
             <p>{previewCardCopy(session.preview.functionName, false)}</p>
-            <p className="mono">{session.preview.to}</p>
-            <p>value {formatEther(session.preview.valueWei)} ETH</p>
+            <p data-testid="review-contract">{CONTRACT_LABELS.panel}</p>
+            <p className="mono" data-testid="review-contract-address">
+              {session.preview.to} <CopyButton value={session.preview.to} />
+            </p>
+            <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
             <pre className="calldata">{session.preview.calldata}</pre>
             <WalletOnlySubmit
               key={session.preview.calldata}
@@ -415,7 +430,12 @@ export function VoteScreen({ panel }: { panel: Address }) {
         ) : null}
       </form>
       {session.preview ? null : (
-        <ActionButton testId="vote-submit-blocked" disabled state={{ status: "idle", label: "Submit on Base Sepolia" }} />
+        <ActionButton
+          testId="vote-submit-blocked"
+          disabled
+          reason={PREPARE_FIRST_REASON}
+          state={{ status: "idle", label: "Submit on Base Sepolia" }}
+        />
       )}
     </section>
   )

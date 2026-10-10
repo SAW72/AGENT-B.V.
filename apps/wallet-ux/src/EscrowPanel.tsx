@@ -183,9 +183,9 @@ function EscrowLookup({
                       <p>{expiryNotice.urgentText}</p>
                     </div>
                   ) : null}
-                  <strong>{expiryNotice.beforeExpiry ? "Dispute before this claim ends" : "This claim has ended"}</strong>
+                  <strong>{expiryNotice.beforeExpiry ? "Dispute before this escrow ends" : "This escrow has ended"}</strong>
                   <p data-testid="payee-expiry-time">
-                    {expiryNotice.beforeExpiry ? "This claim ends" : "This claim ended"} {expiryNotice.endsLabel}.
+                    {expiryNotice.beforeExpiry ? "This escrow ends" : "This escrow ended"} {expiryNotice.endsLabel}.
                   </p>
                   <p>{expiryNotice.text}</p>
                   {expiryNotice.cta ? (

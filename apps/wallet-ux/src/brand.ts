@@ -25,7 +25,7 @@ export const DISCLAIMER_LINE = `Experimental testnet tool. Not a certification, 
 /** Footer on the wallet page. A signed refund authorizes the relayer to settle that escrow. */
 export const PAGE_FOOTER = `Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. ${CLAIM_SIGNING_LINE}`
 
-export const DESCRIPTION = `${DISPLAY_NAME}: read-only Gate A status and claim tools on Base Sepolia testnet (chain id 84532). Testnet only, no mainnet.`
+export const DESCRIPTION = `${DISPLAY_NAME}: read-only Gate A status and escrow tools on Base Sepolia testnet (chain id 84532). Testnet only, no mainnet.`
 
 const HTML_TOKENS: Record<string, string> = {
   "%PAGE_TITLE%": PAGE_TITLE,

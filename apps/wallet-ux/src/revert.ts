@@ -39,7 +39,7 @@ export type ErrorPresentation = {
   link?: { href: string; label: string }
 }
 
-export const WALLET_CANCEL_TEXT = "You cancelled in your wallet"
+export const WALLET_CANCEL_TEXT = "You cancelled. Nothing was sent."
 export const REVERT_FALLBACK_TEXT = "The contract rejected this transaction. No funds moved."
 export const LOW_BALANCE_TEXT =
   "Not enough test ETH in this wallet to cover the amount plus gas. Get Base Sepolia test ETH from a faucet, then try again."

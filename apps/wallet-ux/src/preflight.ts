@@ -2,7 +2,7 @@ import type { Address, Hex } from "viem"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import deploymentBook from "./base-sepolia.json"
 
-/** Booked Base Sepolia claim-relayer wallet. Simulations of relayer submits use this as `from`. */
+/** Booked Base Sepolia refund relayer wallet. Simulations of relayer submits use this as `from`. */
 export const CLAIM_RELAYER_WALLET = deploymentBook.claimRelayerWallet as Address
 
 export type PreflightCall = {
@@ -42,7 +42,7 @@ export async function submitAfterPreflight<T>(input: {
   return input.send()
 }
 
-/** Simulate the claim as the relayer wallet, then POST only if the call succeeds. */
+/** Simulate the escrow as the relayer wallet, then POST only if the call succeeds. */
 export async function submitRelayerAfterPreflight<T>(input: {
   client: PreflightClient
   to: Address

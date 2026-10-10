@@ -71,7 +71,7 @@ export function assertSubmitTarget(to: Address, allowed: readonly Address[]): vo
 
 export function submitSenderNote(functionName: string): string {
   if (functionName === "createEscrow") {
-    return "The connected wallet sends this new claim. It goes through only when that wallet is allowed to fund claims for the payer."
+    return "The connected wallet sends this new escrow. It goes through only when that wallet is allowed to fund escrows for the payer."
   }
   if (functionName === "dispute") {
     return "The payer or the payee has to send this. The connected wallet is the sender."
@@ -93,13 +93,13 @@ export function submitSenderNote(functionName: string): string {
 export function previewCardCopy(functionName: string, relayerConfigured: boolean): string {
   const lead =
     functionName === "createEscrow"
-      ? "This prepares a new claim."
+      ? "This prepares a new escrow."
       : functionName === "release"
-        ? "This prepares a payout of a claim."
+        ? "This prepares a payout of an escrow."
         : functionName === "refund"
-          ? "This prepares a refund of a claim."
+          ? "This prepares a refund of an escrow."
           : functionName === "dispute"
-            ? "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason."
+            ? "This prepares one dispute on this escrow. The connected wallet sends the Escrow ID, a new Dispute ID, and the reason."
             : functionName === "openDispute"
               ? "This prepares opening a dispute."
               : functionName === "vote"
@@ -109,13 +109,13 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
                   : "This prepares a transaction."
   const relayer =
     relayerConfigured && functionName === "refund"
-      ? " A refund can also be sent through the claim relayer on Base Sepolia."
+      ? " A refund can also be sent through the refund relayer on Base Sepolia."
       : ""
   return `${lead} Submit sends it from the connected wallet on Base Sepolia only.${relayer}`
 }
 
 export const FORM_ERRORS = {
-  createIds: "Enter the Escrow ID and both bot identifiers before creating a claim.",
+  createIds: "Enter the Escrow ID and both bot identifiers before funding an escrow.",
   payee: "Enter the payee wallet address.",
   payeeChecksum: "This address has a checksum error. Paste it again exactly, or use all lowercase.",
   payeeZero: "Enter a payee wallet that is not the zero address.",
@@ -123,8 +123,8 @@ export const FORM_ERRORS = {
   valueEmpty: "Enter an amount of test ETH, such as 0.001.",
   valueFormat: "Enter an amount of ETH, such as 0.01.",
   valueZero: "Enter an amount greater than zero. Nothing was sent.",
-  releaseId: "Enter the Escrow ID before releasing this claim.",
-  refundId: "Enter the Escrow ID before refunding this claim.",
+  releaseId: "Enter the Escrow ID before releasing this escrow.",
+  refundId: "Enter the Escrow ID before refunding this escrow.",
   openIds: "Enter the Escrow ID before opening a dispute.",
   openReason: "Enter a reason before opening a dispute.",
   subjectNetwork: "The network did not answer, so this dispute was not prepared.",
@@ -132,10 +132,10 @@ export const FORM_ERRORS = {
   subjectRejected: "The escrow rejected the subject read, so this dispute was not prepared.",
   subjectNotBooked: "This contract did not return a dispute subject. It is not a supported escrow.",
   subjectNotOpen:
-    "This claim is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
-  subjectExpired: "The claim window has closed, so this dispute can't be filed.",
+    "This escrow is no longer in a state where that action is allowed (it may already be released, refunded, or disputed). Refresh to see its current status.",
+  subjectExpired: "The escrow window has closed, so this dispute can't be filed.",
   reasonTooLong: "The reason is longer than 256 bytes, so this dispute was not prepared.",
-  subjectMissing: "This claim is not on the escrow yet, so this dispute was not prepared.",
+  subjectMissing: "This escrow is not on the escrow yet, so this dispute was not prepared.",
   subjectPending: "The subject is still being read, so this dispute was not prepared.",
   disputeClaim: "Enter the Escrow ID before opening a dispute.",
   disputeId: "Enter the Dispute ID before opening a dispute.",

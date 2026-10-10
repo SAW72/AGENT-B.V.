@@ -102,4 +102,34 @@ describe("injected reconnect", () => {
     expect(failures.join("\n")).not.toContain("getChainId is not a function")
     window.removeEventListener("unhandledrejection", onRejection)
   })
+
+  it("stays up when a reload restores a connector that has no methods", async () => {
+    const failures: string[] = []
+    const onError = (event: ErrorEvent) => {
+      failures.push(event.error instanceof Error ? event.error.message : event.message)
+    }
+    window.addEventListener("error", onError)
+    installProvider()
+    wagmiConfig.setState((current) => ({
+      ...current,
+      chainId: 84532,
+      status: "connected",
+      current: "plain",
+      connections: new Map([
+        [
+          "plain",
+          {
+            accounts: [ACCOUNT],
+            chainId: 84532,
+            connector: { id: "injected", name: "Injected", type: "injected", uid: "plain" } as never,
+          },
+        ],
+      ]),
+    }))
+    renderProbe()
+    await waitFor(() => expect(screen.getByTestId("probe-status").textContent).toContain("connected"))
+    expect(screen.getByRole("heading", { name: "Agent-BV (Agent Bot Verifier)" })).toBeTruthy()
+    expect(failures.join("\n")).not.toContain("getChainId is not a function")
+    window.removeEventListener("error", onError)
+  })
 })

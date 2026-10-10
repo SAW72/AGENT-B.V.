@@ -8,7 +8,7 @@ import { EscrowPanel } from "./EscrowPanel"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
-import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
+import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, PRODUCT_NAME, TESTNET_LINE } from "./brand"
 import {
   GATE_OWNER_MATCH,
   GATE_OWNER_MISMATCH,
@@ -247,17 +247,37 @@ export function App() {
 
   return (
     <div className="wrap">
-      <header>
-        <h1 className="heading-with-pill">
-          <span>{DISPLAY_NAME}</span>
-          <span className="pill info" data-testid="page-testnet">
-            {TESTNET_LINE}
-          </span>
-        </h1>
-        <p className="lede">
-          {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
-        </p>
+      <header className="site-header">
+        <h1 className="wordmark">{PRODUCT_NAME}</h1>
+        <span className="pill info" data-testid="page-testnet">
+          {TESTNET_LINE}
+        </span>
+        <span className={showSwitch ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
+          {account.isConnected && account.address ? (
+            <span className="mono">{shortAddress(account.address)}</span>
+          ) : (
+            <span>No wallet</span>
+          )}
+          {account.isConnected ? (
+            showSwitch ? (
+              <button
+                type="button"
+                className="secondary"
+                data-testid="header-switch"
+                onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
+                disabled={switchPending}
+              >
+                {switchPending ? "Switching…" : "Switch to Base Sepolia"}
+              </button>
+            ) : (
+              <span>Base Sepolia</span>
+            )
+          ) : null}
+        </span>
       </header>
+      <p className="lede">
+        {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+      </p>
 
       <section className="card" aria-labelledby="connection-heading">
         <h2 id="connection-heading">Connection</h2>

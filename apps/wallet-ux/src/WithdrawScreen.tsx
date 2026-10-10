@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { formatEther, type Address } from "viem"
+import type { Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
 import { ActionButton, ActionStatus } from "./actionButton"
+import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { previewCardCopy } from "./submit"
-import { AddressRow } from "./ui"
+import { AddressRow, CopyButton } from "./ui"
 import {
   NOTHING_TO_WITHDRAW_TEXT,
   WITHDRAW_CONNECT_TEXT,
@@ -172,6 +173,7 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
         <ActionButton
           type="submit"
           disabled={session.preparing || !canPrepare}
+          reason={canPrepare ? null : blockedLabel}
           state={
             session.preparing
               ? { status: "busy", label: "Preparing…" }
@@ -189,8 +191,11 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
             ref={session.setNode}
           >
             <p>{previewCardCopy(session.preview.functionName, false)}</p>
-            <p className="mono">{session.preview.to}</p>
-            <p>value {formatEther(session.preview.valueWei)} ETH</p>
+            <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
+            <p className="mono" data-testid="review-contract-address">
+              {session.preview.to} <CopyButton value={session.preview.to} />
+            </p>
+            <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
             <pre className="calldata">{session.preview.calldata}</pre>
             <WalletOnlySubmit
               key={session.preview.calldata}

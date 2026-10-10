@@ -11,8 +11,8 @@ export function ErrorNotice({
 }) {
   const shown = visibleDetail(detail)
   return (
-    <div className="error-notice" role="alert">
-      <p className="error-notice-main">{main}</p>
+    <div className="error-notice" role="alert" aria-live="assertive">
+      <p className="error-notice-main icon-bad">{main}</p>
       {link ? (
         <p className="error-notice-detail">
           <a href={link.href}>{link.label}</a>

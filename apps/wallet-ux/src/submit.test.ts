@@ -63,21 +63,21 @@ describe("submit target", () => {
   })
 
   it("states who sends each prepared transaction in plain English", () => {
-    expect(submitSenderNote("createEscrow")).toMatch(/allowed to fund claims for the payer/)
+    expect(submitSenderNote("createEscrow")).toMatch(/allowed to fund escrows for the payer/)
     expect(submitSenderNote("release")).toBe(
       "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee. The connected wallet sends this payout on Base Sepolia.",
     )
     expect(submitSenderNote("refund")).toBe("Anyone can send a refund. The connected wallet sends this on Base Sepolia.")
     expect(submitSenderNote("dispute")).toBe("The payer or the payee has to send this. The connected wallet is the sender.")
     expect(previewCardCopy("dispute", false)).toBe(
-      "This prepares one dispute on this claim. The connected wallet sends the claim, a new identifier, and the reason. Submit sends it from the connected wallet on Base Sepolia only.",
+      "This prepares one dispute on this escrow. The connected wallet sends the Escrow ID, a new Dispute ID, and the reason. Submit sends it from the connected wallet on Base Sepolia only.",
     )
-    expect(previewCardCopy("dispute", true)).not.toMatch(/claim relayer/)
-    expect(previewCardCopy("release", true)).not.toMatch(/claim relayer/)
+    expect(previewCardCopy("dispute", true)).not.toMatch(/refund relayer/)
+    expect(previewCardCopy("release", true)).not.toMatch(/refund relayer/)
     expect(previewCardCopy("release", true)).toMatch(/connected wallet on Base Sepolia only/)
-    expect(previewCardCopy("refund", true)).toMatch(/claim relayer on Base Sepolia/)
-    expect(previewCardCopy("openDispute", true)).not.toMatch(/claim relayer/)
-    expect(previewCardCopy("createEscrow", true)).not.toMatch(/claim relayer/)
+    expect(previewCardCopy("refund", true)).toMatch(/refund relayer on Base Sepolia/)
+    expect(previewCardCopy("openDispute", true)).not.toMatch(/refund relayer/)
+    expect(previewCardCopy("createEscrow", true)).not.toMatch(/refund relayer/)
     expect(FORM_ERRORS.disputeClaim).toBe("Enter the Escrow ID before opening a dispute.")
     for (const text of [submitSenderNote("dispute"), previewCardCopy("dispute", true), FORM_ERRORS.disputeClaim]) {
       expect(text).not.toMatch(/[()]/)

@@ -22,7 +22,7 @@ afterEach(() => {
 })
 
 const states: ActionButtonState[] = [
-  { status: "idle", label: "Prepare this claim" },
+  { status: "idle", label: "Prepare this escrow" },
   { status: "needs-wallet" },
   { status: "wrong-network" },
   { status: "busy", label: "Preparing…" },

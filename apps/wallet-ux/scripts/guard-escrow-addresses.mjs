@@ -10,8 +10,8 @@ export const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c"
 export const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d"
 export const RETIRED_ESCROWS = [RETIRED_ESCROW, RETIRED_ESCROW_ESC_M1]
 export const PHRASES = [
-  "Submitting through the claim relayer",
-  "Submit through the claim relayer, or from your wallet.",
+  "Submitting the refund request",
+  "Submit the refund request through the relayer, or send it from your wallet.",
 ]
 
 export class GuardError extends Error {

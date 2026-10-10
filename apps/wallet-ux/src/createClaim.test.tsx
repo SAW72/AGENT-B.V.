@@ -60,6 +60,7 @@ vi.mock("wagmi", async (importOriginal) => {
     usePublicClient: () => publicClient,
     useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
     useWalletClient: () => ({ data: undefined }),
+    useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
   }
 })
 
@@ -162,7 +163,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe("prepare this claim", () => {
+describe("prepare this escrow", () => {
   it("shows a preview under the button for the reported Base Sepolia inputs", async () => {
     renderApp()
     await waitFor(() => {
@@ -171,15 +172,15 @@ describe("prepare this claim", () => {
     expect(duplicateIds()).toEqual([])
 
     const scope = fillCreate(EXACT)
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
     const preview = scope.getByTestId("calldata-preview")
-    const button = scope.getByRole("button", { name: "Prepare this claim" })
+    const button = scope.getByRole("button", { name: "Prepare this escrow" })
     expect(button.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(scope.queryByRole("alert")).toBeNull()
     expect(document.querySelectorAll('[data-testid="calldata-preview"]')).toHaveLength(1)
-    expect(preview.textContent).toContain("This prepares a new claim.")
+    expect(preview.textContent).toContain("This prepares a new escrow.")
     expect(preview.textContent).toContain("0.001 ETH")
 
     const calldata = preview.querySelector("pre")?.textContent
@@ -210,7 +211,7 @@ describe("prepare this claim", () => {
       })
       fireEvent.click(scope.getByRole("radio", { name: "Custom" }))
       fireEvent.change(scope.getByLabelText("Time window in seconds"), { target: { value: " 86400 " } })
-      fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+      fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
       await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
       const preview = scope.getByTestId("calldata-preview")
@@ -232,10 +233,10 @@ describe("prepare this claim", () => {
       ...EXACT,
       "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
     })
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payeeChecksum))
     fireEvent.change(scope.getByLabelText("Payee wallet"), { target: { value: "not-an-address" } })
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee))
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
     expect(scope.queryByTestId("sepolia-submit")).toBeNull()
@@ -247,10 +248,10 @@ describe("prepare this claim", () => {
   it("renders a validation error under the button instead of leaving the form blank", async () => {
     renderApp()
     const scope = createScope()
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
-    const button = scope.getByRole("button", { name: "Prepare this claim" })
+    const button = scope.getByRole("button", { name: "Prepare this escrow" })
     expect(alert.textContent).toBe(FORM_ERRORS.createIds)
     expect(button.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
@@ -260,10 +261,10 @@ describe("prepare this claim", () => {
     world.explode = "encoder blew up"
     renderApp()
     const scope = fillCreate(EXACT)
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
-    expect(alert.textContent).toBe("Couldn't prepare this claim: encoder blew up")
+    expect(alert.textContent).toBe("Couldn't prepare this escrow: encoder blew up")
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
     expect(document.querySelector('[data-testid="calldata-preview"]')).toBeNull()
   })

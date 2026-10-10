@@ -1,4 +1,6 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
+import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
+import { CopyButton } from "./ui"
 import { txExplorerUrl, TX_CONFIRMED_TEXT, TX_LINK_LABEL, TX_PENDING_TEXT } from "./walletCopy"
 
 export const NEEDS_WALLET_LABEL = "Connect a wallet on Base Sepolia"
@@ -26,8 +28,8 @@ export type ActionButtonState =
   | { status: "wrong-network" }
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
-  | { status: "pending"; hash: string }
-  | { status: "confirmed"; hash: string }
+  | { status: "pending"; hash: string; label?: string; startedAt?: number }
+  | { status: "confirmed"; hash: string; label?: string; resultId?: string; nextHref?: string; nextLabel?: string }
   | { status: "error"; message: string }
 
 export function actionButtonLabel(state: ActionButtonState): string {
@@ -42,12 +44,20 @@ export function actionButtonLabel(state: ActionButtonState): string {
     case "waiting-wallet":
       return CONFIRM_WALLET_LABEL
     case "pending":
-      return PENDING_NETWORK_LABEL
+      return state.label ?? PENDING_NETWORK_LABEL
     case "confirmed":
-      return DONE_LABEL
+      return state.label ?? DONE_LABEL
     case "error":
       return state.message
   }
+}
+
+function Mark({ kind, glyph }: { kind: "ok" | "wait" | "bad" | "warn" | "muted"; glyph: string }) {
+  return (
+    <span className={`mark mark-${kind}`} aria-hidden="true">
+      {glyph}
+    </span>
+  )
 }
 
 export function ActionButton({
@@ -56,6 +66,7 @@ export function ActionButton({
   type = "button",
   testId,
   disabled = false,
+  reason,
   ...rest
 }: {
   state: ActionButtonState
@@ -63,6 +74,7 @@ export function ActionButton({
   type?: "button" | "submit"
   testId?: string
   disabled?: boolean
+  reason?: string | null
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type" | "onClick" | "disabled">) {
   const busy = state.status === "busy" || state.status === "waiting-wallet" || state.status === "pending"
   const locked =
@@ -72,19 +84,39 @@ export function ActionButton({
     state.status === "waiting-wallet" ||
     state.status === "pending" ||
     state.status === "confirmed"
+  const shownReason = locked ? reason : null
   return (
-    <button
-      type={type}
-      data-testid={testId}
-      {...rest}
-      data-action-button={state.status}
-      disabled={locked}
-      aria-busy={busy || undefined}
-      onClick={onClick}
-    >
-      {actionButtonLabel(state)}
-    </button>
+    <>
+      {shownReason ? (
+        <p className="action-reason" data-testid="action-reason">
+          <Mark kind="muted" glyph="–" /> {shownReason}
+        </p>
+      ) : null}
+      <button
+        type={type}
+        data-testid={testId}
+        {...rest}
+        data-action-button={state.status}
+        disabled={locked}
+        aria-busy={busy || undefined}
+        onClick={onClick}
+      >
+        {actionButtonLabel(state)}
+      </button>
+    </>
   )
+}
+
+function usePendingSlow(startedAt: number | undefined, active: boolean): boolean {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active || startedAt == null) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active, startedAt])
+  if (!active || startedAt == null) return false
+  return now - startedAt >= PENDING_SLOW_MS
 }
 
 /** Result under the button that produced it: wallet hint, pending, confirmed, or a plain error. */
@@ -95,6 +127,7 @@ export function ActionStatus({
   nodeRef,
   pendingTestId = "tx-pending",
   confirmedTestId = "tx-confirmed",
+  cancelled = false,
 }: {
   state: ActionButtonState
   walletHint?: boolean
@@ -102,25 +135,36 @@ export function ActionStatus({
   nodeRef?: (node: HTMLElement | null) => void
   pendingTestId?: string
   confirmedTestId?: string
+  cancelled?: boolean
 }) {
+  const slow = usePendingSlow(state.status === "pending" ? state.startedAt : undefined, state.status === "pending")
   if (state.status === "error") {
     return (
-      <p className="bad" role="alert" tabIndex={-1} ref={nodeRef} data-testid="action-error">
+      <p className="bad icon-bad" role="alert" aria-live="assertive" tabIndex={-1} ref={nodeRef} data-testid="action-error">
         {state.message}
+      </p>
+    )
+  }
+  if (cancelled && state.status === "idle") {
+    return (
+      <p className="cancel-note" role="status" aria-live="polite" data-testid="wallet-cancel">
+        <Mark kind="muted" glyph="–" /> {CANCELLED_IDLE_TEXT}
       </p>
     )
   }
   if (state.status === "waiting-wallet") {
     return walletHint ? (
-      <p className="hint" role="status" data-testid="wallet-hint">
-        {WALLET_HINT_TEXT}
+      <p className="hint" role="status" aria-live="polite">
+        <Mark kind="wait" glyph="…" /> <span data-testid="wallet-hint">{WALLET_HINT_TEXT}</span>
       </p>
     ) : null
   }
   if (state.status === "pending") {
     return (
-      <div role="status" tabIndex={-1} ref={nodeRef} data-testid="action-pending">
-        <p data-testid={pendingTestId}>{PENDING_NETWORK_LABEL}</p>
+      <div role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-pending">
+        <p>
+          <Mark kind="wait" glyph="…" /> <span data-testid={pendingTestId}>{PENDING_NETWORK_LABEL}</span>
+        </p>
         <p className="mono" data-testid="tx-hash">
           {state.hash}
         </p>
@@ -129,15 +173,33 @@ export function ActionStatus({
             {TX_LINK_LABEL}
           </a>
         </p>
+        {slow ? (
+          <p className="warn-note" data-testid="pending-slow">
+            <Mark kind="warn" glyph="!" /> {PENDING_SLOW_TEXT}
+          </p>
+        ) : null}
       </div>
     )
   }
   if (state.status === "confirmed") {
+    const done = state.label ?? DONE_LABEL
     return (
-      <div className="action-done" role="status" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
+      <div className="action-done" role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
         <p>
-          <span aria-hidden="true">✓</span> <span data-testid={confirmedTestId}>{DONE_LABEL}</span>
+          <Mark kind="ok" glyph="✓" /> <span data-testid={confirmedTestId}>{done}</span>
         </p>
+        {state.resultId ? (
+          <p className="result-id" data-testid="result-id">
+            <span className="mono">{state.resultId}</span> <CopyButton value={state.resultId} />
+          </p>
+        ) : null}
+        {state.nextHref && state.nextLabel ? (
+          <p>
+            <a href={state.nextHref} data-testid="next-step">
+              {state.nextLabel}
+            </a>
+          </p>
+        ) : null}
         <p className="mono" data-testid="tx-hash">
           {state.hash}
         </p>
