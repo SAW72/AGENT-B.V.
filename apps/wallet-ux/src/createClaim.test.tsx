@@ -172,6 +172,7 @@ describe("prepare this claim", () => {
 
     const scope = fillCreate(EXACT)
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
     const preview = scope.getByTestId("calldata-preview")
     const button = scope.getByRole("button", { name: "Prepare this claim" })
@@ -192,7 +193,7 @@ describe("prepare this claim", () => {
     expect(decoded.args?.[4]).toBe(86400n)
   })
 
-  it("accepts lowercase, mixed-case, and surrounding whitespace", () => {
+  it("accepts lowercase, mixed-case, and surrounding whitespace", async () => {
     renderApp()
     const payees = [
       `  ${PAYEE}  `,
@@ -209,6 +210,7 @@ describe("prepare this claim", () => {
         "Amount in ETH": " 0.001 ",
       })
       fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+      await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
       const preview = scope.getByTestId("calldata-preview")
       expect(scope.queryByRole("alert")).toBeNull()
@@ -223,15 +225,14 @@ describe("prepare this claim", () => {
     }
   })
 
-  it("rejects a mixed-case payee with a bad checksum", () => {
+  it("rejects a mixed-case payee with a bad checksum", async () => {
     renderApp()
     const scope = fillCreate({
       ...EXACT,
       "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
     })
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
-
-    expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee)
+    await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee))
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
     expect(scope.queryByTestId("sepolia-submit")).toBeNull()
     expect(scope.queryByTestId("submit-refused")).toBeNull()
@@ -239,10 +240,11 @@ describe("prepare this claim", () => {
     expect(document.querySelector('[data-testid="calldata-preview"]')).toBeNull()
   })
 
-  it("renders a validation error under the button instead of leaving the form blank", () => {
+  it("renders a validation error under the button instead of leaving the form blank", async () => {
     renderApp()
     const scope = createScope()
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
     const button = scope.getByRole("button", { name: "Prepare this claim" })
     expect(alert.textContent).toBe(FORM_ERRORS.createIds)
@@ -250,11 +252,12 @@ describe("prepare this claim", () => {
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
   })
 
-  it("shows an injected prepare failure under the button", () => {
+  it("shows an injected prepare failure under the button", async () => {
     world.explode = "encoder blew up"
     renderApp()
     const scope = fillCreate(EXACT)
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
     expect(alert.textContent).toBe("Couldn't prepare this claim: encoder blew up")
     expect(scope.queryByTestId("calldata-preview")).toBeNull()

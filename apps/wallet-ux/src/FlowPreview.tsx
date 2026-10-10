@@ -7,6 +7,7 @@ import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } f
 import { currentNowSeconds } from "./nowClock"
 import { ErrorNotice } from "./ErrorNotice"
 import { presentError, type ErrorPresentation } from "./format"
+import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
 import {
   CASE_ID_HINT,
@@ -69,10 +70,6 @@ function parsePayeeAddress(raw: string): Address | null {
   } catch {
     return null
   }
-}
-
-function prepareFailure(cause: unknown): string {
-  return `Couldn't prepare this claim: ${presentError(cause).main}`
 }
 
 function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escrow: Address; panel: Address }) {
@@ -288,15 +285,19 @@ function PreviewBlock({
   escrow,
   panel,
   relayerConfigured,
+  label,
+  nodeRef,
 }: {
   preview: CallPreview | null
   escrow: Address
   panel: Address
   relayerConfigured: boolean
+  label: string
+  nodeRef: (node: HTMLElement | null) => void
 }) {
   if (!preview) return null
   return (
-    <div className="preview" data-testid="calldata-preview">
+    <div className="preview" data-testid="calldata-preview" tabIndex={-1} aria-label={label} ref={nodeRef}>
       <p>{previewCardCopy(preview.functionName, relayerConfigured)}</p>
       <p className="mono">{preview.to}</p>
       <p>value {formatEther(preview.valueWei)} ETH</p>
@@ -337,30 +338,13 @@ function Field({
   )
 }
 
+type PrepareSlot = "create" | "release" | "refund" | "dispute"
+
 export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address }) {
-  const [error, setError] = useState<string | null>(null)
-  const [previews, setPreviews] = useState<CallPreview[]>([])
-  const [sharedEpoch, setSharedEpoch] = useState(0)
+  const [active, setActive] = useState<PrepareSlot | null>(null)
   const relayerConfigured = relayerConfigFromEnv({
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   }).url != null
-
-  function show(next: CallPreview | CallPreview[]) {
-    setError(null)
-    setPreviews(Array.isArray(next) ? next : [next])
-    setSharedEpoch((value) => value + 1)
-  }
-
-  function fail(message: string) {
-    setPreviews([])
-    setError(message)
-    setSharedEpoch((value) => value + 1)
-  }
-
-  function clearShared() {
-    setError(null)
-    setPreviews([])
-  }
 
   return (
     <div>
@@ -373,37 +357,41 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
         escrow={escrow}
         panel={panel}
         relayerConfigured={relayerConfigured}
-        resetToken={sharedEpoch}
-        onClearShared={clearShared}
+        active={active}
+        onActivate={setActive}
       />
       <IdForm
+        slot="release"
         idPrefix="release"
         title="Release a claim"
         buttonLabel="Prepare this payout"
         missingId={FORM_ERRORS.releaseId}
-        onSubmit={(escrowId) => show(previewRelease(escrow, escrowId))}
-        onError={fail}
+        action="payout"
+        resultLabel="Prepared payout"
+        escrow={escrow}
+        panel={panel}
+        relayerConfigured={relayerConfigured}
+        active={active}
+        onActivate={setActive}
+        build={(escrowId) => previewRelease(escrow, escrowId)}
       />
       <IdForm
+        slot="refund"
         idPrefix="refund"
         title="Refund a claim"
         buttonLabel="Prepare this refund"
         missingId={FORM_ERRORS.refundId}
+        action="refund"
+        resultLabel="Prepared refund"
         intro={<PostExpiryRefundOrder />}
-        onSubmit={(escrowId) => show(previewRefund(escrow, escrowId))}
-        onError={fail}
-      />
-      <OpenDisputeForm
         escrow={escrow}
-        onPreview={show}
-        onError={fail}
+        panel={panel}
+        relayerConfigured={relayerConfigured}
+        active={active}
+        onActivate={setActive}
+        build={(escrowId) => previewRefund(escrow, escrowId)}
       />
-      {error ? (
-        <p className="bad" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <PreviewBlock preview={previews[0] ?? null} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
+      <OpenDisputeForm escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} active={active} onActivate={setActive} />
       <h3>Revert glossary</h3>
       <dl className="glossary">
         {ERROR_GLOSSARY.map((entry) => (
@@ -421,14 +409,14 @@ function CreateForm({
   escrow,
   panel,
   relayerConfigured,
-  resetToken,
-  onClearShared,
+  active,
+  onActivate,
 }: {
   escrow: Address
   panel: Address
   relayerConfigured: boolean
-  resetToken: number
-  onClearShared: () => void
+  active: PrepareSlot | null
+  onActivate: (slot: PrepareSlot) => void
 }) {
   const [escrowId, setEscrowId] = useState("")
   const [payee, setPayee] = useState("")
@@ -436,49 +424,44 @@ function CreateForm({
   const [payeeBotId, setPayeeBotId] = useState("")
   const [duration, setDuration] = useState("86400")
   const [value, setValue] = useState("0.01")
-  const [formError, setFormError] = useState<string | null>(null)
-  const [preview, setPreview] = useState<CallPreview | null>(null)
+  const session = usePrepareSession<CallPreview>("create", active)
 
-  useEffect(() => {
-    setFormError(null)
-    setPreview(null)
-  }, [resetToken])
-
-  function report(message: string) {
-    setPreview(null)
-    setFormError(message)
-    onClearShared()
-  }
-
-  function onSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault()
+    if (!session.begin()) return
     try {
+      await yieldPrepareTick()
       const id = parseBytes32(escrowId)
       const payerBot = parseBytes32(payerBotId)
       const payeeBot = parseBytes32(payeeBotId)
       if (!id || !payerBot || !payeeBot) {
-        report(FORM_ERRORS.createIds)
+        session.publish(FORM_ERRORS.createIds, null)
+        onActivate("create")
         return
       }
       const payeeAddress = parsePayeeAddress(payee)
       if (!payeeAddress) {
-        report(FORM_ERRORS.payee)
+        session.publish(FORM_ERRORS.payee, null)
+        onActivate("create")
         return
       }
       const durationSeconds = Number(duration.trim())
       if (!Number.isInteger(durationSeconds) || durationSeconds <= 0 || durationSeconds > MAX_DURATION_SECONDS) {
-        report(durationValidationMessage(MAX_DURATION_SECONDS))
+        session.publish(durationValidationMessage(MAX_DURATION_SECONDS), null)
+        onActivate("create")
         return
       }
       let valueWei: bigint
       try {
         valueWei = parseEther(value.trim())
       } catch {
-        report(FORM_ERRORS.valueFormat)
+        session.publish(FORM_ERRORS.valueFormat, null)
+        onActivate("create")
         return
       }
       if (valueWei <= 0n) {
-        report(FORM_ERRORS.valueZero)
+        session.publish(FORM_ERRORS.valueZero, null)
+        onActivate("create")
         return
       }
       const next = previewCreateEscrow({
@@ -490,43 +473,57 @@ function CreateForm({
         durationSeconds: BigInt(durationSeconds),
         valueWei,
       })
-      setFormError(null)
-      setPreview(next)
-      onClearShared()
+      session.publish(null, next)
+      onActivate("create")
     } catch (cause) {
-      report(prepareFailure(cause))
+      session.publish(prepareFailure("claim", cause), null)
+      onActivate("create")
+    } finally {
+      session.finish()
     }
   }
 
   return (
-    <form id="create-claim" onSubmit={onSubmit}>
-      <h3>Create a claim</h3>
-      <Field id="create-id" label="Claim identifier" value={escrowId} onChange={setEscrowId} />
-      <Field id="create-payee" label="Payee wallet" value={payee} onChange={setPayee} />
-      <Field id="create-payer-bot" label="Payer bot identifier" value={payerBotId} onChange={setPayerBotId} />
-      <Field id="create-payee-bot" label="Payee bot identifier" value={payeeBotId} onChange={setPayeeBotId} />
-      <Field
-        id="create-duration"
-        label="Time window in seconds"
-        value={duration}
-        onChange={setDuration}
-        hint={`Greater than 0 and at most ${MAX_DURATION_SECONDS}, which is 30 days.`}
-      />
-      <Field
-        id="create-value"
-        label="Amount in ETH"
-        value={value}
-        onChange={setValue}
-        hint="This amount is sent with the transaction on Base Sepolia. The connected wallet must be allowed to fund claims for the payer."
-      />
-      <button type="submit">Prepare this claim</button>
-      {formError ? (
-        <p className="bad" role="alert">
-          {formError}
-        </p>
-      ) : null}
-      <PreviewBlock preview={preview} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
-    </form>
+    <section aria-label="Create a claim">
+      <form id="create-claim" onSubmit={(event) => void onSubmit(event)}>
+        <h3>Create a claim</h3>
+        <Field id="create-id" label="Claim identifier" value={escrowId} onChange={setEscrowId} />
+        <Field id="create-payee" label="Payee wallet" value={payee} onChange={setPayee} />
+        <Field id="create-payer-bot" label="Payer bot identifier" value={payerBotId} onChange={setPayerBotId} />
+        <Field id="create-payee-bot" label="Payee bot identifier" value={payeeBotId} onChange={setPayeeBotId} />
+        <Field
+          id="create-duration"
+          label="Time window in seconds"
+          value={duration}
+          onChange={setDuration}
+          hint={`Greater than 0 and at most ${MAX_DURATION_SECONDS}, which is 30 days.`}
+        />
+        <Field
+          id="create-value"
+          label="Amount in ETH"
+          value={value}
+          onChange={setValue}
+          hint="This amount is sent with the transaction on Base Sepolia. The connected wallet must be allowed to fund claims for the payer."
+        />
+        <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
+          {session.preparing ? PREPARING_LABEL : "Prepare this claim"}
+        </button>
+        {session.error ? (
+          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
+            {session.error}
+          </p>
+        ) : (
+          <PreviewBlock
+            preview={session.preview}
+            escrow={escrow}
+            panel={panel}
+            relayerConfigured={relayerConfigured}
+            label="Prepared claim"
+            nodeRef={session.setNode}
+          />
+        )}
+      </form>
+    </section>
   )
 }
 
@@ -547,51 +544,100 @@ function PostExpiryRefundOrder() {
 }
 
 function IdForm({
+  slot,
   idPrefix,
   title,
   buttonLabel,
   missingId,
+  action,
+  resultLabel,
   intro,
-  onSubmit,
-  onError,
+  escrow,
+  panel,
+  relayerConfigured,
+  active,
+  onActivate,
+  build,
 }: {
+  slot: PrepareSlot
   idPrefix: string
   title: string
   buttonLabel: string
   missingId: string
+  action: string
+  resultLabel: string
   intro?: ReactNode
-  onSubmit: (escrowId: `0x${string}`) => void
-  onError: (message: string) => void
+  escrow: Address
+  panel: Address
+  relayerConfigured: boolean
+  active: PrepareSlot | null
+  onActivate: (slot: PrepareSlot) => void
+  build: (escrowId: Hex) => CallPreview
 }) {
   const [escrowId, setEscrowId] = useState("")
+  const session = usePrepareSession<CallPreview>(slot, active)
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!session.begin()) return
+    try {
+      await yieldPrepareTick()
+      const id = parseBytes32(escrowId)
+      if (!id) {
+        session.publish(missingId, null)
+        onActivate(slot)
+        return
+      }
+      session.publish(null, build(id))
+      onActivate(slot)
+    } catch (cause) {
+      session.publish(prepareFailure(action, cause), null)
+      onActivate(slot)
+    } finally {
+      session.finish()
+    }
+  }
+
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault()
-        const id = parseBytes32(escrowId)
-        if (!id) {
-          onError(missingId)
-          return
-        }
-        onSubmit(id)
-      }}
-    >
-      <h3>{title}</h3>
-      {intro}
-      <Field id={`${idPrefix}-id`} label="Claim identifier" value={escrowId} onChange={setEscrowId} />
-      <button type="submit">{buttonLabel}</button>
-    </form>
+    <section aria-label={title}>
+      <form onSubmit={(event) => void onSubmit(event)}>
+        <h3>{title}</h3>
+        {intro}
+        <Field id={`${idPrefix}-id`} label="Claim identifier" value={escrowId} onChange={setEscrowId} />
+        <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
+          {session.preparing ? PREPARING_LABEL : buttonLabel}
+        </button>
+        {session.error ? (
+          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
+            {session.error}
+          </p>
+        ) : (
+          <PreviewBlock
+            preview={session.preview}
+            escrow={escrow}
+            panel={panel}
+            relayerConfigured={relayerConfigured}
+            label={resultLabel}
+            nodeRef={session.setNode}
+          />
+        )}
+      </form>
+    </section>
   )
 }
 
 function OpenDisputeForm({
   escrow,
-  onPreview,
-  onError,
+  panel,
+  relayerConfigured,
+  active,
+  onActivate,
 }: {
   escrow: Address
-  onPreview: (preview: CallPreview) => void
-  onError: (message: string) => void
+  panel: Address
+  relayerConfigured: boolean
+  active: PrepareSlot | null
+  onActivate: (slot: PrepareSlot) => void
 }) {
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [disputeId, setDisputeId] = useState(() => randomBytes32())
@@ -599,34 +645,63 @@ function OpenDisputeForm({
   const [reason, setReason] = useState("")
   const [resolution, setResolution] = useState<DisputeSubjectResult | null>(null)
   const [readingSubject, setReadingSubject] = useState(false)
+  const session = usePrepareSession<CallPreview>("dispute", active)
   const parsedClaim = parseBytes32(claimId)
+  const flightRef = useRef<Promise<DisputeSubjectResult | null> | null>(null)
+  const resolutionRef = useRef<DisputeSubjectResult | null>(null)
+  const readingRef = useRef(false)
+  const disputeIdRef = useRef(disputeId)
+  const claimIdRef = useRef(claimId)
+  const reasonRef = useRef(reason)
+  disputeIdRef.current = disputeId
+  claimIdRef.current = claimId
+  reasonRef.current = reason
 
   useEffect(() => {
     if (!parsedClaim) {
+      flightRef.current = null
+      readingRef.current = false
+      resolutionRef.current = null
       setResolution(null)
       setReadingSubject(false)
       return
     }
     if (!client) {
+      flightRef.current = null
+      readingRef.current = false
+      const next = { ok: false as const, message: FORM_ERRORS.subjectNetwork }
+      resolutionRef.current = next
       setReadingSubject(false)
-      setResolution({ ok: false, message: FORM_ERRORS.subjectNetwork })
+      setResolution(next)
       return
     }
     let cancelled = false
+    readingRef.current = true
+    resolutionRef.current = null
     setReadingSubject(true)
     setResolution(null)
-    readDisputeSubject(client, escrow, parsedClaim, currentNowSeconds()).then(
+    const flight = readDisputeSubject(client, escrow, parsedClaim, currentNowSeconds()).then(
       (next) => {
-        if (cancelled) return
-        setReadingSubject(false)
-        setResolution(next)
+        if (!cancelled) {
+          readingRef.current = false
+          resolutionRef.current = next
+          setReadingSubject(false)
+          setResolution(next)
+        }
+        return next
       },
       () => {
-        if (cancelled) return
-        setReadingSubject(false)
-        setResolution({ ok: false, message: FORM_ERRORS.subjectNetwork })
+        const next = { ok: false as const, message: FORM_ERRORS.subjectNetwork }
+        if (!cancelled) {
+          readingRef.current = false
+          resolutionRef.current = next
+          setReadingSubject(false)
+          setResolution(next)
+        }
+        return next
       },
     )
+    flightRef.current = flight
     return () => {
       cancelled = true
     }
@@ -644,41 +719,71 @@ function OpenDisputeForm({
         ? resolution.message
         : "Filled from the escrow after the claim identifier is entered."
 
+  async function settleSubject() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const flight = flightRef.current
+      if (!readingRef.current || !flight) return
+      await flight
+      if (flightRef.current === flight) return
+    }
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!session.begin()) return
+    try {
+      await yieldPrepareTick()
+      await settleSubject()
+      const id = parseBytes32(disputeIdRef.current)
+      const claim = parseBytes32(claimIdRef.current)
+      if (!id || !claim) {
+        session.publish(FORM_ERRORS.openIds, null)
+        onActivate("dispute")
+        return
+      }
+      const trimmedReason = reasonRef.current.trim()
+      if (trimmedReason.length === 0) {
+        session.publish(FORM_ERRORS.openReason, null)
+        onActivate("dispute")
+        return
+      }
+      if (new TextEncoder().encode(trimmedReason).length > 256) {
+        session.publish(FORM_ERRORS.reasonTooLong, null)
+        onActivate("dispute")
+        return
+      }
+      const current = resolutionRef.current
+      if (readingRef.current || !current || (current.ok && current.escrowId !== claim)) {
+        session.publish(FORM_ERRORS.subjectPending, null)
+        onActivate("dispute")
+        return
+      }
+      if (!current.ok) {
+        session.publish(current.message, null)
+        onActivate("dispute")
+        return
+      }
+      const windowMessage = disputeWindowMessage(current.state, current.expiresAt, currentNowSeconds())
+      if (windowMessage) {
+        session.publish(windowMessage, null)
+        onActivate("dispute")
+        return
+      }
+      session.publish(null, previewDispute(escrow, claim, id, trimmedReason))
+      onActivate("dispute")
+    } catch (cause) {
+      session.publish(prepareFailure("dispute", cause), null)
+      onActivate("dispute")
+    } finally {
+      session.finish()
+    }
+  }
+
   return (
+    <section aria-label="Open a dispute">
     <form
       id="open-dispute"
-      onSubmit={(event) => {
-        event.preventDefault()
-        const id = parseBytes32(disputeId)
-        const claim = parseBytes32(claimId)
-        if (!id || !claim) {
-          onError(FORM_ERRORS.openIds)
-          return
-        }
-        const trimmedReason = reason.trim()
-        if (trimmedReason.length === 0) {
-          onError(FORM_ERRORS.openReason)
-          return
-        }
-        if (new TextEncoder().encode(trimmedReason).length > 256) {
-          onError(FORM_ERRORS.reasonTooLong)
-          return
-        }
-        if (readingSubject || !resolution || (resolution.ok && resolution.escrowId !== claim)) {
-          onError(FORM_ERRORS.subjectPending)
-          return
-        }
-        if (!resolution.ok) {
-          onError(resolution.message)
-          return
-        }
-        const windowMessage = disputeWindowMessage(resolution.state, resolution.expiresAt, currentNowSeconds())
-        if (windowMessage) {
-          onError(windowMessage)
-          return
-        }
-        onPreview(previewDispute(escrow, claim, id, trimmedReason))
-      }}
+      onSubmit={(event) => void onSubmit(event)}
     >
       <h3>Open a dispute</h3>
       <p className="muted">{FILE_DISPUTE_TEXT}</p>
@@ -711,7 +816,24 @@ function OpenDisputeForm({
         hint={subjectHint}
       />
       <Field id="open-reason" label="Reason" value={reason} onChange={setReason} />
-      <button type="submit">{FILE_DISPUTE_BUTTON}</button>
+      <button type="submit" disabled={session.preparing} aria-busy={session.preparing}>
+        {session.preparing ? PREPARING_LABEL : FILE_DISPUTE_BUTTON}
+      </button>
+      {session.error ? (
+        <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
+          {session.error}
+        </p>
+      ) : (
+        <PreviewBlock
+          preview={session.preview}
+          escrow={escrow}
+          panel={panel}
+          relayerConfigured={relayerConfigured}
+          label="Prepared dispute"
+          nodeRef={session.setNode}
+        />
+      )}
     </form>
+    </section>
   )
 }
