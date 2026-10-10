@@ -55,12 +55,17 @@ function notice(main: string): ErrorPresentation {
   return { main, detail: null }
 }
 
-/** Accept lowercase, mixed-case, and surrounding whitespace. Checksum is normalized. */
+/** Trimmed 20-byte hex. Mixed case is accepted only with a valid checksum. */
 function parsePayeeAddress(raw: string): Address | null {
   const trimmed = raw.trim()
-  if (!isAddress(trimmed, { strict: false })) return null
+  if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) return null
+  const body = trimmed.slice(2)
   try {
-    return getAddress(trimmed.toLowerCase())
+    if (body === body.toLowerCase() || body === body.toUpperCase()) {
+      return getAddress(`0x${body.toLowerCase()}`)
+    }
+    if (!isAddress(trimmed, { strict: true })) return null
+    return getAddress(trimmed)
   } catch {
     return null
   }

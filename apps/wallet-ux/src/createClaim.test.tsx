@@ -194,26 +194,49 @@ describe("prepare this claim", () => {
 
   it("accepts lowercase, mixed-case, and surrounding whitespace", () => {
     renderApp()
+    const payees = [
+      `  ${PAYEE}  `,
+      `  ${PAYEE.toLowerCase()}  `,
+      `  0x${PAYEE.slice(2).toUpperCase()}  `,
+    ]
+    for (const payee of payees) {
+      const scope = fillCreate({
+        "Claim identifier": `  ${CLAIM.toUpperCase()} \n`,
+        "Payee wallet": payee,
+        "Payer bot identifier": `\t${PAYER_BOT} `,
+        "Payee bot identifier": ` ${PAYEE_BOT.toUpperCase()}\n`,
+        "Time window in seconds": " 86400 ",
+        "Amount in ETH": " 0.001 ",
+      })
+      fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+
+      const preview = scope.getByTestId("calldata-preview")
+      expect(scope.queryByRole("alert")).toBeNull()
+      const calldata = preview.querySelector("pre")?.textContent
+      if (!calldata) throw new Error("missing calldata")
+      const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
+      expect(decoded.functionName).toBe("createEscrow")
+      expect(decoded.args?.[0]).toBe(CLAIM)
+      expect(getAddress(String(decoded.args?.[1]))).toBe(getAddress(PAYEE))
+      expect(decoded.args?.[4]).toBe(86400n)
+      expect(preview.textContent).toContain("0.001 ETH")
+    }
+  })
+
+  it("rejects a mixed-case payee with a bad checksum", () => {
+    renderApp()
     const scope = fillCreate({
-      "Claim identifier": `  ${CLAIM.toUpperCase()} \n`,
-      "Payee wallet": `  0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4  `,
-      "Payer bot identifier": `\t${PAYER_BOT} `,
-      "Payee bot identifier": ` ${PAYEE_BOT.toUpperCase()}\n`,
-      "Time window in seconds": " 86400 ",
-      "Amount in ETH": " 0.001 ",
+      ...EXACT,
+      "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
     })
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
 
-    const preview = scope.getByTestId("calldata-preview")
-    expect(scope.queryByRole("alert")).toBeNull()
-    const calldata = preview.querySelector("pre")?.textContent
-    if (!calldata) throw new Error("missing calldata")
-    const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
-    expect(decoded.functionName).toBe("createEscrow")
-    expect(decoded.args?.[0]).toBe(CLAIM)
-    expect(getAddress(String(decoded.args?.[1]))).toBe(getAddress(PAYEE))
-    expect(decoded.args?.[4]).toBe(86400n)
-    expect(preview.textContent).toContain("0.001 ETH")
+    expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee)
+    expect(scope.queryByTestId("calldata-preview")).toBeNull()
+    expect(scope.queryByTestId("sepolia-submit")).toBeNull()
+    expect(scope.queryByTestId("submit-refused")).toBeNull()
+    expect(scope.queryByRole("button", { name: "Submit on Base Sepolia" })).toBeNull()
+    expect(document.querySelector('[data-testid="calldata-preview"]')).toBeNull()
   })
 
   it("renders a validation error under the button instead of leaving the form blank", () => {
