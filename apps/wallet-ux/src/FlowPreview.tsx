@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
-import { formatEther, isAddress, parseEther, type Address, type Hex } from "viem"
+import { formatEther, getAddress, isAddress, parseEther, type Address, type Hex } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useWalletClient } from "wagmi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { parseBytes32, randomBytes32 } from "./bytes32"
@@ -53,6 +53,21 @@ import { useConnectorChainId } from "./useWalletChain"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
+}
+
+/** Accept lowercase, mixed-case, and surrounding whitespace. Checksum is normalized. */
+function parsePayeeAddress(raw: string): Address | null {
+  const trimmed = raw.trim()
+  if (!isAddress(trimmed, { strict: false })) return null
+  try {
+    return getAddress(trimmed.toLowerCase())
+  } catch {
+    return null
+  }
+}
+
+function prepareFailure(cause: unknown): string {
+  return `Couldn't prepare this claim: ${presentError(cause).main}`
 }
 
 function SepoliaSubmit({ preview, escrow, panel }: { preview: CallPreview; escrow: Address; panel: Address }) {
@@ -320,6 +335,7 @@ function Field({
 export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address }) {
   const [error, setError] = useState<string | null>(null)
   const [previews, setPreviews] = useState<CallPreview[]>([])
+  const [sharedEpoch, setSharedEpoch] = useState(0)
   const relayerConfigured = relayerConfigFromEnv({
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   }).url != null
@@ -327,11 +343,18 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
   function show(next: CallPreview | CallPreview[]) {
     setError(null)
     setPreviews(Array.isArray(next) ? next : [next])
+    setSharedEpoch((value) => value + 1)
   }
 
   function fail(message: string) {
     setPreviews([])
     setError(message)
+    setSharedEpoch((value) => value + 1)
+  }
+
+  function clearShared() {
+    setError(null)
+    setPreviews([])
   }
 
   return (
@@ -343,8 +366,10 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
       </p>
       <CreateForm
         escrow={escrow}
-        onPreview={show}
-        onError={fail}
+        panel={panel}
+        relayerConfigured={relayerConfigured}
+        resetToken={sharedEpoch}
+        onClearShared={clearShared}
       />
       <IdForm
         idPrefix="release"
@@ -389,12 +414,16 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
 
 function CreateForm({
   escrow,
-  onPreview,
-  onError,
+  panel,
+  relayerConfigured,
+  resetToken,
+  onClearShared,
 }: {
   escrow: Address
-  onPreview: (preview: CallPreview) => void
-  onError: (message: string) => void
+  panel: Address
+  relayerConfigured: boolean
+  resetToken: number
+  onClearShared: () => void
 }) {
   const [escrowId, setEscrowId] = useState("")
   const [payee, setPayee] = useState("")
@@ -402,51 +431,70 @@ function CreateForm({
   const [payeeBotId, setPayeeBotId] = useState("")
   const [duration, setDuration] = useState("86400")
   const [value, setValue] = useState("0.01")
+  const [formError, setFormError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<CallPreview | null>(null)
+
+  useEffect(() => {
+    setFormError(null)
+    setPreview(null)
+  }, [resetToken])
+
+  function report(message: string) {
+    setPreview(null)
+    setFormError(message)
+    onClearShared()
+  }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault()
-    const id = parseBytes32(escrowId)
-    const payerBot = parseBytes32(payerBotId)
-    const payeeBot = parseBytes32(payeeBotId)
-    if (!id || !payerBot || !payeeBot) {
-      onError(FORM_ERRORS.createIds)
-      return
-    }
-    if (!isAddress(payee)) {
-      onError(FORM_ERRORS.payee)
-      return
-    }
-    const durationSeconds = Number(duration)
-    if (!Number.isInteger(durationSeconds) || durationSeconds <= 0 || durationSeconds > MAX_DURATION_SECONDS) {
-      onError(durationValidationMessage(MAX_DURATION_SECONDS))
-      return
-    }
-    let valueWei: bigint
     try {
-      valueWei = parseEther(value.trim())
-    } catch {
-      onError(FORM_ERRORS.valueFormat)
-      return
-    }
-    if (valueWei <= 0n) {
-      onError(FORM_ERRORS.valueZero)
-      return
-    }
-    onPreview(
-      previewCreateEscrow({
+      const id = parseBytes32(escrowId)
+      const payerBot = parseBytes32(payerBotId)
+      const payeeBot = parseBytes32(payeeBotId)
+      if (!id || !payerBot || !payeeBot) {
+        report(FORM_ERRORS.createIds)
+        return
+      }
+      const payeeAddress = parsePayeeAddress(payee)
+      if (!payeeAddress) {
+        report(FORM_ERRORS.payee)
+        return
+      }
+      const durationSeconds = Number(duration.trim())
+      if (!Number.isInteger(durationSeconds) || durationSeconds <= 0 || durationSeconds > MAX_DURATION_SECONDS) {
+        report(durationValidationMessage(MAX_DURATION_SECONDS))
+        return
+      }
+      let valueWei: bigint
+      try {
+        valueWei = parseEther(value.trim())
+      } catch {
+        report(FORM_ERRORS.valueFormat)
+        return
+      }
+      if (valueWei <= 0n) {
+        report(FORM_ERRORS.valueZero)
+        return
+      }
+      const next = previewCreateEscrow({
         escrow,
         escrowId: id,
-        payee,
+        payee: payeeAddress,
         payerBotId: payerBot,
         payeeBotId: payeeBot,
         durationSeconds: BigInt(durationSeconds),
         valueWei,
-      }),
-    )
+      })
+      setFormError(null)
+      setPreview(next)
+      onClearShared()
+    } catch (cause) {
+      report(prepareFailure(cause))
+    }
   }
 
   return (
-    <form onSubmit={onSubmit}>
+    <form id="create-claim" onSubmit={onSubmit}>
       <h3>Create a claim</h3>
       <Field id="create-id" label="Claim identifier" value={escrowId} onChange={setEscrowId} />
       <Field id="create-payee" label="Payee wallet" value={payee} onChange={setPayee} />
@@ -467,6 +515,12 @@ function CreateForm({
         hint="This amount is sent with the transaction on Base Sepolia. The connected wallet must be allowed to fund claims for the payer."
       />
       <button type="submit">Prepare this claim</button>
+      {formError ? (
+        <p className="bad" role="alert">
+          {formError}
+        </p>
+      ) : null}
+      <PreviewBlock preview={preview} escrow={escrow} panel={panel} relayerConfigured={relayerConfigured} />
     </form>
   )
 }
