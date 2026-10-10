@@ -4,6 +4,7 @@ export const PENDING_SLOW_TEXT = "Still waiting. This can take a minute on testn
 export const PENDING_SLOW_MS = 60_000
 export const BALANCE_WARN_TEXT = "This amount is more than the test ETH in this wallet. You can still continue."
 export const ANOTHER_PENDING_REASON = "Another transaction is still pending"
+export const REFUND_ALREADY_PENDING_REASON = "This refund is already pending"
 export const VOTE_SEAT_REASON = "Only seated arbitrators can vote."
 export const PREPARE_FIRST_REASON = "Prepare this step before submitting."
 

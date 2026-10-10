@@ -1,11 +1,14 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
 import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
 import { chunkHex, shortHash } from "./format"
+import { receiptWatchConfig } from "./pendingWatch"
 import { ChunkedHex, CopyButton } from "./ui"
 import type { PendingBanner } from "./usePendingReceipt"
 import {
+  PENDING_CLOCK_TEXT,
   PENDING_EXPIRED_TEXT,
   PENDING_UNKNOWN_TEXT,
+  PENDING_UNSAVED_TEXT,
   RECEIPT_MAY_CONFIRM_TEXT,
   TRY_AGAIN_LABEL,
   txExplorerUrl,
@@ -40,8 +43,8 @@ export type ActionButtonState =
   | { status: "wrong-network" }
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
-  | { status: "pending"; hash: string; label?: string; startedAt?: number }
-  | { status: "unconfirmed"; hash: string }
+  | { status: "pending"; hash: string; label?: string; startedAt?: number; unsaved?: boolean }
+  | { status: "unconfirmed"; hash: string; message?: string }
   | {
       status: "confirmed"
       hash: string
@@ -131,7 +134,7 @@ export function ActionButton({
   )
 }
 
-function usePendingSlow(startedAt: number | undefined, active: boolean): boolean {
+function usePendingAge(startedAt: number | undefined, active: boolean): number | null {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!active || startedAt == null) return
@@ -139,8 +142,25 @@ function usePendingSlow(startedAt: number | undefined, active: boolean): boolean
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [active, startedAt])
-  if (!active || startedAt == null) return false
-  return now - startedAt >= PENDING_SLOW_MS
+  if (!active || startedAt == null) return null
+  return now - startedAt
+}
+
+function TransactionRow({ hash }: { hash: string }) {
+  return (
+    <div className="kv-row">
+      <div className="kv-label">Transaction</div>
+      <div className="kv-value">
+        <span className="mono" data-testid="tx-hash">
+          {shortHash(hash)}
+        </span>
+        <CopyButton value={hash} />
+        <a href={txExplorerUrl(hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
+          {TX_LINK_LABEL}
+        </a>
+      </div>
+    </div>
+  )
 }
 
 /** Result under the button that produced it: wallet hint, pending, confirmed, or a plain error. */
@@ -163,7 +183,9 @@ export function ActionStatus({
   cancelled?: boolean
   onTryAgain?: () => void
 }) {
-  const slow = usePendingSlow(state.status === "pending" ? state.startedAt : undefined, state.status === "pending")
+  const age = usePendingAge(state.status === "pending" ? state.startedAt : undefined, state.status === "pending")
+  const slow = age != null && age >= PENDING_SLOW_MS
+  const pendingCanRetry = age != null && age > receiptWatchConfig.waitMs
   if (state.status === "error") {
     return (
       <p className="bad icon-bad" role="alert" aria-live="assertive" tabIndex={-1} ref={nodeRef} data-testid="action-error">
@@ -191,18 +213,21 @@ export function ActionStatus({
         <p>
           <Mark kind="wait" glyph="…" /> <span data-testid={pendingTestId}>{PENDING_NETWORK_LABEL}</span>
         </p>
-        <p className="mono" data-testid="tx-hash">
-          {state.hash}
-        </p>
-        <p>
-          <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
-            {TX_LINK_LABEL}
-          </a>
-        </p>
+        <TransactionRow hash={state.hash} />
         {slow ? (
           <p className="warn-note" data-testid="pending-slow">
             {PENDING_SLOW_TEXT}
           </p>
+        ) : null}
+        {state.unsaved ? (
+          <p className="hint" data-testid="pending-unsaved">
+            {PENDING_UNSAVED_TEXT}
+          </p>
+        ) : null}
+        {pendingCanRetry && onTryAgain ? (
+          <button type="button" className="secondary" data-testid="try-again" onClick={onTryAgain}>
+            {TRY_AGAIN_LABEL}
+          </button>
         ) : null}
       </div>
     )
@@ -210,20 +235,9 @@ export function ActionStatus({
   if (state.status === "unconfirmed") {
     return (
       <div role="status" aria-live="polite" data-testid="tx-unconfirmed">
-        <div className="kv-row">
-          <div className="kv-label">Transaction</div>
-          <div className="kv-value">
-            <span className="mono" data-testid="tx-hash">
-              {shortHash(state.hash)}
-            </span>
-            <CopyButton value={state.hash} />
-            <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
-              {TX_LINK_LABEL}
-            </a>
-          </div>
-        </div>
+        <TransactionRow hash={state.hash} />
         <p className="may-confirm" data-testid="tx-may-confirm">
-          {RECEIPT_MAY_CONFIRM_TEXT}
+          {state.message ?? RECEIPT_MAY_CONFIRM_TEXT}
         </p>
         {onTryAgain ? (
           <button type="button" className="secondary" data-testid="try-again" onClick={onTryAgain}>
@@ -249,18 +263,7 @@ export function ActionStatus({
             </div>
           </div>
         ) : null}
-        <div className="kv-row">
-          <div className="kv-label">Transaction</div>
-          <div className="kv-value">
-            <span className="mono" data-testid="tx-hash">
-              {shortHash(state.hash)}
-            </span>
-            <CopyButton value={state.hash} />
-            <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
-              {TX_LINK_LABEL}
-            </a>
-          </div>
-        </div>
+        <TransactionRow hash={state.hash} />
         {state.nextHref ? (
           <p>
             <a className="next-step" href={state.nextHref} data-testid="next-step">
@@ -277,9 +280,11 @@ export function ActionStatus({
 
 export function PendingClearedNote({ banner }: { banner: PendingBanner | null }) {
   if (!banner || banner.kind === "reverted") return null
-  const text = banner.kind === "expired" ? PENDING_EXPIRED_TEXT : PENDING_UNKNOWN_TEXT
+  const text =
+    banner.kind === "expired" ? PENDING_EXPIRED_TEXT : banner.kind === "clock" ? PENDING_CLOCK_TEXT : PENDING_UNKNOWN_TEXT
+  const testId = banner.kind === "expired" ? "pending-expired" : banner.kind === "clock" ? "pending-clock" : "pending-unknown"
   return (
-    <div role="status" data-testid={banner.kind === "expired" ? "pending-expired" : "pending-unknown"}>
+    <div role="status" data-testid={testId}>
       <p>{text}</p>
       <p>
         <span className="mono" data-testid="tx-hash">

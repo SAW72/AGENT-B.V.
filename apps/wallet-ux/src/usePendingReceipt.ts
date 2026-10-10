@@ -3,7 +3,9 @@ import type { Hex } from "viem"
 import { carryDisputeId, carryEscrowId } from "./carriedIds"
 import {
   clearPending,
+  listClockNotes,
   listPending,
+  resetPendingStore,
   subscribePending,
   takeFreshPending,
   type PendingRecord,
@@ -19,15 +21,19 @@ import { releaseSubmit } from "./submitLock"
 
 export type ReceiptPhase = "idle" | "pending" | "unconfirmed" | "confirmed"
 
+export type PendingNotice = "may-confirm" | "not-found" | null
+
 export type PendingBanner =
   | { kind: "reverted" }
   | { kind: "unknown"; hash: Hex }
   | { kind: "expired"; hash: Hex }
+  | { kind: "clock"; hash: Hex }
 
 export type PendingView = {
   record: PendingRecord
   phase: ReceiptPhase
   banner: PendingBanner | null
+  notice: PendingNotice
 }
 
 type LockRef = { current: string }
@@ -40,6 +46,7 @@ let syncing = false
 const stops = new Map<string, () => void>()
 const viewListeners = new Set<() => void>()
 const confirmedListeners = new Map<string, Set<() => void>>()
+let expiryTimer: number | null = null
 
 function publish() {
   snapshot = [...views.values()]
@@ -68,8 +75,8 @@ function carrySentId(record: PendingRecord) {
   }
 }
 
-function put(record: PendingRecord, phase: ReceiptPhase, banner: PendingBanner | null) {
-  views.set(record.slot, { record, phase, banner })
+function put(record: PendingRecord, phase: ReceiptPhase, banner: PendingBanner | null, notice: PendingNotice = null) {
+  views.set(record.slot, { record, phase, banner, notice })
   publish()
 }
 
@@ -95,12 +102,14 @@ function apply(record: PendingRecord, outcome: ReceiptOutcome) {
     return
   }
   if (outcome === "unknown") {
-    finish(record, "idle", { kind: "unknown", hash: record.hash })
+    if (current.phase !== "unconfirmed" || current.notice !== "not-found") {
+      put(record, "unconfirmed", null, "not-found")
+    }
     return
   }
-  if (outcome === "unreadable" || Date.now() - record.startedAt >= receiptWatchConfig.waitMs) {
-    if (current.phase !== "unconfirmed") put(record, "unconfirmed", null)
-    return
+  if (outcome === "unreadable") {
+    if (current.notice === "not-found") return
+    if (current.phase !== "unconfirmed") put(record, "unconfirmed", null, "may-confirm")
   }
 }
 
@@ -128,7 +137,7 @@ function poll(record: PendingRecord) {
 function start(record: PendingRecord, mode: "wait" | "poll") {
   if (stops.has(record.slot)) return
   const stalled = Date.now() - record.startedAt >= receiptWatchConfig.waitMs
-  put(record, stalled ? "unconfirmed" : "pending", null)
+  put(record, stalled ? "unconfirmed" : "pending", null, stalled ? "may-confirm" : null)
   const reader = engineClient
   if (!reader) return
   if (mode === "poll" || stalled || !reader.waitForTransactionReceipt) {
@@ -148,7 +157,7 @@ function start(record: PendingRecord, mode: "wait" | "poll") {
       if (stopped) return
       stopped = true
       stops.delete(record.slot)
-      put(record, "unconfirmed", null)
+      put(record, "unconfirmed", null, "may-confirm")
       poll(record)
     },
   )
@@ -172,17 +181,41 @@ export function syncPendingViews() {
       if (stops.has(record.slot) || views.get(record.slot)?.phase === "confirmed") continue
       start(record, takeFreshPending(record.slot) ? "wait" : "poll")
     }
+    for (const hash of listClockNotes()) {
+      const slot = `clock:${hash}`
+      if (views.has(slot)) continue
+      put(
+        { slot, action: "clock", subjectId: null, hash, startedAt: 0, saved: true },
+        "idle",
+        { kind: "clock", hash },
+      )
+    }
   } finally {
     syncing = false
   }
 }
 
+function stopExpiryTimer() {
+  if (expiryTimer == null) return
+  window.clearInterval(expiryTimer)
+  expiryTimer = null
+}
+
+function startExpiryTimer() {
+  if (expiryTimer != null) return
+  expiryTimer = window.setInterval(() => syncPendingViews(), receiptWatchConfig.expiryTickMs)
+}
+
 function acquireEngine() {
   refs += 1
-  if (refs === 1) syncPendingViews()
+  if (refs === 1) {
+    syncPendingViews()
+    startExpiryTimer()
+  }
   return () => {
     refs -= 1
     if (refs > 0) return
+    stopExpiryTimer()
     for (const stop of stops.values()) stop()
     stops.clear()
     views = new Map()
@@ -193,12 +226,14 @@ function acquireEngine() {
 
 /** Drop in-memory watches. Tests call this between renders. */
 export function resetPendingRuntime() {
+  stopExpiryTimer()
   for (const stop of stops.values()) stop()
   stops.clear()
   views = new Map()
   snapshot = []
   refs = 0
   engineClient = null
+  resetPendingStore()
   publish()
 }
 
@@ -237,9 +272,11 @@ const EMPTY: PendingView = {
     subjectId: null,
     hash: "0x",
     startedAt: 0,
+    saved: true,
   },
   phase: "idle",
   banner: null,
+  notice: null,
 }
 
 /**
@@ -279,6 +316,8 @@ export function usePendingReceipt(
     txHash,
     startedAt: shown.phase === "pending" || shown.phase === "unconfirmed" ? shown.record.startedAt : null,
     banner: shown.banner,
+    notice: shown.notice,
+    unsaved: shown.record.saved === false,
     subjectId: shown.record.subjectId,
     holdLock: shown.phase === "pending" || shown.phase === "unconfirmed",
     tryAgain() {

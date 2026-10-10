@@ -19,7 +19,7 @@ import {
   useWalletHint,
   type ActionButtonState,
 } from "./actionButton"
-import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON } from "./actionProgress"
+import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON, REFUND_ALREADY_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { parseBytes32, randomBytes32 } from "./bytes32"
 import { readUrlBytes32, useCarriedIds } from "./carriedIds"
@@ -85,7 +85,7 @@ import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
 import { CalldataDetails, ChunkedHex, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
-import { TX_REVERTED_TEXT } from "./walletCopy"
+import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
@@ -124,9 +124,15 @@ function PendingRow({ view }: { view: PendingView }) {
           nextLabel: progress.next?.label,
         }
       : view.phase === "unconfirmed"
-        ? { status: "unconfirmed", hash: view.record.hash }
+        ? { status: "unconfirmed", hash: view.record.hash, message: unconfirmedNote(view.notice) }
         : view.phase === "pending"
-          ? { status: "pending", hash: view.record.hash, label: progress.pending, startedAt: view.record.startedAt }
+          ? {
+              status: "pending",
+              hash: view.record.hash,
+              label: progress.pending,
+              startedAt: view.record.startedAt,
+              unsaved: view.record.saved === false,
+            }
           : { status: "idle", label: "" }
   return (
     <article data-testid="pending-row" data-id={view.record.subjectId ?? ""} data-hash={view.record.hash}>
@@ -141,7 +147,9 @@ function PendingRow({ view }: { view: PendingView }) {
       {view.phase === "idle" ? null : (
         <ActionStatus
           state={state}
-          onTryAgain={view.phase === "unconfirmed" ? () => dismissPending(view.record.slot) : undefined}
+          onTryAgain={
+            view.phase === "pending" || view.phase === "unconfirmed" ? () => dismissPending(view.record.slot) : undefined
+          }
         />
       )}
       <PendingClearedNote banner={view.banner} />
@@ -369,10 +377,16 @@ function SepoliaSubmit({
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }
-      : receipt.phase === "pending" && receipt.txHash
-        ? { status: "pending", hash: receipt.txHash, label: progress.pending, startedAt: receipt.startedAt ?? undefined }
+        : receipt.phase === "pending" && receipt.txHash
+        ? {
+            status: "pending",
+            hash: receipt.txHash,
+            label: progress.pending,
+            startedAt: receipt.startedAt ?? undefined,
+            unsaved: receipt.unsaved,
+          }
         : receipt.phase === "unconfirmed" && receipt.txHash
-          ? { status: "unconfirmed", hash: receipt.txHash }
+          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice) }
           : waiting
             ? { status: "waiting-wallet" }
             : { status: "idle", label: "Submit on Base Sepolia" }
@@ -424,7 +438,9 @@ function SepoliaSubmit({
         state={walletState}
         walletHint={walletHint}
         cancelled={cancelled && relayerPhase === "idle" && !pendingHash}
-        onTryAgain={walletState.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+        onTryAgain={
+          walletState.status === "pending" || walletState.status === "unconfirmed" ? () => receipt.tryAgain() : undefined
+        }
       />
       {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
       <PendingClearedNote banner={receipt.banner} />
@@ -456,13 +472,15 @@ function SepoliaSubmit({
             data-testid="relayer-submit"
             state={relayerState}
             reason={
-              blocked && relayerState.status === "idle"
-                ? ANOTHER_PENDING_REASON
-                : relayerButton.disabled && relayerState.status === "idle"
-                  ? relayerButton.note
-                  : relayerState.status === "needs-wallet"
-                    ? NO_WALLET_REASON
-                    : null
+              preview.functionName === "refund" && (receipt.phase === "pending" || receipt.phase === "unconfirmed")
+                ? REFUND_ALREADY_PENDING_REASON
+                : blocked && relayerState.status === "idle"
+                  ? ANOTHER_PENDING_REASON
+                  : relayerButton.disabled && relayerState.status === "idle"
+                    ? relayerButton.note
+                    : relayerState.status === "needs-wallet"
+                      ? NO_WALLET_REASON
+                      : null
             }
             disabled={blocked || isPending || (relayerButton.disabled && relayerState.status === "idle")}
             onClick={() => {

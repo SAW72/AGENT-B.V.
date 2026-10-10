@@ -11,9 +11,17 @@ export type PendingRecord = {
   subjectId: Hex | null
   hash: Hex
   startedAt: number
+  /** False when the wallet sent the transaction but the browser refused to store it. */
+  saved: boolean
 }
 
+/** A stored clock more than a minute ahead is not a live transaction. */
+export const PENDING_FUTURE_SKEW_MS = 60_000
+
 const listeners = new Set<() => void>()
+const memoryRecords = new Map<string, PendingRecord>()
+const clockNotes = new Map<string, Hex>()
+let storageVersion = 0
 
 export function subscribePending(listener: () => void): () => void {
   listeners.add(listener)
@@ -22,6 +30,38 @@ export function subscribePending(listener: () => void): () => void {
 
 function emitPending() {
   for (const listener of [...listeners]) listener()
+}
+
+function bumpStorageVersion() {
+  storageVersion += 1
+}
+
+/** Cache key for hasLivePending. Writes and other-tab storage events move it. */
+export function pendingStorageVersion(): number {
+  return storageVersion
+}
+
+export function resetPendingStore(): void {
+  memoryRecords.clear()
+  clockNotes.clear()
+  freshSlots.clear()
+  bumpStorageVersion()
+}
+
+function rememberClockNote(hash: Hex) {
+  clockNotes.set(hash, hash)
+}
+
+/** Records dropped because their clock was in the future. Kept until the page reloads. */
+export function listClockNotes(): Hex[] {
+  return [...clockNotes.values()]
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", () => {
+    bumpStorageVersion()
+    emitPending()
+  })
 }
 
 /** Fresh sends wait for the receipt. Restored records only poll. */
@@ -50,10 +90,20 @@ export function readPending(slot: string): PendingRecord | null {
   if (typeof localStorage === "undefined") return null
   try {
     const raw = localStorage.getItem(pendingStorageKey(slot))
-    if (!raw) return null
+    if (!raw) return memoryRecords.get(slot) ?? null
     const parsed = JSON.parse(raw) as Partial<PendingRecord>
     if (!isHex32(parsed.hash)) return null
     if (typeof parsed.startedAt !== "number" || !Number.isFinite(parsed.startedAt)) return null
+    if (parsed.startedAt > Date.now() + PENDING_FUTURE_SKEW_MS) {
+      try {
+        localStorage.removeItem(pendingStorageKey(slot))
+      } catch {
+        // The record is still ignored when storage will not delete it.
+      }
+      if (isHex32(parsed.hash)) rememberClockNote(parsed.hash)
+      bumpStorageVersion()
+      return null
+    }
     if (typeof parsed.action !== "string" || parsed.action.trim() === "") return null
     const subjectId = parsed.subjectId == null ? null : parsed.subjectId
     if (subjectId != null && !isHex32(subjectId)) return null
@@ -65,20 +115,32 @@ export function readPending(slot: string): PendingRecord | null {
       subjectId,
       hash: parsed.hash,
       startedAt: parsed.startedAt,
+      saved: true,
     }
   } catch {
-    return null
+    return memoryRecords.get(slot) ?? null
   }
 }
 
 export function listPending(): PendingRecord[] {
-  if (typeof localStorage === "undefined") return []
   const out: PendingRecord[] = []
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index)
-    if (!key || !key.startsWith(PREFIX)) continue
-    const record = readPending(key.slice(PREFIX.length))
-    if (record) out.push(record)
+  const seen = new Set<string>()
+  if (typeof localStorage !== "undefined") {
+    const keys: string[] = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key?.startsWith(PREFIX)) keys.push(key)
+    }
+    for (const key of keys) {
+      const record = readPending(key.slice(PREFIX.length))
+      if (!record) continue
+      out.push(record)
+      seen.add(record.slot)
+    }
+  }
+  for (const record of memoryRecords.values()) {
+    if (seen.has(record.slot)) continue
+    out.push(record)
   }
   return out
 }
@@ -91,23 +153,32 @@ export function writePending(input: {
 }): PendingRecord {
   const startedAt = input.startedAt ?? Date.now()
   const slot = pendingSlot(input.action, input.subjectId)
+  let saved = true
+  try {
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({
+        action: input.action,
+        subjectId: input.subjectId,
+        hash: input.hash,
+        startedAt,
+      }),
+    )
+    memoryRecords.delete(slot)
+  } catch {
+    saved = false
+  }
   const record: PendingRecord = {
     slot,
     action: input.action,
     subjectId: input.subjectId,
     hash: input.hash,
     startedAt,
+    saved,
   }
-  localStorage.setItem(
-    pendingStorageKey(slot),
-    JSON.stringify({
-      action: record.action,
-      subjectId: record.subjectId,
-      hash: record.hash,
-      startedAt: record.startedAt,
-    }),
-  )
+  if (!saved) memoryRecords.set(slot, record)
   freshSlots.add(slot)
+  bumpStorageVersion()
   emitPending()
   return record
 }
@@ -117,14 +188,20 @@ export function writePending(input: {
  * and a reload does not treat it as a wallet transaction.
  */
 export function writeRelayerPending(slot: string, hash: Hex, startedAt = Date.now()): { hash: Hex; startedAt: number } {
-  localStorage.setItem(pendingStorageKey(slot), JSON.stringify({ hash, startedAt }))
+  try {
+    localStorage.setItem(pendingStorageKey(slot), JSON.stringify({ hash, startedAt }))
+  } catch {
+    // A relayer note is not the wallet lock. A storage failure leaves the in-flight relayer state alone.
+  }
+  bumpStorageVersion()
   return { hash, startedAt }
 }
 
 export function clearPending(slot: string): void {
-  if (typeof localStorage === "undefined") return
   freshSlots.delete(slot)
-  localStorage.removeItem(pendingStorageKey(slot))
+  memoryRecords.delete(slot)
+  if (typeof localStorage !== "undefined") localStorage.removeItem(pendingStorageKey(slot))
+  bumpStorageVersion()
   emitPending()
 }
 

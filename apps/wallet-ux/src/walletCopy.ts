@@ -66,6 +66,16 @@ export const TX_REVERTED_TEXT = "This transaction reverted on Base Sepolia."
 
 export const RECEIPT_MAY_CONFIRM_TEXT = "It may still confirm. Check Basescan before trying again."
 
+export const PENDING_NOT_FOUND_TEXT = "Not found on Base Sepolia yet. Check Basescan before trying again."
+
+export function unconfirmedNote(notice: "not-found" | "may-confirm" | null): string {
+  return notice === "not-found" ? PENDING_NOT_FOUND_TEXT : RECEIPT_MAY_CONFIRM_TEXT
+}
+
+export const PENDING_CLOCK_TEXT = "Check Basescan before trying again."
+
+export const PENDING_UNSAVED_TEXT = "Couldn't save this for a reload."
+
 export const TRY_AGAIN_LABEL = "Try again anyway"
 
 export const PENDING_UNKNOWN_TEXT =

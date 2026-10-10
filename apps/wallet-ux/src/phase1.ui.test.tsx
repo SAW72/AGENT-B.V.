@@ -14,14 +14,14 @@ import {
   PAYEE_SELF_WARNING,
   WALLET_HINT_TEXT,
 } from "./actionButton"
-import { ACTION_PROGRESS } from "./actionProgress"
+import { ACTION_PROGRESS, ANOTHER_PENDING_REASON, REFUND_ALREADY_PENDING_REASON } from "./actionProgress"
 import { resetCarriedIds } from "./carriedIds"
 import { pendingSlot, pendingStorageKey, readPending } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
 import { receiptWatchConfig } from "./pendingWatch"
 import { RELAYER_SERVICE_DOWN_TEXT } from "./relayer"
-import { PENDING_EXPIRED_TEXT, PENDING_UNKNOWN_TEXT, RECEIPT_MAY_CONFIRM_TEXT } from "./walletCopy"
+import { DEAL_STANDS_LABEL, PENDING_CLOCK_TEXT, PENDING_EXPIRED_TEXT, PENDING_NOT_FOUND_TEXT, PENDING_UNSAVED_TEXT, RECEIPT_MAY_CONFIRM_TEXT } from "./walletCopy"
 import { FlowPreview } from "./FlowPreview"
 import { FORM_ERRORS, durationValidationMessage } from "./submit"
 import { MAX_DURATION_SECONDS } from "./preview"
@@ -171,6 +171,7 @@ beforeEach(() => {
   receiptWatchConfig.waitMs = 180_000
   receiptWatchConfig.unknownGraceMs = 3 * 60 * 1000
   receiptWatchConfig.maxAgeMs = 30 * 60 * 1000
+  receiptWatchConfig.expiryTickMs = 30_000
   window.history.replaceState(null, "", "/")
 })
 
@@ -408,7 +409,7 @@ describe("phase 1 wallet forms", () => {
     }
   })
 
-  it("clears an unknown hash and says so", async () => {
+  it("keeps a missing transaction locked until Try again anyway", async () => {
     const hash = `0x${"44".repeat(32)}` as Hex
     localStorage.setItem(
       pendingStorageKey(pendingSlot("release", claim)),
@@ -423,11 +424,135 @@ describe("phase 1 wallet forms", () => {
     const release = sectionOf("Prepare this payout")
     fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
     fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
-    await waitFor(() => expect(release.getByTestId("pending-unknown").textContent).toContain(PENDING_UNKNOWN_TEXT))
-    expect(readPending(pendingSlot("release", claim))).toBeNull()
+    await waitFor(() => expect(release.getByTestId("tx-may-confirm").textContent).toBe(PENDING_NOT_FOUND_TEXT))
+    expect(readPending(pendingSlot("release", claim))?.hash).toBe(hash)
     expect(release.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${hash}`)
-    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(true)
     expect(sendTransactionAsync).not.toHaveBeenCalled()
+    fireEvent.click(release.getByTestId("try-again"))
+    await waitFor(() => expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false))
+    expect(readPending(pendingSlot("release", claim))).toBeNull()
+  })
+
+  it("drops a future startedAt and leaves Release and Vote submittable", async () => {
+    const hash = `0x${"66".repeat(32)}` as Hex
+    const slot = pendingSlot("release", claim)
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({
+        hash,
+        startedAt: Date.now() + 1e12,
+        action: "release",
+        subjectId: claim,
+      }),
+    )
+    renderSurfaces()
+    await waitFor(() => expect(screen.getByTestId("pending-clock").textContent).toContain(PENDING_CLOCK_TEXT))
+    expect(screen.getByTestId("pending-clock").querySelector("[data-testid=tx-explorer]")?.getAttribute("href")).toContain(hash)
+    expect(readPending(slot)).toBeNull()
+    expect(localStorage.getItem(pendingStorageKey(slot))).toBeNull()
+
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    const vote = within(screen.getByTestId("vote-screen"))
+    fireEvent.change(vote.getByLabelText("Dispute ID"), { target: { value: disputeId } })
+    fireEvent.click(vote.getByLabelText(DEAL_STANDS_LABEL))
+    await waitFor(() => expect((vote.getByRole("button", { name: "Prepare this vote" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect((vote.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
+  })
+
+  it("expires a still-open pending record on a timer", async () => {
+    receiptWatchConfig.expiryTickMs = 40
+    const hash = `0x${"77".repeat(32)}` as Hex
+    const slot = pendingSlot("release", claim)
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({ hash, startedAt: Date.now(), action: "release", subjectId: claim }),
+    )
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(true))
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({
+        hash,
+        startedAt: Date.now() - receiptWatchConfig.maxAgeMs - 1_000,
+        action: "release",
+        subjectId: claim,
+      }),
+    )
+    await waitFor(() => expect(release.getByTestId("pending-expired").textContent).toContain(PENDING_EXPIRED_TEXT))
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(readPending(slot)).toBeNull()
+  })
+
+  it("keeps the lock when the pending record cannot be saved", async () => {
+    const originalWait = publicClient.waitForTransactionReceipt
+    publicClient.waitForTransactionReceipt = () => new Promise(() => undefined)
+    const originalSet = localStorage.setItem.bind(localStorage)
+    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation((key: string, value: string) => {
+      if (key.startsWith("agent-bv.pending.")) throw new Error("quota")
+      return originalSet(key, value)
+    })
+    try {
+      renderSurfaces()
+      const release = sectionOf("Prepare this payout")
+      fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+      fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+      await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+      fireEvent.click(release.getByTestId("sepolia-submit"))
+      await waitFor(() => expect(release.getByTestId("pending-unsaved").textContent).toBe(PENDING_UNSAVED_TEXT))
+      expect(release.getByTestId("sepolia-submit").textContent).toBe("Releasing payment…")
+      expect(release.getByTestId("tx-pending").textContent).toBe("Waiting for Base Sepolia…")
+      expect(release.getByTestId("tx-explorer").getAttribute("href")).toContain(`0x${"11".repeat(32)}`)
+      expect(release.queryByRole("alert")).toBeNull()
+      expect(readPending(pendingSlot("release", claim))?.saved).toBe(false)
+      const withdraw = within(screen.getByTestId("withdraw-screen"))
+      await waitFor(() => expect((withdraw.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
+      await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
+      expect((withdraw.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(true)
+      expect(sendTransactionAsync).toHaveBeenCalledTimes(1)
+    } finally {
+      setItem.mockRestore()
+      publicClient.waitForTransactionReceipt = originalWait
+    }
+  })
+
+  it("says this refund is already pending on its own relayer button", async () => {
+    const originalWait = publicClient.waitForTransactionReceipt
+    publicClient.waitForTransactionReceipt = () => new Promise(() => undefined)
+    vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, killSwitch: false }), { status: 200 })),
+    )
+    escrowFixture.expiresAt = 1n
+    try {
+      renderSurfaces()
+      const refund = sectionOf("Prepare this refund")
+      fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+      fireEvent.click(refund.getByRole("button", { name: "Prepare this refund" }))
+      await waitFor(() => expect(refund.getByTestId("sepolia-submit")).toBeTruthy())
+      fireEvent.click(refund.getByTestId("sepolia-submit"))
+      await waitFor(() => expect(refund.getByTestId("tx-pending")).toBeTruthy())
+      const relayer = within(refund.getByTestId("relayer-panel"))
+      expect(relayer.getByTestId("action-reason").textContent).toContain(REFUND_ALREADY_PENDING_REASON)
+      expect(relayer.getByTestId("action-reason").textContent).not.toContain(ANOTHER_PENDING_REASON)
+      expect((relayer.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
+    } finally {
+      publicClient.waitForTransactionReceipt = originalWait
+      vi.unstubAllEnvs()
+    }
   })
 
   it("expires a pending entry older than 30 minutes when the form opens", async () => {
@@ -617,6 +742,10 @@ describe("phase 1 wallet forms", () => {
     const dir = dirname(fileURLToPath(import.meta.url))
     const css = readFileSync(join(dir, "styles.css"), "utf8")
     expect(css).toMatch(/\.site-header\s*\{[^}]*position:\s*sticky/)
+    const narrow = css.slice(css.indexOf("@media (max-width: 640px)"))
+    expect(narrow).toMatch(/\.site-header \.wordmark\s*\{[^}]*font-size:\s*0\.92rem/)
+    expect(narrow).toMatch(/\.site-header \.wallet-chip\s*\{[^}]*width:\s*auto/)
+    expect(readFileSync(join(dir, "App.tsx"), "utf8")).toContain('<h1 className="wordmark">{DISPLAY_NAME}</h1>')
     const mobile = css.slice(css.indexOf("@media (max-width: 640px)"))
     expect(mobile).not.toMatch(/\.site-header\s*\{[^}]*position:\s*static/)
     expect(css).toMatch(/\.chunk\s*\{[^}]*display:\s*inline-block/)

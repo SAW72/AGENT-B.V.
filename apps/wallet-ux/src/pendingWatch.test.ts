@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Hex } from "viem"
 import { previewCreateEscrow, previewDispute, previewRelease, previewVote, previewWithdraw } from "./preview"
-import { pendingSlot, readPending, subjectFromCalldata, writePending } from "./pendingTx"
+import { pendingSlot, pendingStorageKey, readPending, resetPendingStore, subjectFromCalldata, writePending } from "./pendingTx"
 import { checkPendingReceipt, isPendingExpired, receiptWatchConfig } from "./pendingWatch"
+import { hasLivePending, resetSubmitLock } from "./submitLock"
 
 const hash = `0x${"ab".repeat(32)}` as Hex
 
@@ -126,4 +127,49 @@ describe("pending receipt checks", () => {
     expect(readPending(pendingSlot("createEscrow", escrowId))).toEqual(stored)
     expect(readPending(pendingSlot("createEscrow", disputeId))).toBeNull()
   })
+
+  it("drops a stored clock that is more than a minute ahead", () => {
+    const slot = pendingSlot("release", hash)
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({ hash, startedAt: Date.now() + 1e12, action: "release", subjectId: hash }),
+    )
+    expect(readPending(slot)).toBeNull()
+    expect(localStorage.getItem(pendingStorageKey(slot))).toBeNull()
+    expect(hasLivePending()).toBe(false)
+  })
+
+  it("keeps an in-memory pending record when storage throws", () => {
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota")
+    })
+    try {
+      const stored = writePending({ action: "release", subjectId: hash, hash, startedAt: Date.now() })
+      expect(stored.saved).toBe(false)
+      expect(readPending(pendingSlot("release", hash))).toEqual(stored)
+      expect(hasLivePending()).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("reads pending storage once until a write or a storage event", () => {
+    writePending({ action: "release", subjectId: hash, hash, startedAt: Date.now() })
+    const spy = vi.spyOn(Storage.prototype, "key")
+    expect(hasLivePending()).toBe(true)
+    const reads = spy.mock.calls.length
+    expect(reads).toBeGreaterThan(0)
+    expect(hasLivePending()).toBe(true)
+    expect(spy.mock.calls.length).toBe(reads)
+    window.dispatchEvent(new StorageEvent("storage", { key: pendingStorageKey(pendingSlot("release", hash)) }))
+    expect(hasLivePending()).toBe(true)
+    expect(spy.mock.calls.length).toBeGreaterThan(reads)
+    spy.mockRestore()
+  })
+})
+
+afterEach(() => {
+  localStorage.clear()
+  resetPendingStore()
+  resetSubmitLock()
 })

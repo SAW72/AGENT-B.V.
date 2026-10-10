@@ -21,7 +21,7 @@ import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { assertSubmitTarget, evaluateEscrowSubmit, submitControl, submitSenderNote } from "./submit"
 import { usePendingReceipt } from "./usePendingReceipt"
 import { useConnectorChainId } from "./useWalletChain"
-import { TX_REVERTED_TEXT } from "./walletCopy"
+import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
@@ -138,9 +138,15 @@ export function WalletOnlySubmit({
           nextLabel: progress.next?.label,
         }
       : receipt.phase === "pending" && receipt.txHash
-        ? { status: "pending", hash: receipt.txHash, label: progress.pending, startedAt: receipt.startedAt ?? undefined }
+        ? {
+            status: "pending",
+            hash: receipt.txHash,
+            label: progress.pending,
+            startedAt: receipt.startedAt ?? undefined,
+            unsaved: receipt.unsaved,
+          }
         : receipt.phase === "unconfirmed" && receipt.txHash
-          ? { status: "unconfirmed", hash: receipt.txHash }
+          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice) }
           : waiting
             ? { status: "waiting-wallet" }
             : { status: "idle", label: "Submit on Base Sepolia" }
@@ -173,7 +179,7 @@ export function WalletOnlySubmit({
         state={state}
         walletHint={walletHint}
         cancelled={cancelled}
-        onTryAgain={state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+        onTryAgain={state.status === "pending" || state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
       />
       {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
       <PendingClearedNote banner={receipt.banner} />

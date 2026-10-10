@@ -6,6 +6,7 @@ export const receiptWatchConfig = {
   waitMs: 180_000,
   unknownGraceMs: 3 * 60 * 1000,
   maxAgeMs: 30 * 60 * 1000,
+  expiryTickMs: 30_000,
 }
 
 export type ReceiptReader = {
@@ -33,8 +34,8 @@ export function isPendingExpired(startedAt: number, now = Date.now()): boolean {
 
 /**
  * One look at a stored hash.
- * A missing receipt stays pending. A missing transaction becomes unknown only after the grace period.
- * A transport error stays unreadable so the entry is not dropped on a blip.
+ * A missing receipt stays pending. A missing transaction is unknown only after the grace period.
+ * Unknown does not drop the record. A transport error stays unreadable so the entry is not dropped on a blip.
  */
 export async function checkPendingReceipt(
   client: Pick<ReceiptReader, "getTransaction" | "getTransactionReceipt">,

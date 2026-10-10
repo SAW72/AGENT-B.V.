@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { decodeFunctionData, type Address, type Hex } from "viem"
+import { shortHash } from "./format"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { disputePanelAbi, escrowAbi } from "./abi"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
@@ -491,7 +492,8 @@ describe("vote and withdraw screens", () => {
     await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(vote.getByTestId("tx-pending").textContent).toBe(TX_PENDING_TEXT))
-    expect(vote.getByTestId("tx-hash").textContent).toBe(txHash)
+    expect(vote.getByTestId("tx-hash").textContent).toBe(shortHash(txHash))
+    expect(within(vote.getByTestId("action-pending")).getByRole("button", { name: "Copy" })).toBeTruthy()
     expect(vote.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${txHash}`)
     await settleReceipt()
     await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe("Vote cast"))

@@ -413,6 +413,10 @@ footer { color: var(--muted); font-size: 0.92rem; }
   padding: 8px 0;
 }
 
+.site-header .pill {
+  margin: 0;
+}
+
 .wordmark {
   margin: 0;
   font-size: 1.25rem;
@@ -455,8 +459,30 @@ footer { color: var(--muted); font-size: 0.92rem; }
   .status-list div { align-items: flex-start; }
   .rep-head { flex-direction: column; }
   .history-row { grid-template-columns: 1fr; }
-  .site-header { align-items: stretch; }
-  .wallet-chip { margin-left: 0; width: 100%; }
+  .site-header {
+    align-items: center;
+    gap: 4px 8px;
+    padding: 4px 0;
+  }
+  .site-header .wordmark {
+    flex: 1 1 100%;
+    font-size: 0.92rem;
+    line-height: 1.15;
+  }
+  .site-header .pill {
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    line-height: 1.2;
+  }
+  .site-header .wallet-chip {
+    margin-left: 0;
+    width: auto;
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    gap: 6px;
+    white-space: nowrap;
+  }
   form > button,
   .preview button,
   .card > button,

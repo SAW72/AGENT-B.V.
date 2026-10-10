@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react"
-import { afterEach, describe, expect, it } from "vitest"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ActionButton,
   ActionStatus,
@@ -71,7 +71,9 @@ describe("ActionButton states", () => {
     if (state.status === "pending") {
       expect(button.textContent).toBe(PENDING_NETWORK_LABEL)
       expect(screen.getByTestId("tx-pending").textContent).toBe(PENDING_NETWORK_LABEL)
-      expect(screen.getByTestId("tx-hash").textContent).toBe(HASH)
+      expect(screen.getByText("Transaction")).toBeTruthy()
+      expect(screen.getByTestId("tx-hash").textContent).toBe(shortHash(HASH))
+      expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy()
       expect(screen.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${HASH}`)
     }
     if (state.status === "confirmed") {
@@ -85,6 +87,27 @@ describe("ActionButton states", () => {
       expect(alert.textContent).toBe(state.message)
       expect(button.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
+  })
+
+  it("offers Try again on a pending record older than 180 seconds", () => {
+    const onTryAgain = vi.fn()
+    const { unmount } = render(
+      <ActionStatus
+        state={{ status: "pending", hash: HASH, startedAt: Date.now() - 170_000 }}
+        onTryAgain={onTryAgain}
+      />,
+    )
+    expect(screen.queryByTestId("try-again")).toBeNull()
+    unmount()
+    render(
+      <ActionStatus
+        state={{ status: "pending", hash: HASH, startedAt: Date.now() - 181_000 }}
+        onTryAgain={onTryAgain}
+      />,
+    )
+    fireEvent.click(screen.getByTestId("try-again"))
+    expect(onTryAgain).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId("tx-hash").textContent).toBe(shortHash(HASH))
   })
 
   it("shows one warning icon on a slow pending note", () => {
