@@ -66,11 +66,11 @@ describe("dispute form", () => {
     expect(caseId.value).not.toBe(firstId)
 
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
-    expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds)
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds))
 
     fireEvent.change(dispute.getByLabelText("Reason"), { target: { value: "late delivery" } })
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
-    expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds)
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(FORM_ERRORS.openIds))
 
     fireEvent.change(dispute.getByLabelText("Claim identifier"), { target: { value: claim } })
     await waitFor(() => {
@@ -78,6 +78,7 @@ describe("dispute form", () => {
     })
 
     fireEvent.click(dispute.getByRole("button", { name: "Prepare this dispute" }))
+    await waitFor(() => expect(screen.getAllByTestId("calldata-preview")).toHaveLength(1))
     const previews = screen.getAllByTestId("calldata-preview")
     expect(previews).toHaveLength(1)
     expect(screen.queryByTestId("open-and-link")).toBeNull()

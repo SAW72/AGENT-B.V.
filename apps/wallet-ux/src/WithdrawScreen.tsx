@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { formatEther, type Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { escrowAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
+import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { previewCardCopy } from "./submit"
 import { AddressRow } from "./ui"
@@ -67,12 +68,16 @@ export function WithdrawScreen({
 function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled: boolean }) {
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
-  const [preview, setPreview] = useState<CallPreview | null>(null)
   const [credit, setCredit] = useState<bigint | null>(null)
   const [creditState, setCreditState] = useState<"idle" | "loading" | "ready" | "unreadable" | "hidden" | "disconnected">(
     "idle",
   )
   const [generation, setGeneration] = useState(0)
+  const session = usePrepareSession<CallPreview>("withdraw", null)
+  const creditRef = useRef(credit)
+  const creditStateRef = useRef(creditState)
+  creditRef.current = credit
+  creditStateRef.current = creditState
 
   useEffect(() => {
     const accountAddress = account.address
@@ -121,10 +126,19 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
 
   const canPrepare = creditState === "ready" && credit != null && credit > 0n
 
-  function onWithdraw(event: FormEvent) {
+  async function onWithdraw(event: FormEvent) {
     event.preventDefault()
-    if (!canPrepare) return
-    setPreview(previewWithdraw(escrow))
+    if (creditStateRef.current !== "ready" || creditRef.current == null || creditRef.current <= 0n) return
+    if (!session.begin()) return
+    try {
+      await yieldPrepareTick()
+      if (creditStateRef.current !== "ready" || creditRef.current == null || creditRef.current <= 0n) return
+      session.publish(null, previewWithdraw(escrow))
+    } catch (cause) {
+      session.publish(prepareFailure("withdrawal", cause), null)
+    } finally {
+      session.finish()
+    }
   }
 
   const availableText =
@@ -153,26 +167,36 @@ function WithdrawForm({ escrow, readsEnabled }: { escrow: Address; readsEnabled:
     <>
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
       <p data-testid="withdraw-available">{availableText}</p>
-      <form id="withdraw-form" onSubmit={onWithdraw}>
-        <button type="submit" disabled={!canPrepare}>
-          {canPrepare ? "Prepare withdraw" : blockedLabel}
+      <form id="withdraw-form" onSubmit={(event) => void onWithdraw(event)}>
+        <button type="submit" disabled={session.preparing || !canPrepare} aria-busy={session.preparing}>
+          {session.preparing ? PREPARING_LABEL : canPrepare ? "Prepare withdraw" : blockedLabel}
         </button>
+        {session.error ? (
+          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
+            {session.error}
+          </p>
+        ) : session.preview ? (
+          <div
+            className="preview"
+            data-testid="withdraw-preview"
+            tabIndex={-1}
+            aria-label="Prepared withdrawal"
+            ref={session.setNode}
+          >
+            <p>{previewCardCopy(session.preview.functionName, false)}</p>
+            <p className="mono">{session.preview.to}</p>
+            <p>value {formatEther(session.preview.valueWei)} ETH</p>
+            <pre className="calldata">{session.preview.calldata}</pre>
+            <WalletOnlySubmit
+              key={session.preview.calldata}
+              preview={session.preview}
+              allowed={[escrow]}
+              hold={!canPrepare}
+              onConfirmed={() => setGeneration((value) => value + 1)}
+            />
+          </div>
+        ) : null}
       </form>
-      {preview ? (
-        <div className="preview" data-testid="withdraw-preview">
-          <p>{previewCardCopy(preview.functionName, false)}</p>
-          <p className="mono">{preview.to}</p>
-          <p>value {formatEther(preview.valueWei)} ETH</p>
-          <pre className="calldata">{preview.calldata}</pre>
-          <WalletOnlySubmit
-            key={preview.calldata}
-            preview={preview}
-            allowed={[escrow]}
-            hold={!canPrepare}
-            onConfirmed={() => setGeneration((value) => value + 1)}
-          />
-        </div>
-      ) : null}
     </>
   )
 }

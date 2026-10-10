@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { formatEther, type Address } from "viem"
 import { useAccount, usePublicClient } from "wagmi"
 import { disputePanelAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { parseBytes32 } from "./bytes32"
+import { PREPARING_LABEL, prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewVote, type CallPreview } from "./preview"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
 import { AddressRow } from "./ui"
@@ -63,17 +64,33 @@ function Field({
   )
 }
 
+function caseBlockMessage(read: CaseRead): string | null {
+  if (read.status === "unreadable") return CASE_UNREADABLE_TEXT
+  if (read.status === "missing") return NO_DISPUTE_TEXT
+  if (read.status === "resolved") return resolvedCaseText(read.row.dealStands)
+  if (read.status === "already-voted") return ALREADY_VOTED_TEXT
+  if (read.status === "vote-unreadable") return VOTED_UNREADABLE_TEXT
+  return null
+}
+
 export function VoteScreen({ panel }: { panel: Address }) {
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [disputeId, setDisputeId] = useState("")
   const [choice, setChoice] = useState<"" | "payee" | "payer">("")
-  const [error, setError] = useState<string | null>(null)
-  const [preview, setPreview] = useState<CallPreview | null>(null)
   const [arbitrator, setArbitrator] = useState<ArbitratorRead>("loading")
   const [caseRead, setCaseRead] = useState<CaseRead>({ status: "idle" })
   const [generation, setGeneration] = useState(0)
+  const session = usePrepareSession<CallPreview>("vote", null)
   const parsedId = parseBytes32(disputeId)
+  const caseRef = useRef<CaseRead>({ status: "idle" })
+  const caseFlight = useRef<Promise<void> | null>(null)
+  const disputeIdRef = useRef(disputeId)
+  const choiceRef = useRef(choice)
+  const arbitratorRef = useRef(arbitrator)
+  disputeIdRef.current = disputeId
+  choiceRef.current = choice
+  arbitratorRef.current = arbitrator
 
   useEffect(() => {
     const accountAddress = account.address
@@ -111,25 +128,37 @@ export function VoteScreen({ panel }: { panel: Address }) {
 
   useEffect(() => {
     if (!parsedId) {
+      caseFlight.current = null
+      caseRef.current = { status: "idle" }
       setCaseRead({ status: "idle" })
       return
     }
     if (!client) {
+      caseFlight.current = null
+      caseRef.current = { status: "unreadable" }
       setCaseRead({ status: "unreadable" })
       return
     }
     const disputeIdHex = parsedId
     const accountAddress = account.isConnected ? account.address : undefined
     let cancelled = false
-    setCaseRead((current) =>
-      current.status === "open" ||
-      current.status === "resolved" ||
-      current.status === "already-voted" ||
-      current.status === "vote-unreadable"
-        ? current
-        : { status: "loading" },
-    )
-    void (async () => {
+    setCaseRead((current) => {
+      const next =
+        current.status === "open" ||
+        current.status === "resolved" ||
+        current.status === "already-voted" ||
+        current.status === "vote-unreadable"
+          ? current
+          : ({ status: "loading" } as const)
+      caseRef.current = next
+      return next
+    })
+    const apply = (next: CaseRead) => {
+      if (cancelled) return
+      caseRef.current = next
+      setCaseRead(next)
+    }
+    const flight = (async () => {
       let row: DisputeRow | null = null
       let rowFailed = false
       try {
@@ -146,11 +175,11 @@ export function VoteScreen({ panel }: { panel: Address }) {
       }
       if (cancelled) return
       if (rowFailed || !row) {
-        setCaseRead({ status: "unreadable" })
+        apply({ status: "unreadable" })
         return
       }
       if (row.createdAt === 0n) {
-        setCaseRead({ status: "missing" })
+        apply({ status: "missing" })
         return
       }
 
@@ -187,19 +216,20 @@ export function VoteScreen({ panel }: { panel: Address }) {
 
       const detail = { row, panelSize, panelSizeUnreadable }
       if (row.resolved) {
-        setCaseRead({ status: "resolved", ...detail })
+        apply({ status: "resolved", ...detail })
         return
       }
       if (alreadyVoted === "unreadable") {
-        setCaseRead({ status: "vote-unreadable", ...detail })
+        apply({ status: "vote-unreadable", ...detail })
         return
       }
       if (alreadyVoted === true) {
-        setCaseRead({ status: "already-voted", ...detail })
+        apply({ status: "already-voted", ...detail })
         return
       }
-      setCaseRead({ status: "open", ...detail })
+      apply({ status: "open", ...detail })
     })()
+    caseFlight.current = flight
     return () => {
       cancelled = true
     }
@@ -207,30 +237,50 @@ export function VoteScreen({ panel }: { panel: Address }) {
 
   const caseBlocks =
     parsedId != null &&
-    (caseRead.status === "loading" ||
-      caseRead.status === "unreadable" ||
+    (caseRead.status === "unreadable" ||
       caseRead.status === "missing" ||
       caseRead.status === "resolved" ||
       caseRead.status === "already-voted" ||
       caseRead.status === "vote-unreadable")
   const canPrepare = arbitrator === "yes" && !caseBlocks
 
-  function onSubmit(event: FormEvent) {
+  async function settleCase() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const flight = caseFlight.current
+      if (!flight) return
+      await flight
+      if (caseFlight.current === flight) return
+    }
+  }
+
+  async function onSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!canPrepare) return
-    const id = parseBytes32(disputeId)
-    if (!id) {
-      setPreview(null)
-      setError(FORM_ERRORS.voteId)
-      return
+    if (arbitratorRef.current !== "yes" || caseBlockMessage(caseRef.current)) return
+    if (!session.begin()) return
+    try {
+      await yieldPrepareTick()
+      await settleCase()
+      const blocked = caseBlockMessage(caseRef.current)
+      if (arbitratorRef.current !== "yes" || blocked) {
+        if (blocked) session.publish(blocked, null)
+        return
+      }
+      const id = parseBytes32(disputeIdRef.current)
+      if (!id) {
+        session.publish(FORM_ERRORS.voteId, null)
+        return
+      }
+      const selected = choiceRef.current
+      if (selected !== "payee" && selected !== "payer") {
+        session.publish(FORM_ERRORS.voteChoice, null)
+        return
+      }
+      session.publish(null, previewVote(panel, id, selected === "payee"))
+    } catch (cause) {
+      session.publish(prepareFailure("vote", cause), null)
+    } finally {
+      session.finish()
     }
-    if (choice !== "payee" && choice !== "payer") {
-      setPreview(null)
-      setError(FORM_ERRORS.voteChoice)
-      return
-    }
-    setError(null)
-    setPreview(previewVote(panel, id, choice === "payee"))
   }
 
   const arbitratorMessage =
@@ -260,15 +310,14 @@ export function VoteScreen({ panel }: { panel: Address }) {
         </p>
       ) : null}
       <CaseStatus read={caseRead} />
-      <form id="vote-form" onSubmit={onSubmit}>
+      <form id="vote-form" onSubmit={(event) => void onSubmit(event)}>
         <Field
           id="vote-dispute-id"
           label="Dispute identifier"
           value={disputeId}
           onChange={(value) => {
             setDisputeId(value)
-            setPreview(null)
-            setError(null)
+            session.clear()
           }}
         />
         <fieldset className="choice">
@@ -281,8 +330,7 @@ export function VoteScreen({ panel }: { panel: Address }) {
               checked={choice === "payee"}
               onChange={() => {
                 setChoice("payee")
-                setPreview(null)
-                setError(null)
+                session.clear()
               }}
             />
             {DEAL_STANDS_LABEL}
@@ -295,37 +343,36 @@ export function VoteScreen({ panel }: { panel: Address }) {
               checked={choice === "payer"}
               onChange={() => {
                 setChoice("payer")
-                setPreview(null)
-                setError(null)
+                session.clear()
               }}
             />
             {UNDO_DEAL_LABEL}
           </label>
         </fieldset>
-        <button type="submit" disabled={!canPrepare}>
-          Prepare this vote
+        <button type="submit" disabled={session.preparing || !canPrepare} aria-busy={session.preparing}>
+          {session.preparing ? PREPARING_LABEL : "Prepare this vote"}
         </button>
+        {session.error ? (
+          <p className="bad" role="alert" tabIndex={-1} ref={session.setNode}>
+            {session.error}
+          </p>
+        ) : session.preview ? (
+          <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
+            <p>{previewCardCopy(session.preview.functionName, false)}</p>
+            <p className="mono">{session.preview.to}</p>
+            <p>value {formatEther(session.preview.valueWei)} ETH</p>
+            <pre className="calldata">{session.preview.calldata}</pre>
+            <WalletOnlySubmit
+              key={session.preview.calldata}
+              preview={session.preview}
+              allowed={[panel]}
+              hold={!canPrepare}
+              onConfirmed={() => setGeneration((value) => value + 1)}
+            />
+          </div>
+        ) : null}
       </form>
-      {error ? (
-        <p className="bad" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {preview ? (
-        <div className="preview" data-testid="vote-preview">
-          <p>{previewCardCopy(preview.functionName, false)}</p>
-          <p className="mono">{preview.to}</p>
-          <p>value {formatEther(preview.valueWei)} ETH</p>
-          <pre className="calldata">{preview.calldata}</pre>
-          <WalletOnlySubmit
-            key={preview.calldata}
-            preview={preview}
-            allowed={[panel]}
-            hold={!canPrepare}
-            onConfirmed={() => setGeneration((value) => value + 1)}
-          />
-        </div>
-      ) : (
+      {session.preview ? null : (
         <button type="button" data-testid="vote-submit-blocked" disabled>
           Submit on Base Sepolia
         </button>

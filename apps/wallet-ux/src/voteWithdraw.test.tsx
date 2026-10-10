@@ -378,10 +378,11 @@ describe("vote and withdraw screens", () => {
     await enterDispute(vote)
     await waitFor(() => expect((vote.getByRole("button", { name: "Prepare this vote" }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
-    expect(vote.getByRole("alert").textContent).toBe(VOTE_CHOICE_TEXT)
+    await waitFor(() => expect(vote.getByRole("alert").textContent).toBe(VOTE_CHOICE_TEXT))
 
     fireEvent.click(vote.getByLabelText(DEAL_STANDS_LABEL))
     fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(vote.getByTestId("tx-pending").textContent).toBe(TX_PENDING_TEXT))
@@ -390,11 +391,13 @@ describe("vote and withdraw screens", () => {
 
     fireEvent.click(vote.getByLabelText(UNDO_DEAL_LABEL))
     fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(2))
 
     await waitFor(() => expect(withdraw.getByTestId("withdraw-available").textContent).toBe("Available to withdraw: 1 ETH"))
     fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
+    await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(withdraw.getByTestId("sepolia-submit"))
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(3))
 
@@ -438,6 +441,7 @@ describe("vote and withdraw screens", () => {
     const prepare = screen.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement
     expect(prepare.disabled).toBe(false)
     fireEvent.click(prepare)
+    await waitFor(() => expect(screen.getByTestId("withdraw-preview")).toBeTruthy())
     const calldata = screen.getByTestId("withdraw-preview").querySelector("pre")?.textContent ?? ""
     const decoded = decodeFunctionData({ abi: escrowAbi, data: calldata as Hex })
     expect(decoded.functionName).toBe("withdraw")
@@ -452,6 +456,7 @@ describe("vote and withdraw screens", () => {
     const disputesBefore = readCalls("disputes").length
     fireEvent.click(vote.getByLabelText(DEAL_STANDS_LABEL))
     fireEvent.click(vote.getByRole("button", { name: "Prepare this vote" }))
+    await waitFor(() => expect(vote.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(vote.getByTestId("sepolia-submit"))
     await waitFor(() => expect(vote.getByTestId("tx-pending").textContent).toBe(TX_PENDING_TEXT))
     expect(vote.getByTestId("tx-hash").textContent).toBe(txHash)
@@ -465,6 +470,7 @@ describe("vote and withdraw screens", () => {
     await waitFor(() => expect(withdraw.getByRole("button", { name: "Prepare withdraw" })).toBeTruthy())
     const balanceBefore = readCalls("pendingWithdrawals").length
     fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
+    await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
     fireEvent.click(withdraw.getByTestId("sepolia-submit"))
     await waitFor(() => expect(withdraw.getByTestId("tx-pending")).toBeTruthy())
     await settleReceipt()
