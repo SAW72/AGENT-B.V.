@@ -64,9 +64,15 @@ export const TX_LINK_LABEL = "View this transaction on Base Sepolia"
 
 export const TX_REVERTED_TEXT = "This transaction reverted on Base Sepolia."
 
-export const TX_RECEIPT_UNREADABLE_TEXT = "This transaction was sent, but its receipt could not be read."
+export const RECEIPT_MAY_CONFIRM_TEXT = "It may still confirm. Check Basescan before trying again."
 
-export const TX_STILL_PENDING_TEXT = "This transaction is still pending. Check it on Basescan."
+export const TRY_AGAIN_LABEL = "Try again anyway"
+
+export const PENDING_UNKNOWN_TEXT =
+  "This transaction was not found on Base Sepolia. Check Basescan before submitting again."
+
+export const PENDING_EXPIRED_TEXT =
+  "This step was left pending for more than 30 minutes. Check Basescan before submitting again."
 
 /** viem stops waiting after 180 seconds and throws this name while the transaction can still be pending. */
 export function isReceiptTimeout(error: unknown): boolean {

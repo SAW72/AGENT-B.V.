@@ -97,7 +97,7 @@ describe("dispute form", () => {
     expect(within(previews[0]!).getByText("Contract")).toBeTruthy()
     const details = within(previews[0]!).getByTestId("calldata-details") as HTMLDetailsElement
     expect(details.open).toBe(false)
-    expect(details.querySelector("summary")?.textContent).toBe("Details")
+    expect(details.querySelector("summary")?.textContent).toBe("Details (raw transaction data)")
     expect(within(previews[0]!).getByTestId("action-reason").textContent).toContain(NO_WALLET_REASON)
     expect(within(previews[0]!).getByRole("button", { name: "Connect a wallet on Base Sepolia" })).toBeTruthy()
     expect(previews[0]?.textContent).not.toContain(panel)

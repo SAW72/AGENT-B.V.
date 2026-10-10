@@ -15,7 +15,7 @@ import {
   type ActionButtonState,
 } from "./actionButton"
 import { PENDING_SLOW_TEXT } from "./actionProgress"
-import { shortAddress } from "./format"
+import { shortHash } from "./format"
 
 const HASH = `0x${"ab".repeat(32)}`
 
@@ -117,10 +117,10 @@ describe("ActionButton states", () => {
     for (const chunk of id.querySelectorAll(".chunk")) {
       expect(chunk.textContent ?? "").not.toMatch(/\s/)
     }
-    expect(screen.getByTestId("tx-hash").textContent).toBe(shortAddress(HASH))
+    expect(screen.getByTestId("tx-hash").textContent).toBe(shortHash(HASH))
     expect(screen.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${HASH}`)
     const next = screen.getByTestId("next-step")
-    expect(next.textContent).toBe("Next step")
+    expect(next.textContent).toBe("Next: release the payment")
     expect(next.getAttribute("href")).toBe("#release-form")
     expect(screen.getByTestId("tx-confirmed").textContent).toBe("Escrow funded")
   })

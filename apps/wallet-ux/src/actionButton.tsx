@@ -1,8 +1,18 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
 import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
-import { chunkHex, shortAddress } from "./format"
+import { chunkHex, shortHash } from "./format"
 import { ChunkedHex, CopyButton } from "./ui"
-import { txExplorerUrl, TX_CONFIRMED_TEXT, TX_LINK_LABEL, TX_PENDING_TEXT, TX_STILL_PENDING_TEXT } from "./walletCopy"
+import type { PendingBanner } from "./usePendingReceipt"
+import {
+  PENDING_EXPIRED_TEXT,
+  PENDING_UNKNOWN_TEXT,
+  RECEIPT_MAY_CONFIRM_TEXT,
+  TRY_AGAIN_LABEL,
+  txExplorerUrl,
+  TX_CONFIRMED_TEXT,
+  TX_LINK_LABEL,
+  TX_PENDING_TEXT,
+} from "./walletCopy"
 
 export const NEEDS_WALLET_LABEL = "Connect a wallet on Base Sepolia"
 export const NO_WALLET_REASON = "No wallet connected"
@@ -30,7 +40,8 @@ export type ActionButtonState =
   | { status: "wrong-network" }
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
-  | { status: "pending"; hash: string; label?: string; startedAt?: number; stalled?: boolean }
+  | { status: "pending"; hash: string; label?: string; startedAt?: number }
+  | { status: "unconfirmed"; hash: string }
   | {
       status: "confirmed"
       hash: string
@@ -55,6 +66,8 @@ export function actionButtonLabel(state: ActionButtonState): string {
       return CONFIRM_WALLET_LABEL
     case "pending":
       return state.label ?? PENDING_NETWORK_LABEL
+    case "unconfirmed":
+      return "Submit on Base Sepolia"
     case "confirmed":
       return state.label ?? DONE_LABEL
     case "error":
@@ -93,6 +106,7 @@ export function ActionButton({
     state.status === "busy" ||
     state.status === "waiting-wallet" ||
     state.status === "pending" ||
+    state.status === "unconfirmed" ||
     state.status === "confirmed"
   const shownReason = locked ? reason : null
   return (
@@ -138,6 +152,7 @@ export function ActionStatus({
   pendingTestId = "tx-pending",
   confirmedTestId = "tx-confirmed",
   cancelled = false,
+  onTryAgain,
 }: {
   state: ActionButtonState
   walletHint?: boolean
@@ -146,6 +161,7 @@ export function ActionStatus({
   pendingTestId?: string
   confirmedTestId?: string
   cancelled?: boolean
+  onTryAgain?: () => void
 }) {
   const slow = usePendingSlow(state.status === "pending" ? state.startedAt : undefined, state.status === "pending")
   if (state.status === "error") {
@@ -188,8 +204,31 @@ export function ActionStatus({
             {PENDING_SLOW_TEXT}
           </p>
         ) : null}
-        {state.stalled ? (
-          <p data-testid="tx-still-pending">{TX_STILL_PENDING_TEXT}</p>
+      </div>
+    )
+  }
+  if (state.status === "unconfirmed") {
+    return (
+      <div role="status" aria-live="polite" data-testid="tx-unconfirmed">
+        <div className="kv-row">
+          <div className="kv-label">Transaction</div>
+          <div className="kv-value">
+            <span className="mono" data-testid="tx-hash">
+              {shortHash(state.hash)}
+            </span>
+            <CopyButton value={state.hash} />
+            <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
+              {TX_LINK_LABEL}
+            </a>
+          </div>
+        </div>
+        <p className="may-confirm" data-testid="tx-may-confirm">
+          {RECEIPT_MAY_CONFIRM_TEXT}
+        </p>
+        {onTryAgain ? (
+          <button type="button" className="secondary" data-testid="try-again" onClick={onTryAgain}>
+            {TRY_AGAIN_LABEL}
+          </button>
         ) : null}
       </div>
     )
@@ -214,7 +253,7 @@ export function ActionStatus({
           <div className="kv-label">Transaction</div>
           <div className="kv-value">
             <span className="mono" data-testid="tx-hash">
-              {shortAddress(state.hash)}
+              {shortHash(state.hash)}
             </span>
             <CopyButton value={state.hash} />
             <a href={txExplorerUrl(state.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
@@ -224,8 +263,8 @@ export function ActionStatus({
         </div>
         {state.nextHref ? (
           <p>
-            <a className="next-step" href={state.nextHref} data-testid="next-step" title={state.nextLabel}>
-              Next step
+            <a className="next-step" href={state.nextHref} data-testid="next-step">
+              {state.nextLabel ?? "Next step"}
             </a>
           </p>
         ) : null}
@@ -234,6 +273,25 @@ export function ActionStatus({
   }
   if (errorDetail) return <>{errorDetail}</>
   return null
+}
+
+export function PendingClearedNote({ banner }: { banner: PendingBanner | null }) {
+  if (!banner || banner.kind === "reverted") return null
+  const text = banner.kind === "expired" ? PENDING_EXPIRED_TEXT : PENDING_UNKNOWN_TEXT
+  return (
+    <div role="status" data-testid={banner.kind === "expired" ? "pending-expired" : "pending-unknown"}>
+      <p>{text}</p>
+      <p>
+        <span className="mono" data-testid="tx-hash">
+          {shortHash(banner.hash)}
+        </span>
+        <CopyButton value={banner.hash} />
+        <a href={txExplorerUrl(banner.hash)} data-testid="tx-explorer" target="_blank" rel="noreferrer">
+          {TX_LINK_LABEL}
+        </a>
+      </p>
+    </div>
+  )
 }
 
 export function useWalletHint(waiting: boolean): boolean {

@@ -15,9 +15,10 @@ import {
   WALLET_HINT_TEXT,
 } from "./actionButton"
 import { resetCarriedIds } from "./carriedIds"
-import { readPending } from "./pendingTx"
+import { pendingStorageKey, readPending } from "./pendingTx"
+import { receiptWatchConfig } from "./pendingWatch"
 import { RELAYER_SERVICE_DOWN_TEXT } from "./relayer"
-import { TX_RECEIPT_UNREADABLE_TEXT, TX_STILL_PENDING_TEXT } from "./walletCopy"
+import { PENDING_EXPIRED_TEXT, PENDING_UNKNOWN_TEXT, RECEIPT_MAY_CONFIRM_TEXT } from "./walletCopy"
 import { FlowPreview } from "./FlowPreview"
 import { FORM_ERRORS, durationValidationMessage } from "./submit"
 import { MAX_DURATION_SECONDS } from "./preview"
@@ -67,7 +68,14 @@ vi.mock("./submit", async (importOriginal) => {
   }
 })
 
-const publicClient = {
+const publicClient: {
+  getCode: () => Promise<string>
+  call: (args: { functionName?: string }) => Promise<{ data: Hex }>
+  readContract: (args: { functionName: string }) => Promise<unknown>
+  waitForTransactionReceipt: () => Promise<{ status: "success" | "reverted" }>
+  getTransactionReceipt: () => Promise<{ status: "success" | "reverted" } | null>
+  getTransaction: () => Promise<unknown>
+} = {
   getCode: async () => "0x60016000",
   call: async () => ({
     data: encodeFunctionResult({
@@ -90,6 +98,12 @@ const publicClient = {
     return 0n
   },
   waitForTransactionReceipt: async () => ({ status: "success" as const }),
+  getTransactionReceipt: async () => {
+    throw Object.assign(new Error("missing receipt"), { name: "TransactionReceiptNotFoundError" })
+  },
+  getTransaction: async () => {
+    throw Object.assign(new Error("missing transaction"), { name: "TransactionNotFoundError" })
+  },
 }
 
 vi.mock("wagmi", () => ({
@@ -141,6 +155,17 @@ beforeEach(() => {
   switchChain.mockReset()
   escrowFixture.expiresAt = 4_000_000_000n
   escrowFixture.state = 0
+  publicClient.waitForTransactionReceipt = async () => ({ status: "success" as const })
+  publicClient.getTransactionReceipt = async () => {
+    throw Object.assign(new Error("missing receipt"), { name: "TransactionReceiptNotFoundError" })
+  }
+  publicClient.getTransaction = async () => {
+    throw Object.assign(new Error("missing transaction"), { name: "TransactionNotFoundError" })
+  }
+  receiptWatchConfig.pollMs = 15_000
+  receiptWatchConfig.waitMs = 180_000
+  receiptWatchConfig.unknownGraceMs = 3 * 60 * 1000
+  receiptWatchConfig.maxAgeMs = 30 * 60 * 1000
   window.history.replaceState(null, "", "/")
 })
 
@@ -271,28 +296,160 @@ describe("phase 1 wallet forms", () => {
     await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
   })
 
-  it("keeps a receipt that is still pending after the 180 second wait", async () => {
-    const original = publicClient.waitForTransactionReceipt
+  it("keeps Submit disabled after a stalled receipt until Try again anyway", async () => {
+    const originalWait = publicClient.waitForTransactionReceipt
+    const originalTx = publicClient.getTransaction
     publicClient.waitForTransactionReceipt = async () => {
       throw Object.assign(new Error("Timed out while waiting for transaction."), {
         name: "WaitForTransactionReceiptTimeoutError",
       })
     }
+    publicClient.getTransaction = async () => ({ hash: `0x${"11".repeat(32)}` })
     try {
-      renderSurfaces()
-      const release = sectionOf("Prepare this payout")
-      fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
-      fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
-      await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
-      fireEvent.click(release.getByTestId("sepolia-submit"))
-      await waitFor(() => expect(release.getByTestId("tx-still-pending").textContent).toBe(TX_STILL_PENDING_TEXT))
-      expect(release.getByTestId("tx-explorer").getAttribute("href")).toContain("https://sepolia.basescan.org/tx/")
-      expect(release.queryByText(TX_RECEIPT_UNREADABLE_TEXT)).toBeNull()
-      expect(release.getByTestId("tx-pending")).toBeTruthy()
-      expect(readPending("release")?.hash).toBe(`0x${"11".repeat(32)}`)
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    const withdraw = within(screen.getByTestId("withdraw-screen"))
+    await waitFor(() => expect((withdraw.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(withdraw.getByRole("button", { name: "Prepare withdraw" }))
+    await waitFor(() => expect(withdraw.getByTestId("sepolia-submit")).toBeTruthy())
+
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(release.getByTestId("tx-may-confirm").textContent).toBe(RECEIPT_MAY_CONFIRM_TEXT))
+    const releaseSubmit = release.getByTestId("sepolia-submit") as HTMLButtonElement
+    expect(releaseSubmit.disabled).toBe(true)
+    expect(releaseSubmit.textContent).toBe("Submit on Base Sepolia")
+    expect(release.getByTestId("tx-explorer").getAttribute("href")).toContain("https://sepolia.basescan.org/tx/")
+    expect(within(release.getByTestId("tx-unconfirmed")).getByRole("button", { name: "Copy" })).toBeTruthy()
+    expect(release.queryByRole("alert")).toBeNull()
+    expect(readPending("release")?.hash).toBe(`0x${"11".repeat(32)}`)
+    expect((withdraw.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(release.getByTestId("try-again"))
+    await waitFor(() => expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false))
+    expect(readPending("release")).toBeNull()
+    expect(release.queryByTestId("tx-may-confirm")).toBeNull()
+    expect((withdraw.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(withdraw.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
     } finally {
-      publicClient.waitForTransactionReceipt = original
+      publicClient.waitForTransactionReceipt = originalWait
+      publicClient.getTransaction = originalTx
     }
+  })
+
+  it("keeps Submit disabled after an unreadable receipt until Try again anyway", async () => {
+    const originalWait = publicClient.waitForTransactionReceipt
+    publicClient.waitForTransactionReceipt = async () => {
+      throw new Error("The receipt could not be read.")
+    }
+    try {
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(true))
+    expect(release.getByTestId("tx-may-confirm").textContent).toBe(RECEIPT_MAY_CONFIRM_TEXT)
+    expect(readPending("release")?.hash).toBe(`0x${"11".repeat(32)}`)
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    expect(sendTransactionAsync).toHaveBeenCalledTimes(1)
+    fireEvent.click(release.getByTestId("try-again"))
+    await waitFor(() => expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false))
+    expect(readPending("release")).toBeNull()
+    } finally {
+      publicClient.waitForTransactionReceipt = originalWait
+    }
+  })
+
+  it("clears a stalled hash when a later receipt succeeds", async () => {
+    const originalWait = publicClient.waitForTransactionReceipt
+    const originalReceipt = publicClient.getTransactionReceipt
+    const originalTx = publicClient.getTransaction
+    const originalPoll = receiptWatchConfig.pollMs
+    receiptWatchConfig.pollMs = 40
+    let found = false
+    publicClient.waitForTransactionReceipt = async () => {
+      throw Object.assign(new Error("Timed out while waiting for transaction."), {
+        name: "WaitForTransactionReceiptTimeoutError",
+      })
+    }
+    publicClient.getTransaction = async () => ({ hash: `0x${"11".repeat(32)}` })
+    publicClient.getTransactionReceipt = async () => {
+      if (!found) throw Object.assign(new Error("missing receipt"), { name: "TransactionReceiptNotFoundError" })
+      return { status: "success" as const, transactionHash: `0x${"11".repeat(32)}` as Hex }
+    }
+    try {
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(release.getByTestId("tx-may-confirm")).toBeTruthy())
+    found = true
+    await waitFor(() => expect(release.getByTestId("tx-confirmed").textContent).toBe("Payment released"))
+    expect(readPending("release")).toBeNull()
+    } finally {
+      publicClient.waitForTransactionReceipt = originalWait
+      publicClient.getTransactionReceipt = originalReceipt
+      publicClient.getTransaction = originalTx
+      receiptWatchConfig.pollMs = originalPoll
+    }
+  })
+
+  it("clears an unknown hash and says so", async () => {
+    const hash = `0x${"44".repeat(32)}` as Hex
+    localStorage.setItem(
+      pendingStorageKey("release"),
+      JSON.stringify({ hash, startedAt: Date.now() - receiptWatchConfig.unknownGraceMs - 1_000 }),
+    )
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("pending-unknown").textContent).toContain(PENDING_UNKNOWN_TEXT))
+    expect(readPending("release")).toBeNull()
+    expect(release.getByTestId("tx-explorer").getAttribute("href")).toBe(`https://sepolia.basescan.org/tx/${hash}`)
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("expires a pending entry older than 30 minutes when the form opens", async () => {
+    const hash = `0x${"55".repeat(32)}` as Hex
+    localStorage.setItem(
+      pendingStorageKey("release"),
+      JSON.stringify({ hash, startedAt: Date.now() - receiptWatchConfig.maxAgeMs - 1_000 }),
+    )
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("pending-expired").textContent).toContain(PENDING_EXPIRED_TEXT))
+    expect(readPending("release")).toBeNull()
+    expect(release.getByTestId("tx-explorer").getAttribute("href")).toContain(hash)
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("ignores a tampered pending entry", async () => {
+    localStorage.setItem(pendingStorageKey("release"), "not-json")
+    localStorage.setItem(pendingStorageKey("withdraw"), JSON.stringify({ hash: "0x1234", startedAt: "yesterday" }))
+    renderSurfaces()
+    const release = sectionOf("Prepare this payout")
+    fireEvent.change(release.getByLabelText("Escrow ID"), { target: { value: claim } })
+    fireEvent.click(release.getByRole("button", { name: "Prepare this payout" }))
+    await waitFor(() => expect(release.getByTestId("sepolia-submit")).toBeTruthy())
+    expect(readPending("release")).toBeNull()
+    expect(readPending("withdraw")).toBeNull()
+    expect((release.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(release.queryByTestId("tx-unconfirmed")).toBeNull()
+    expect(release.queryByTestId("pending-expired")).toBeNull()
+    fireEvent.click(release.getByTestId("sepolia-submit"))
+    await waitFor(() => expect(sendTransactionAsync).toHaveBeenCalledTimes(1))
   })
 
   it("shows a plain message when the refund service is not available", async () => {
@@ -347,7 +504,8 @@ describe("phase 1 wallet forms", () => {
     expect(preview.querySelector("[data-testid=review-payee]")?.getAttribute("data-address")).toBe(payee)
     const details = within(preview).getByTestId("calldata-details") as HTMLDetailsElement
     expect(details.open).toBe(false)
-    expect(details.querySelector("summary")?.textContent).toBe("Details")
+    expect(details.querySelector("summary")?.textContent).toBe("Details (raw transaction data)")
+    expect(css).toMatch(/\.calldata-details > summary::before/)
   })
 
   it("starts the amount empty and rejects a blank amount", async () => {

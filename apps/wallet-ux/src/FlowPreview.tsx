@@ -14,6 +14,7 @@ import {
   GENERATE_LABEL,
   NO_WALLET_REASON,
   PAYEE_SELF_WARNING,
+  PendingClearedNote,
   USE_OWN_LABEL,
   useWalletHint,
   type ActionButtonState,
@@ -29,7 +30,7 @@ import { ErrorNotice } from "./ErrorNotice"
 import { formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
 import { currentNowSeconds } from "./nowClock"
-import { clearPending, readPending, writePending } from "./pendingTx"
+import { clearPending, writePending } from "./pendingTx"
 import { parsePayeeAddress, payeeHasChecksumError } from "./payeeAddress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
@@ -76,7 +77,8 @@ import {
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
 import { CalldataDetails, LabeledChunks } from "./ui"
-import { isReceiptTimeout, TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
+import { usePendingReceipt } from "./usePendingReceipt"
+import { TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
@@ -113,23 +115,21 @@ function SepoliaSubmit({
   const publicClient = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const { data: walletClient } = useWalletClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const { sendTransactionAsync, isPending } = useSendTransaction()
-  const [phase, setPhase] = useState<"idle" | "waiting" | "pending" | "confirmed">("idle")
-  const [txHash, setTxHash] = useState<Hex | null>(null)
-  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [signing, setSigning] = useState(false)
+  const [relayerStartedAt, setRelayerStartedAt] = useState<number | null>(null)
   const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const [relayerPhase, setRelayerPhase] = useState<RelayerPhase>("idle")
   const [relayerHealth, setRelayerHealth] = useState<RelayerHealth>("unknown")
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
-  const [stalled, setStalled] = useState(false)
   const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
   const relayerFlight = useRef(false)
-  const ownedHash = useRef<Hex | null>(null)
-  const onConfirmedRef = useRef(onConfirmed)
-  onConfirmedRef.current = onConfirmed
-  const waiting = phase === "waiting" || (isPending && phase !== "pending" && phase !== "confirmed")
-  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || phase === "pending" || relayerPhase !== "idle")
+  const lockRef = useRef("")
+  const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
+  const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
+  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || receipt.holdLock || relayerPhase !== "idle")
+  lockRef.current = submitSlot
   const walletHint = useWalletHint(waiting || relayerPhase === "submitting")
   const relayer = relayerConfigFromEnv({
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
@@ -156,69 +156,30 @@ function SepoliaSubmit({
     }
   }, [relayer.url])
 
-  useEffect(() => {
-    const saved = readPending(slot)
-    if (!saved || !publicClient || ownedHash.current === saved.hash) return
-    let stop = false
-    setTxHash(saved.hash)
-    setStartedAt(saved.startedAt)
-    setPhase("pending")
-    void publicClient.waitForTransactionReceipt({ hash: saved.hash }).then(
-      (receipt) => {
-        if (stop) return
-        clearPending(slot)
-        if (receipt.status !== "success") {
-          setPhase("idle")
-          setSubmitError(notice(TX_REVERTED_TEXT))
-          return
-        }
-        setPhase("confirmed")
-        onConfirmedRef.current?.()
-      },
-      (cause) => {
-        if (stop) return
-        if (isReceiptTimeout(cause)) {
-          setStalled(true)
-          return
-        }
-        clearPending(slot)
-        setPhase("idle")
-        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
-      },
-    )
-    return () => {
-      stop = true
-    }
-  }, [publicClient, slot])
-
   async function onClick() {
+    if (receipt.phase === "pending" || receipt.phase === "unconfirmed") return
     setSubmitError(null)
+    receipt.dismissBanner()
     setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
-    setStalled(false)
     const current = evaluateEscrowSubmit({
       walletConnected: account.isConnected,
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
     })
     if (!current.ok) {
-      setTxHash(null)
-      setPhase("idle")
       setSubmitError(notice(current.reason))
       return
     }
     if (!tryHoldSubmit(submitSlot)) return
-    let submitted: Hex | null = null
     let keepLock = false
     try {
       assertSubmitTarget(preview.to, [escrow, panel])
       if (!publicClient) {
-        setTxHash(null)
-        setPhase("idle")
         setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
         return
       }
-      setPhase("waiting")
+      setSigning(true)
       const hash = await submitAfterPreflight({
         chainId: BASE_SEPOLIA_CHAIN_ID,
         client: publicClient,
@@ -234,44 +195,18 @@ function SepoliaSubmit({
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
-      submitted = hash
-      ownedHash.current = hash
       const stored = writePending(slot, hash)
-      setStartedAt(stored.startedAt)
-      setTxHash(hash)
-      setPhase("pending")
       keepLock = true
-      const receipt = await publicClient.waitForTransactionReceipt({ hash })
-      keepLock = false
-      clearPending(slot)
-      if (receipt.status !== "success") {
-        setPhase("idle")
-        setSubmitError(notice(TX_REVERTED_TEXT))
-        return
-      }
-      setPhase("confirmed")
-      onConfirmed?.()
+      receipt.track(hash, stored.startedAt)
     } catch (cause) {
-      if (submitted && isReceiptTimeout(cause)) {
-        setPhase("pending")
-        setStalled(true)
-        keepLock = true
-        return
-      }
       keepLock = false
-      setPhase("idle")
-      if (submitted) {
-        clearPending(slot)
-        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
-        return
-      }
-      setTxHash(null)
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
       }
       setSubmitError(presentError(cause))
     } finally {
+      setSigning(false)
       if (!keepLock) releaseSubmit(submitSlot)
     }
   }
@@ -288,7 +223,6 @@ function SepoliaSubmit({
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
     })
     if (!gate.ok) {
-      setTxHash(null)
       setSubmitError(notice(gate.reason))
       return
     }
@@ -300,13 +234,11 @@ function SepoliaSubmit({
     }
     if (!publicClient) {
       releaseSubmit(submitSlot)
-      setTxHash(null)
       setSubmitError(notice("The network client isn't ready, so nothing was sent."))
       return
     }
     if (!account.address || !walletClient) {
       releaseSubmit(submitSlot)
-      setTxHash(null)
       setSubmitError(notice(RELAYER_CONNECT_NOTE))
       return
     }
@@ -314,7 +246,6 @@ function SepoliaSubmit({
     const sender = account.address
     relayerFlight.current = true
     setRelayerPhase("submitting")
-    setTxHash(null)
     try {
       assertSubmitTarget(preview.to, [escrow, panel])
       const url = relayer.url
@@ -329,7 +260,7 @@ function SepoliaSubmit({
           setRelayerPhase(phase)
           if (hash) {
             const stored = writePending(`${slot}:relayer`, hash)
-            setStartedAt(stored.startedAt)
+            setRelayerStartedAt(stored.startedAt)
             setPendingHash(hash)
           }
         },
@@ -361,21 +292,23 @@ function SepoliaSubmit({
     ? decision.code === "disconnected"
       ? { status: "needs-wallet" }
       : { status: "wrong-network" }
-    : phase === "confirmed" && txHash
+    : receipt.phase === "confirmed" && receipt.txHash
       ? {
           status: "confirmed",
-          hash: txHash,
+          hash: receipt.txHash,
           label: progress.done,
           resultId,
           resultLabel,
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }
-      : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined, stalled }
-        : waiting
-          ? { status: "waiting-wallet" }
-          : { status: "idle", label: "Submit on Base Sepolia" }
+      : receipt.phase === "pending" && receipt.txHash
+        ? { status: "pending", hash: receipt.txHash, label: progress.pending, startedAt: receipt.startedAt ?? undefined }
+        : receipt.phase === "unconfirmed" && receipt.txHash
+          ? { status: "unconfirmed", hash: receipt.txHash }
+          : waiting
+            ? { status: "waiting-wallet" }
+            : { status: "idle", label: "Submit on Base Sepolia" }
 
   const relayerState: ActionButtonState = !account.isConnected
     ? { status: "needs-wallet" }
@@ -384,7 +317,7 @@ function SepoliaSubmit({
       : relayerPhase === "submitting"
         ? { status: "waiting-wallet" }
         : relayerPhase === "confirming" && pendingHash
-          ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: startedAt ?? undefined }
+          ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: relayerStartedAt ?? undefined }
           : confirmedHash
             ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, resultLabel, nextHref: progress.next?.href, nextLabel: progress.next?.label }
             : relayerHealth === "unknown"
@@ -407,7 +340,10 @@ function SepoliaSubmit({
                 : null
         }
         disabled={
-          Boolean(submitReason) || blocked || (decision.ok && control.disabled && walletState.status === "idle")
+          Boolean(submitReason) ||
+          blocked ||
+          walletState.status === "unconfirmed" ||
+          (decision.ok && control.disabled && walletState.status === "idle")
         }
         onClick={() => {
           if (walletState.status === "wrong-network") {
@@ -417,7 +353,14 @@ function SepoliaSubmit({
           void onClick()
         }}
       />
-      <ActionStatus state={walletState} walletHint={walletHint} cancelled={cancelled && relayerPhase === "idle" && !pendingHash} />
+      <ActionStatus
+        state={walletState}
+        walletHint={walletHint}
+        cancelled={cancelled && relayerPhase === "idle" && !pendingHash}
+        onTryAgain={walletState.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+      />
+      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
+      <PendingClearedNote banner={receipt.banner} />
       {relayerButton.visible ? (
         <div data-testid="relayer-panel">
           <p>Submit the refund request through the relayer, or send it from your wallet.</p>

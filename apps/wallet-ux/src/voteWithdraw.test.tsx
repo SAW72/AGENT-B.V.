@@ -200,6 +200,7 @@ function readCalls(name: string) {
 beforeEach(() => {
   resetCarriedIds()
   resetWorld()
+  localStorage.clear()
   fetchSpy.mockReset()
   publicClient.call.mockClear()
   publicClient.readContract.mockClear()
@@ -218,6 +219,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetCarriedIds()
+  localStorage.clear()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
@@ -488,7 +490,7 @@ describe("vote and withdraw screens", () => {
     await settleReceipt()
     await waitFor(() => expect(vote.getByTestId("tx-confirmed").textContent).toBe("Vote cast"))
     await waitFor(() => expect(readCalls("disputes").length).toBeGreaterThan(disputesBefore))
-    expect(publicClient.waitForTransactionReceipt).toHaveBeenCalledWith({ hash: txHash })
+    expect(publicClient.waitForTransactionReceipt).toHaveBeenCalledWith({ hash: txHash, timeout: 180_000 })
 
     const withdraw = within(screen.getByTestId("withdraw-screen"))
     await waitFor(() => expect(withdraw.getByRole("button", { name: "Prepare withdraw" })).toBeTruthy())

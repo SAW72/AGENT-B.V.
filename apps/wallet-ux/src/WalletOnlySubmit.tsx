@@ -1,25 +1,31 @@
-import { useEffect, useRef, useState } from "react"
-import type { Address, Hex } from "viem"
+import { useRef, useState } from "react"
+import type { Address } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
-import { ActionButton, ActionStatus, NO_WALLET_REASON, useWalletHint, type ActionButtonState } from "./actionButton"
+import {
+  ActionButton,
+  ActionStatus,
+  NO_WALLET_REASON,
+  PendingClearedNote,
+  useWalletHint,
+  type ActionButtonState,
+} from "./actionButton"
 import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
-import { clearPending, readPending, writePending } from "./pendingTx"
+import { writePending } from "./pendingTx"
 import { resolveWalletChainId } from "./guard"
 import type { CallPreview } from "./preview"
 import { submitAfterPreflight } from "./preflight"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { assertSubmitTarget, evaluateEscrowSubmit, submitControl, submitSenderNote } from "./submit"
+import { usePendingReceipt } from "./usePendingReceipt"
 import { useConnectorChainId } from "./useWalletChain"
-import { isReceiptTimeout, TX_RECEIPT_UNREADABLE_TEXT, TX_REVERTED_TEXT } from "./walletCopy"
+import { TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
 }
-
-type Phase = "idle" | "pending" | "confirmed"
 
 /**
  * Submit one prepared call from the connected wallet on Base Sepolia.
@@ -43,83 +49,40 @@ export function WalletOnlySubmit({
   const decision = evaluateEscrowSubmit({ walletConnected: account.isConnected, walletChainId })
   const publicClient = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const { sendTransactionAsync, isPending } = useSendTransaction()
-  const [phase, setPhase] = useState<Phase>("idle")
   const [signing, setSigning] = useState(false)
-  const [txHash, setTxHash] = useState<Hex | null>(null)
-  const [startedAt, setStartedAt] = useState<number | null>(null)
   const [cancelled, setCancelled] = useState(false)
-  const [stalled, setStalled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const progress = actionProgress(preview.functionName)
   const slot = preview.functionName
-  const ownedHash = useRef<Hex | null>(null)
-  const onConfirmedRef = useRef(onConfirmed)
-  onConfirmedRef.current = onConfirmed
-  const waiting = signing || (isPending && phase === "idle")
-  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || phase === "pending")
+  const lockRef = useRef("")
+  const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
+  const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
+  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || receipt.holdLock)
+  lockRef.current = submitSlot
   const walletHint = useWalletHint(waiting)
-  const busy = isPending || phase === "pending" || signing
+  const busy = isPending || receipt.holdLock || signing
   const control = submitControl(decision, busy)
-  const disabled = (decision.ok && (control.disabled || hold || phase !== "idle" || signing)) || blocked
-
-  useEffect(() => {
-    const saved = readPending(slot)
-    if (!saved || !publicClient || ownedHash.current === saved.hash) return
-    let stop = false
-    setTxHash(saved.hash)
-    setStartedAt(saved.startedAt)
-    setPhase("pending")
-    void publicClient.waitForTransactionReceipt({ hash: saved.hash }).then(
-      (receipt) => {
-        if (stop) return
-        clearPending(slot)
-        if (receipt.status !== "success") {
-          setPhase("idle")
-          setSubmitError(notice(TX_REVERTED_TEXT))
-          return
-        }
-        setPhase("confirmed")
-        onConfirmedRef.current?.()
-      },
-      (cause) => {
-        if (stop) return
-        if (isReceiptTimeout(cause)) {
-          setStalled(true)
-          return
-        }
-        clearPending(slot)
-        setPhase("idle")
-        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
-      },
-    )
-    return () => {
-      stop = true
-    }
-  }, [publicClient, slot])
+  const disabled =
+    (decision.ok && (control.disabled || hold || receipt.phase !== "idle" || signing)) || blocked
 
   async function onClick() {
-    if (hold || phase !== "idle" || blocked) return
+    if (hold || receipt.phase !== "idle" || blocked) return
     setSubmitError(null)
+    receipt.dismissBanner()
     setCancelled(false)
-    setStalled(false)
     const current = evaluateEscrowSubmit({
       walletConnected: account.isConnected,
       walletChainId: account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
     })
     if (!current.ok) {
-      setTxHash(null)
-      setPhase("idle")
       setSubmitError(notice(current.reason))
       return
     }
     if (!tryHoldSubmit(submitSlot)) return
-    let submitted: Hex | null = null
     let keepLock = false
     try {
       assertSubmitTarget(preview.to, allowed)
       if (!publicClient) {
-        setTxHash(null)
-        setPhase("idle")
         setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
         return
       }
@@ -139,47 +102,18 @@ export function WalletOnlySubmit({
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
-      submitted = hash
-      ownedHash.current = hash
       const stored = writePending(slot, hash)
-      setStartedAt(stored.startedAt)
-      setSigning(false)
-      setTxHash(hash)
-      setPhase("pending")
       keepLock = true
-      const receipt = await publicClient.waitForTransactionReceipt({ hash })
-      keepLock = false
-      clearPending(slot)
-      if (receipt.status !== "success") {
-        setPhase("idle")
-        setSubmitError(notice(TX_REVERTED_TEXT))
-        return
-      }
-      setPhase("confirmed")
-      onConfirmed?.()
+      receipt.track(hash, stored.startedAt)
     } catch (cause) {
-      setSigning(false)
-      if (submitted && isReceiptTimeout(cause)) {
-        setPhase("pending")
-        setStalled(true)
-        keepLock = true
-        return
-      }
       keepLock = false
-      if (submitted) {
-        clearPending(slot)
-        setPhase("idle")
-        setSubmitError(notice(TX_RECEIPT_UNREADABLE_TEXT))
-        return
-      }
-      setTxHash(null)
-      setPhase("idle")
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
       }
       setSubmitError(presentError(cause))
     } finally {
+      setSigning(false)
       if (!keepLock) releaseSubmit(submitSlot)
     }
   }
@@ -188,19 +122,21 @@ export function WalletOnlySubmit({
     ? decision.code === "disconnected"
       ? { status: "needs-wallet" }
       : { status: "wrong-network" }
-    : phase === "confirmed" && txHash
+    : receipt.phase === "confirmed" && receipt.txHash
       ? {
           status: "confirmed",
-          hash: txHash,
+          hash: receipt.txHash,
           label: progress.done,
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }
-      : phase === "pending" && txHash
-        ? { status: "pending", hash: txHash, label: progress.pending, startedAt: startedAt ?? undefined, stalled }
-        : waiting
-          ? { status: "waiting-wallet" }
-          : { status: "idle", label: "Submit on Base Sepolia" }
+      : receipt.phase === "pending" && receipt.txHash
+        ? { status: "pending", hash: receipt.txHash, label: progress.pending, startedAt: receipt.startedAt ?? undefined }
+        : receipt.phase === "unconfirmed" && receipt.txHash
+          ? { status: "unconfirmed", hash: receipt.txHash }
+          : waiting
+            ? { status: "waiting-wallet" }
+            : { status: "idle", label: "Submit on Base Sepolia" }
 
   return (
     <div>
@@ -226,7 +162,14 @@ export function WalletOnlySubmit({
           void onClick()
         }}
       />
-      <ActionStatus state={state} walletHint={walletHint} cancelled={cancelled} />
+      <ActionStatus
+        state={state}
+        walletHint={walletHint}
+        cancelled={cancelled}
+        onTryAgain={state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+      />
+      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
+      <PendingClearedNote banner={receipt.banner} />
       {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
       {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
       {submitError?.link ? (

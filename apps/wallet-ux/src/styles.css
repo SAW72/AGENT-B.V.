@@ -287,6 +287,34 @@ details > summary {
   align-items: center;
 }
 
+.calldata-details > summary {
+  list-style: none;
+}
+
+.calldata-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.calldata-details > summary::before {
+  content: "";
+  width: 0.45em;
+  height: 0.45em;
+  margin-right: 0.6em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  flex: 0 0 auto;
+}
+
+.calldata-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.may-confirm {
+  color: var(--warn);
+  margin: 8px 0;
+}
+
 a.next-step {
   display: inline-flex;
   align-items: center;

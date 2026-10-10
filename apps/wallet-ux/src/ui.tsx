@@ -33,8 +33,8 @@ export function LabeledChunks({ label, address, testId }: { label: string; addre
 
 export function CalldataDetails({ calldata }: { calldata: string }) {
   return (
-    <details data-testid="calldata-details">
-      <summary>Details</summary>
+    <details className="calldata-details" data-testid="calldata-details">
+      <summary>Details (raw transaction data)</summary>
       <pre className="calldata">{calldata}</pre>
     </details>
   )

@@ -35,11 +35,8 @@ export function useSubmitBlocked(active: boolean): { id: string; blocked: boolea
     () => false,
   )
   useEffect(() => {
-    if (!active) {
-      releaseSubmit(id)
-      return
-    }
-    tryHoldSubmit(id)
+    if (active) tryHoldSubmit(id)
+    else releaseSubmit(id)
     return () => releaseSubmit(id)
   }, [active, id])
   return { id, blocked }

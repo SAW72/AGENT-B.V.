@@ -20,6 +20,12 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
+/** Short form of a transaction hash. Wallet addresses use shortAddress. */
+export function shortHash(hash: string): string {
+  if (hash.length < 12) return hash
+  return `${hash.slice(0, 6)}…${hash.slice(-4)}`
+}
+
 /** Groups of four hex characters. The first group keeps the 0x prefix so a line wraps only between groups. */
 export function chunkHex(value: string): string[] {
   const prefixed = value.startsWith("0x") || value.startsWith("0X")
