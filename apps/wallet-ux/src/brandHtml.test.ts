@@ -9,7 +9,9 @@ import {
   brandManifestSource,
   DESCRIPTION,
   DISPLAY_NAME,
+  OPERATOR_LINE,
   PAGE_TITLE,
+  PRODUCT_NAME,
   PRODUCT_TITLE,
 } from "./brand"
 
@@ -41,6 +43,21 @@ function hitsIn(paths: string[]): string[] {
 }
 
 describe("brand html", () => {
+  it("pins the confirmed title, descriptor, and operator line", () => {
+    expect(DISPLAY_NAME).toBe("Agent-BV (Agent Bot Verifier)")
+    expect(PAGE_TITLE).toBe("Agent-BV (Agent Bot Verifier) — Base Sepolia")
+    expect(PRODUCT_TITLE).toBe(DISPLAY_NAME)
+    expect(OPERATOR_LINE).toBe(
+      "Agent-BV (Agent Bot Verifier) is a product of Steward of the King LLC, an Ohio (USA) limited liability company.",
+    )
+    expect(brandManifest().name).toBe(DISPLAY_NAME)
+    expect(brandManifest().short_name).toBe(PRODUCT_NAME)
+    expect(PRODUCT_NAME).toBe("Agent-BV")
+    const app = readFileSync(join(appRoot, "src", "App.tsx"), "utf8")
+    expect(app).toContain("DISPLAY_NAME")
+    expect(app).toContain("OPERATOR_LINE")
+  })
+
   it("keeps the retired product word out of sources, the page shell, and the build", async () => {
     const indexPath = join(appRoot, "index.html")
     const sourceHits = hitsIn([indexPath, ...filesUnder(join(appRoot, "src")), ...filesUnder(join(appRoot, "public"))])
@@ -71,6 +88,7 @@ describe("brand html", () => {
     const distHits = hitsIn(filesUnder(join(appRoot, "dist")))
     expect(distHits).toEqual([])
     const built = readFileSync(join(appRoot, "dist", "index.html"), "utf8")
+    expect(built).toContain("<title>Agent-BV (Agent Bot Verifier) — Base Sepolia</title>")
     expect(built).toContain(`<title>${PAGE_TITLE}</title>`)
     expect(built).toContain(`property="og:title" content="${PAGE_TITLE}"`)
     expect(built).toContain('rel="manifest"')

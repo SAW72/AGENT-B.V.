@@ -8,7 +8,7 @@ import { EscrowPanel } from "./EscrowPanel"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
-import { DISPLAY_NAME, PAGE_FOOTER, PRODUCT_NAME, TESTNET_LINE } from "./brand"
+import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
 import {
   GATE_OWNER_MATCH,
   GATE_OWNER_MISMATCH,
@@ -78,6 +78,7 @@ export function BookOwners({ governanceTimelock = liveExpectedOwner() }: { gover
 export function PageFooter() {
   return (
     <footer>
+      <p>{OPERATOR_LINE}</p>
       <p>{PAGE_FOOTER}</p>
     </footer>
   )
@@ -248,7 +249,7 @@ export function App() {
     <div className="wrap">
       <header>
         <h1 className="heading-with-pill">
-          <span>{PRODUCT_NAME}</span>
+          <span>{DISPLAY_NAME}</span>
           <span className="pill info" data-testid="page-testnet">
             {TESTNET_LINE}
           </span>

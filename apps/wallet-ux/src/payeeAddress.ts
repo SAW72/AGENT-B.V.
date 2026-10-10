@@ -20,3 +20,11 @@ export function parsePayeeAddress(raw: string): Address | null {
     return null
   }
 }
+
+/** Mixed-case 20-byte address whose EIP-55 checksum does not match. Other invalid input is not this case. */
+export function payeeHasChecksumError(raw: string): boolean {
+  const { prefixed, body } = normalizeHexPrefix(raw)
+  if (!prefixed || !/^[0-9a-fA-F]{40}$/.test(body)) return false
+  if (body === body.toLowerCase() || body === body.toUpperCase()) return false
+  return !isAddress(`0x${body}`, { strict: true })
+}

@@ -117,6 +117,7 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
 export const FORM_ERRORS = {
   createIds: "Enter the Escrow ID and both bot identifiers before creating a claim.",
   payee: "Enter the payee wallet address.",
+  payeeChecksum: "This address has a checksum error. Paste it again exactly, or use all lowercase.",
   payeeZero: "Enter a payee wallet that is not the zero address.",
   sameBots: "The payer bot and the payee bot must be different.",
   valueEmpty: "Enter an amount of test ETH, such as 0.001.",

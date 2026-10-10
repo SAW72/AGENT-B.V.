@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import {
   BaseError,
   CallExecutionError,
+  InsufficientFundsError,
   ContractFunctionExecutionError,
   ContractFunctionRevertedError,
   ExecutionRevertedError,
@@ -25,7 +26,7 @@ import {
 } from "./preview"
 import { CLAIM_RELAYER_WALLET, submitAfterPreflight, submitRelayerAfterPreflight } from "./preflight"
 import { RELAYER_RECEIPT_REVERTED_TEXT, RELAYER_USER_TEXT } from "./relayer"
-import { REVERT_FALLBACK_TEXT, visibleDetail, WALLET_CANCEL_TEXT } from "./revert"
+import { LOW_BALANCE_TEXT, REVERT_FALLBACK_TEXT, visibleDetail, WALLET_CANCEL_TEXT } from "./revert"
 import { durationValidationMessage, FORM_ERRORS, previewCardCopy, submitSenderNote } from "./submit"
 
 const escrow = ADDRESSES.botAttestationEscrow
@@ -202,6 +203,28 @@ describe("ESC-M-1 revert text", () => {
       expect(errorText(error)).not.toContain("secret/wallet.js")
       expect(errorText(error)).not.toContain(" at ")
     }
+  })
+
+  it("maps a short wallet or simulation balance failure to the faucet sentence", () => {
+    const sim = new InsufficientFundsError()
+    const wallet = new BaseError("Transaction creation failed.", {
+      cause: Object.assign(new Error("insufficient funds for gas * price + value"), {
+        shortMessage: "Transaction creation failed.",
+        details: "insufficient funds for gas * price + value",
+      }),
+    })
+    const nested = {
+      shortMessage: "Transaction creation failed.",
+      cause: { message: "gas * price + value exceeds the balance of the account" },
+    }
+    for (const error of [sim, wallet, nested]) {
+      const presented = presentError(error)
+      expect(presented.main).toBe(LOW_BALANCE_TEXT)
+      expect(presented.detail).toBeNull()
+      expect(presented.main).not.toBe("Transaction creation failed.")
+    }
+    const other = { shortMessage: "Transaction creation failed.", details: "nonce too low" }
+    expect(presentError(other).main).toBe("Transaction creation failed.")
   })
 })
 
@@ -380,6 +403,7 @@ describe("end-user main text", () => {
       ...ERROR_GLOSSARY.map((entry) => entry.meaning),
       WALLET_CANCEL_TEXT,
       REVERT_FALLBACK_TEXT,
+      LOW_BALANCE_TEXT,
       ...RELAYER_USER_TEXT,
       ...Object.values(FORM_ERRORS),
       durationValidationMessage(2_592_000),

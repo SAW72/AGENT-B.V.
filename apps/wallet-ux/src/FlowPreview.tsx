@@ -26,7 +26,7 @@ import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } f
 import { ErrorNotice } from "./ErrorNotice"
 import { isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
 import { currentNowSeconds } from "./nowClock"
-import { parsePayeeAddress } from "./payeeAddress"
+import { parsePayeeAddress, payeeHasChecksumError } from "./payeeAddress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
 import {
@@ -609,6 +609,11 @@ function CreateForm({
       }
       if (payerBot.toLowerCase() === payeeBot.toLowerCase()) {
         session.publish(FORM_ERRORS.sameBots, null)
+        onActivate("create")
+        return
+      }
+      if (payeeHasChecksumError(payee)) {
+        session.publish(FORM_ERRORS.payeeChecksum, null)
         onActivate("create")
         return
       }

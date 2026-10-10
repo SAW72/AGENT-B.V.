@@ -2,7 +2,14 @@ import { formatEther } from "viem"
 import { ZERO_ADDRESS } from "./addresses"
 import { presentError } from "./revert"
 
-export { decodeRevert, presentError, presentRevertHex, type DecodedRevert, type ErrorPresentation } from "./revert"
+export {
+  decodeRevert,
+  LOW_BALANCE_TEXT,
+  presentError,
+  presentRevertHex,
+  type DecodedRevert,
+  type ErrorPresentation,
+} from "./revert"
 
 export function sameAddress(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase()

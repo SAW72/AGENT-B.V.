@@ -233,6 +233,9 @@ describe("prepare this claim", () => {
       "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
     })
     fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
+    await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payeeChecksum))
+    fireEvent.change(scope.getByLabelText("Payee wallet"), { target: { value: "not-an-address" } })
+    fireEvent.click(scope.getByRole("button", { name: "Prepare this claim" }))
     await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee))
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
     expect(scope.queryByTestId("sepolia-submit")).toBeNull()

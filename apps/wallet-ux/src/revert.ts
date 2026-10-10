@@ -41,6 +41,11 @@ export type ErrorPresentation = {
 
 export const WALLET_CANCEL_TEXT = "You cancelled in your wallet"
 export const REVERT_FALLBACK_TEXT = "The contract rejected this transaction. No funds moved."
+export const LOW_BALANCE_TEXT =
+  "Not enough test ETH in this wallet to cover the amount plus gas. Get Base Sepolia test ETH from a faucet, then try again."
+
+const LOW_BALANCE =
+  /insufficient funds|exceeds transaction sender account balance|exceeds the balance of the account|gas \* (?:gas )?(?:price|fee) \+ value/i
 
 /** Hide a details line that has no status, code, or reason after the label. */
 export function visibleDetail(detail: string | null | undefined): string | null {
@@ -268,11 +273,23 @@ function safeShort(error: unknown): string {
   return "Something went wrong. Nothing was sent."
 }
 
+export function isLowBalance(error: unknown): boolean {
+  return nodesOf(error).some((item) => {
+    if (!item || typeof item !== "object") return false
+    const record = item as { shortMessage?: unknown; message?: unknown; details?: unknown }
+    return [record.shortMessage, record.message, record.details].some(
+      (part) => typeof part === "string" && LOW_BALANCE.test(part),
+    )
+  })
+}
+
 export function presentError(error: unknown): ErrorPresentation {
   if (isWalletCancel(error)) return { main: WALLET_CANCEL_TEXT, detail: null }
 
   const valid = validRevertData(error)
   if (valid) return presentDecoded(valid)
+
+  if (isLowBalance(error)) return { main: LOW_BALANCE_TEXT, detail: null }
 
   if (looksLikeRevert(error)) {
     const loose = looseHexData(error)
