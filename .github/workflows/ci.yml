@@ -95,6 +95,10 @@ jobs:
           cache-dependency-path: apps/wallet-ux/package-lock.json
       - name: Install
         run: npm ci
+      - name: Install claim relayer deps
+        # The cross-package domain test loads claim-relayer as Node modules.
+        working-directory: claim-relayer
+        run: npm ci
       - name: Test
         # Includes src/**/*.test.ts and scripts/**/*.test.mjs (deploy guard scripts).
         run: npm test
