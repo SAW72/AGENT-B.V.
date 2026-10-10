@@ -4,7 +4,7 @@ import { useAccount, usePublicClient } from "wagmi"
 import { disputePanelAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { WALLET_SIGNED_TEST_LINE } from "./brand"
-import { parseBytes32, randomBytes32 } from "./bytes32"
+import { parseBytes32 } from "./bytes32"
 import { ActionButton, ActionStatus, DISPUTE_ID_HINT, DISPUTE_ID_LABEL } from "./actionButton"
 import { CONTRACT_LABELS, GAS_FEE_TEXT, PREPARE_FIRST_REASON, VOTE_SEAT_REASON } from "./actionProgress"
 import { readUrlBytes32, useCarriedIds } from "./carriedIds"
@@ -338,17 +338,6 @@ export function VoteScreen({ panel }: { panel: Address }) {
             session.clear()
           }}
         />
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => {
-            setTouched(true)
-            setDisputeId(randomBytes32())
-            session.clear()
-          }}
-        >
-          Generate
-        </button>
         <button
           type="button"
           className="secondary"

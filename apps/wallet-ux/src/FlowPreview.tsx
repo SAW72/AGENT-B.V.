@@ -22,15 +22,22 @@ import {
 import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { parseBytes32, randomBytes32 } from "./bytes32"
-import { carryDisputeId, carryEscrowId, readUrlBytes32, useCarriedIds } from "./carriedIds"
+import { readUrlBytes32, useCarriedIds } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
 import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, useEscrowActionGate } from "./escrowGate"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
 import { ErrorNotice } from "./ErrorNotice"
-import { formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
+import { chunkHex, formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
 import { currentNowSeconds } from "./nowClock"
-import { clearPending, writePending } from "./pendingTx"
+import {
+  clearPending,
+  pendingSlot,
+  pendingSubjectLabel,
+  subjectFromCalldata,
+  writePending,
+  writeRelayerPending,
+} from "./pendingTx"
 import { parsePayeeAddress, payeeHasChecksumError } from "./payeeAddress"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
@@ -76,8 +83,8 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { CalldataDetails, LabeledChunks } from "./ui"
-import { usePendingReceipt } from "./usePendingReceipt"
+import { CalldataDetails, ChunkedHex, LabeledChunks } from "./ui"
+import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
@@ -86,6 +93,60 @@ function notice(main: string): ErrorPresentation {
 
 function ActionTestnet({ title }: { title: string }) {
   return <h3>{title}</h3>
+}
+
+function PendingStrip() {
+  const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
+  const views = usePendingViews(client).filter((view) => view.phase !== "idle" || view.banner)
+  if (views.length === 0) return null
+  return (
+    <section className="card pending-strip" data-testid="pending-transactions" aria-label="Pending transactions">
+      <h2>Pending transactions</h2>
+      {views.map((view) => (
+        <PendingRow key={view.record.slot} view={view} />
+      ))}
+    </section>
+  )
+}
+
+function PendingRow({ view }: { view: PendingView }) {
+  const progress = actionProgress(view.record.action)
+  const label = pendingSubjectLabel(view.record.action)
+  const state: ActionButtonState =
+    view.phase === "confirmed"
+      ? {
+          status: "confirmed",
+          hash: view.record.hash,
+          label: progress.done,
+          resultId: view.record.subjectId ?? undefined,
+          resultLabel: label ?? undefined,
+          nextHref: progress.next?.href,
+          nextLabel: progress.next?.label,
+        }
+      : view.phase === "unconfirmed"
+        ? { status: "unconfirmed", hash: view.record.hash }
+        : view.phase === "pending"
+          ? { status: "pending", hash: view.record.hash, label: progress.pending, startedAt: view.record.startedAt }
+          : { status: "idle", label: "" }
+  return (
+    <article data-testid="pending-row" data-id={view.record.subjectId ?? ""} data-hash={view.record.hash}>
+      {view.record.subjectId && label ? (
+        <div className="kv-row" data-testid="pending-subject" data-id={view.record.subjectId}>
+          <div className="kv-label">{label}</div>
+          <div className="kv-value">
+            <ChunkedHex parts={chunkHex(view.record.subjectId)} />
+          </div>
+        </div>
+      ) : null}
+      {view.phase === "idle" ? null : (
+        <ActionStatus
+          state={state}
+          onTryAgain={view.phase === "unconfirmed" ? () => dismissPending(view.record.slot) : undefined}
+        />
+      )}
+      <PendingClearedNote banner={view.banner} />
+    </article>
+  )
 }
 
 function SepoliaSubmit({
@@ -106,7 +167,8 @@ function SepoliaSubmit({
   submitReason?: string | null
 }) {
   const progress = actionProgress(preview.functionName)
-  const slot = preview.functionName
+  const sent = subjectFromCalldata(preview.calldata)
+  const slot = pendingSlot(sent?.action ?? preview.functionName, sent?.subjectId ?? null)
   const account = useAccount()
   const { switchChain } = useSwitchChain()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
@@ -128,7 +190,7 @@ function SepoliaSubmit({
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
   const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
-  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || receipt.holdLock || relayerPhase !== "idle")
+  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || relayerPhase !== "idle")
   lockRef.current = submitSlot
   const walletHint = useWalletHint(waiting || relayerPhase === "submitting")
   const relayer = relayerConfigFromEnv({
@@ -195,9 +257,13 @@ function SepoliaSubmit({
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
-      const stored = writePending(slot, hash)
+      writePending({
+        action: sent?.action ?? preview.functionName,
+        subjectId: sent?.subjectId ?? null,
+        hash,
+      })
+      releaseSubmit(submitSlot)
       keepLock = true
-      receipt.track(hash, stored.startedAt)
     } catch (cause) {
       keepLock = false
       if (isWalletCancel(cause)) {
@@ -259,13 +325,13 @@ function SepoliaSubmit({
         onPhase: (phase, hash) => {
           setRelayerPhase(phase)
           if (hash) {
-            const stored = writePending(`${slot}:relayer`, hash)
+            const stored = writeRelayerPending(`${preview.functionName}:relayer`, hash)
             setRelayerStartedAt(stored.startedAt)
             setPendingHash(hash)
           }
         },
       })
-      clearPending(`${slot}:relayer`)
+      clearPending(`${preview.functionName}:relayer`)
       if (outcome.ok) {
         setPendingHash(null)
         setConfirmedHash(outcome.txHash)
@@ -276,7 +342,7 @@ function SepoliaSubmit({
       if (outcome.code === "kill_switch") setRelayerHealth("paused")
     } catch (cause) {
       setPendingHash(null)
-      clearPending(`${slot}:relayer`)
+      clearPending(`${preview.functionName}:relayer`)
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
@@ -285,6 +351,7 @@ function SepoliaSubmit({
     } finally {
       relayerFlight.current = false
       setRelayerPhase("idle")
+      releaseSubmit(submitSlot)
     }
   }
 
@@ -297,8 +364,8 @@ function SepoliaSubmit({
           status: "confirmed",
           hash: receipt.txHash,
           label: progress.done,
-          resultId,
-          resultLabel,
+          resultId: receipt.subjectId ?? resultId,
+          resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? resultLabel : resultLabel,
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }
@@ -616,6 +683,7 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
         These forms prepare a transaction, then the connected wallet can submit it on Base Sepolia, chain{" "}
         {BASE_SEPOLIA_CHAIN_ID}. Ethereum mainnet and Base mainnet are refused.
       </p>
+      <PendingStrip />
       <CreateForm
         escrow={escrow}
         panel={panel}
@@ -694,7 +762,6 @@ function CreateForm({
   const [preset, setPreset] = useState<number | "custom">(DEFAULT_DURATION_SECONDS)
   const [customDuration, setCustomDuration] = useState("")
   const [value, setValue] = useState("")
-  const preparedId = useRef<Hex | null>(null)
   const session = usePrepareSession<CallPreview>("create", active)
   const payeeAddress = parsePayeeAddress(payee)
   const payeeIsSelf =
@@ -782,7 +849,6 @@ function CreateForm({
         durationSeconds: BigInt(durationSeconds),
         valueWei,
       })
-      preparedId.current = id
       session.publish(null, next)
       onActivate("create")
     } catch (cause) {
@@ -897,9 +963,6 @@ function CreateForm({
             durationSeconds={shownDuration}
             resultId={parseBytes32(escrowId) ?? undefined}
             resultLabel={ESCROW_ID_LABEL}
-            onConfirmed={() => {
-              if (preparedId.current) carryEscrowId(preparedId.current)
-            }}
           />
         )}
       </form>
@@ -1055,7 +1118,6 @@ function OpenDisputeForm({
   const [disputeId, setDisputeId] = useState<string>(() => randomBytes32())
   const [claimId, setClaimId] = useState(urlEscrow.value ?? "")
   const [claimTouched, setClaimTouched] = useState(false)
-  const preparedDispute = useRef<Hex | null>(null)
   const [reason, setReason] = useState("")
   const [resolution, setResolution] = useState<DisputeSubjectResult | null>(null)
   const [readingSubject, setReadingSubject] = useState(false)
@@ -1188,8 +1250,6 @@ function OpenDisputeForm({
         onActivate("dispute")
         return
       }
-      preparedDispute.current = id
-      carryDisputeId(id)
       session.publish(null, previewDispute(escrow, claim, id, trimmedReason))
       onActivate("dispute")
     } catch (cause) {
@@ -1271,9 +1331,6 @@ function OpenDisputeForm({
           nodeRef={session.setNode}
           resultId={parseBytes32(disputeId) ?? undefined}
           resultLabel={DISPUTE_ID_LABEL}
-          onConfirmed={() => {
-            if (preparedDispute.current) carryDisputeId(preparedDispute.current)
-          }}
         />
       )}
     </form>

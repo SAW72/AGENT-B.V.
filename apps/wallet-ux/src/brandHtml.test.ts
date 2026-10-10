@@ -55,6 +55,7 @@ describe("brand html", () => {
     expect(PRODUCT_NAME).toBe("Agent-BV")
     const app = readFileSync(join(appRoot, "src", "App.tsx"), "utf8")
     expect(app).toContain("DISPLAY_NAME")
+    expect(app).toContain('<h1 className="wordmark">{DISPLAY_NAME}</h1>')
     expect(app).toContain("OPERATOR_LINE")
   })
 

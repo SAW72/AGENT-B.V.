@@ -41,7 +41,7 @@ export function WithdrawScreen({
 }) {
   if (escrow == null) {
     return (
-      <section className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
+      <section id="withdraw-screen" className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
         <TestnetHeading />
         <div className="empty" data-testid="withdraw-empty" role="status">
           <strong>Not deployed on Sepolia yet.</strong>
@@ -52,7 +52,7 @@ export function WithdrawScreen({
   }
 
   return (
-    <section className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
+    <section id="withdraw-screen" className="card" aria-labelledby="withdraw-heading" data-testid="withdraw-screen">
       <TestnetHeading />
       <p className="muted" data-testid="withdraw-gas">
         {WITHDRAW_GAS_TEXT}

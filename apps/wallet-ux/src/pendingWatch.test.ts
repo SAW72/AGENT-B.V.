@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from "vitest"
 import type { Hex } from "viem"
-import { readPending } from "./pendingTx"
+import { previewCreateEscrow, previewDispute, previewRelease, previewVote, previewWithdraw } from "./preview"
+import { pendingSlot, readPending, subjectFromCalldata, writePending } from "./pendingTx"
 import { checkPendingReceipt, isPendingExpired, receiptWatchConfig } from "./pendingWatch"
 
 const hash = `0x${"ab".repeat(32)}` as Hex
@@ -89,8 +90,40 @@ describe("pending receipt checks", () => {
     localStorage.setItem("agent-bv.pending.release", "not-json")
     localStorage.setItem("agent-bv.pending.withdraw", JSON.stringify({ hash: "0x12", startedAt: "yesterday" }))
     localStorage.setItem("agent-bv.pending.vote", JSON.stringify({ hash, startedAt: Number.NaN }))
+    localStorage.setItem(
+      "agent-bv.pending.release:0x" + "ab".repeat(32),
+      JSON.stringify({ hash, startedAt: 1, action: "release" }),
+    )
     expect(readPending("release")).toBeNull()
     expect(readPending("withdraw")).toBeNull()
     expect(readPending("vote")).toBeNull()
+    expect(readPending(pendingSlot("release", hash))).toBeNull()
+  })
+
+  it("keys a pending record by the id in the sent calldata", () => {
+    const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as const
+    const panel = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb" as const
+    const escrowId = `0x${"11".repeat(32)}` as const
+    const disputeId = `0x${"22".repeat(32)}` as const
+    const created = previewCreateEscrow({
+      escrow,
+      escrowId,
+      payee: "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5A4",
+      payerBotId: escrowId,
+      payeeBotId: disputeId,
+      durationSeconds: 3600n,
+      valueWei: 1n,
+    })
+    expect(subjectFromCalldata(created.calldata)).toEqual({ action: "createEscrow", subjectId: escrowId })
+    expect(subjectFromCalldata(previewRelease(escrow, escrowId).calldata)?.subjectId).toBe(escrowId)
+    expect(subjectFromCalldata(previewDispute(escrow, escrowId, disputeId, "late").calldata)).toEqual({
+      action: "dispute",
+      subjectId: disputeId,
+    })
+    expect(subjectFromCalldata(previewVote(panel, disputeId, true).calldata)?.subjectId).toBe(disputeId)
+    expect(subjectFromCalldata(previewWithdraw(escrow).calldata)).toEqual({ action: "withdraw", subjectId: null })
+    const stored = writePending({ action: "createEscrow", subjectId: escrowId, hash, startedAt: 10 })
+    expect(readPending(pendingSlot("createEscrow", escrowId))).toEqual(stored)
+    expect(readPending(pendingSlot("createEscrow", disputeId))).toBeNull()
   })
 })

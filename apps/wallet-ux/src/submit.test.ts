@@ -79,6 +79,8 @@ describe("submit target", () => {
     expect(previewCardCopy("openDispute", true)).not.toMatch(/refund relayer/)
     expect(previewCardCopy("createEscrow", true)).not.toMatch(/refund relayer/)
     expect(FORM_ERRORS.disputeClaim).toBe("Enter the Escrow ID before opening a dispute.")
+    expect(FORM_ERRORS.valueEmpty).toBe("Enter an amount of test ETH, such as 0.001.")
+    expect(FORM_ERRORS.valueFormat).toBe("Enter an amount of ETH, such as 0.001.")
     for (const text of [submitSenderNote("dispute"), previewCardCopy("dispute", true), FORM_ERRORS.disputeClaim]) {
       expect(text).not.toMatch(/[()]/)
       expect(text).not.toMatch(/0x[0-9a-fA-F]+/)

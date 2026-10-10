@@ -13,7 +13,7 @@ import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
-import { writePending } from "./pendingTx"
+import { pendingSlot, pendingSubjectLabel, subjectFromCalldata, writePending } from "./pendingTx"
 import { resolveWalletChainId } from "./guard"
 import type { CallPreview } from "./preview"
 import { submitAfterPreflight } from "./preflight"
@@ -53,11 +53,12 @@ export function WalletOnlySubmit({
   const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const progress = actionProgress(preview.functionName)
-  const slot = preview.functionName
+  const sent = subjectFromCalldata(preview.calldata)
+  const slot = pendingSlot(sent?.action ?? preview.functionName, sent?.subjectId ?? null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
   const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
-  const { id: submitSlot, blocked } = useSubmitBlocked(waiting || receipt.holdLock)
+  const { id: submitSlot, blocked } = useSubmitBlocked(waiting)
   lockRef.current = submitSlot
   const walletHint = useWalletHint(waiting)
   const busy = isPending || receipt.holdLock || signing
@@ -102,9 +103,13 @@ export function WalletOnlySubmit({
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
-      const stored = writePending(slot, hash)
+      writePending({
+        action: sent?.action ?? preview.functionName,
+        subjectId: sent?.subjectId ?? null,
+        hash,
+      })
+      releaseSubmit(submitSlot)
       keepLock = true
-      receipt.track(hash, stored.startedAt)
     } catch (cause) {
       keepLock = false
       if (isWalletCancel(cause)) {
@@ -127,6 +132,8 @@ export function WalletOnlySubmit({
           status: "confirmed",
           hash: receipt.txHash,
           label: progress.done,
+          resultId: receipt.subjectId ?? undefined,
+          resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? undefined : undefined,
           nextHref: progress.next?.href,
           nextLabel: progress.next?.label,
         }

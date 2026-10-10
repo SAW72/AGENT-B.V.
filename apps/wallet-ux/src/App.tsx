@@ -3,12 +3,13 @@ import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { visibleConnectors } from "./connectors"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
-import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, PRODUCT_NAME, TESTNET_LINE } from "./brand"
+import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
 import {
   GATE_OWNER_MATCH,
   GATE_OWNER_MISMATCH,
@@ -248,7 +249,7 @@ export function App() {
   return (
     <div className="wrap">
       <header className="site-header">
-        <h1 className="wordmark">{PRODUCT_NAME}</h1>
+        <h1 className="wordmark">{DISPLAY_NAME}</h1>
         <span className="pill info" data-testid="page-testnet">
           {TESTNET_LINE}
         </span>
@@ -287,7 +288,7 @@ export function App() {
               Disconnect
             </button>
           ) : (
-            connectors.map((connector) => (
+            visibleConnectors(connectors).map((connector) => (
               <button
                 key={connector.uid}
                 type="button"

@@ -225,6 +225,14 @@ describe("ESC-M-1 revert text", () => {
     }
     const other = { shortMessage: "Transaction creation failed.", details: "nonce too low" }
     expect(presentError(other).main).toBe("Transaction creation failed.")
+    const outOfFunds = new BaseError("Transaction creation failed.", {
+      cause: Object.assign(new Error("EVM error: OutOfFunds"), {
+        shortMessage: "Transaction creation failed.",
+        details: "EVM error: OutOfFunds",
+      }),
+    })
+    expect(presentError(outOfFunds).main).toBe(LOW_BALANCE_TEXT)
+    expect(presentError({ message: "EVM error: OutOfFunds" }).main).toBe(LOW_BALANCE_TEXT)
   })
 })
 

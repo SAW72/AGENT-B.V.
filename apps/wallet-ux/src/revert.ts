@@ -45,7 +45,7 @@ export const LOW_BALANCE_TEXT =
   "Not enough test ETH in this wallet to cover the amount plus gas. Get Base Sepolia test ETH from a faucet, then try again."
 
 const LOW_BALANCE =
-  /insufficient funds|exceeds transaction sender account balance|exceeds the balance of the account|gas \* (?:gas )?(?:price|fee) \+ value/i
+  /insufficient funds|exceeds transaction sender account balance|exceeds the balance of the account|gas \* (?:gas )?(?:price|fee) \+ value|OutOfFunds/i
 
 /** Hide a details line that has no status, code, or reason after the label. */
 export function visibleDetail(detail: string | null | undefined): string | null {

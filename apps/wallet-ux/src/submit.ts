@@ -121,7 +121,7 @@ export const FORM_ERRORS = {
   payeeZero: "Enter a payee wallet that is not the zero address.",
   sameBots: "The payer bot and the payee bot must be different.",
   valueEmpty: "Enter an amount of test ETH, such as 0.001.",
-  valueFormat: "Enter an amount of ETH, such as 0.01.",
+  valueFormat: "Enter an amount of ETH, such as 0.001.",
   valueZero: "Enter an amount greater than zero. Nothing was sent.",
   releaseId: "Enter the Escrow ID before releasing this escrow.",
   refundId: "Enter the Escrow ID before refunding this escrow.",

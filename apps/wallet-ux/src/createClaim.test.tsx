@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
 import { App } from "./App"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
+import { DISPLAY_NAME } from "./brand"
 import { FORM_ERRORS } from "./submit"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -170,6 +171,7 @@ describe("prepare this escrow", () => {
       expect(screen.getByTestId("vote-arbitrator")).toBeTruthy()
     })
     expect(duplicateIds()).toEqual([])
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(DISPLAY_NAME)
 
     const scope = fillCreate(EXACT)
     fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))

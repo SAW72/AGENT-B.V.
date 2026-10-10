@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { disputePanelAbi, escrowAbi } from "./abi"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { carryDisputeId, resetCarriedIds } from "./carriedIds"
+import { resetSubmitLock } from "./submitLock"
+import { resetPendingRuntime } from "./usePendingReceipt"
 import { TESTNET_LINE, WALLET_SIGNED_TEST_LINE } from "./brand"
 import { ERROR_GLOSSARY } from "./preview"
 import { FORM_ERRORS } from "./submit"
@@ -199,6 +201,8 @@ function readCalls(name: string) {
 
 beforeEach(() => {
   resetCarriedIds()
+  resetSubmitLock()
+  resetPendingRuntime()
   resetWorld()
   localStorage.clear()
   fetchSpy.mockReset()
@@ -219,6 +223,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetCarriedIds()
+  resetSubmitLock()
+  resetPendingRuntime()
   localStorage.clear()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
