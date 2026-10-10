@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAddressBook, parseStartBlock } from "../addressBook.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_RELAYER_ADDRESS, RETIRED_SEPOLIA_ESCROWS, buildMetadata, healthPayload, liveSubmitStatus, loadConfig } from "../config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_RELAYER_ADDRESS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, buildMetadata, healthPayload, liveSubmitStatus, loadConfig } from "../config.mjs";
 
 const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c";
 const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
@@ -36,6 +36,9 @@ describe("config gates", () => {
     assert.equal(config.liveSubmit.allowed, false);
     assert.equal(config.claimApiSecret, undefined);
     assert.equal(config.erc1271Enabled, false);
+    assert.equal(config.acceptLegacyDomainName, true);
+    assert.equal(acceptLegacyDomainName({}), true);
+    assert.equal(acceptLegacyDomainName({ ACCEPT_LEGACY_DOMAIN_NAME: "0" }), false);
     assert.equal(config.abuse.senderLimit, 5);
     assert.equal(config.abuse.ipLimit, 30);
     assert.equal(config.abuse.escrowCap, 8);
@@ -47,6 +50,18 @@ describe("config gates", () => {
     assert.deepEqual(config.liveSubmit.blockers, ["spencer_run_auth_required", "live_submit_off"]);
     assert.equal(JSON.stringify(config).includes(SECRET), false);
     assert.equal(Object.hasOwn(config, "RELAYER_PRIVATE_KEY"), false);
+  });
+
+  it("defaults the previous domain name on and turns it off through parseEnvFlag", () => {
+    assert.equal(loadConfig({}).acceptLegacyDomainName, true);
+    assert.equal(loadConfig({ ACCEPT_LEGACY_DOMAIN_NAME: "" }).acceptLegacyDomainName, true);
+    assert.equal(loadConfig({ ACCEPT_LEGACY_DOMAIN_NAME: "  " }).acceptLegacyDomainName, true);
+    for (const value of ["1", "true", "yes", "on", " ON "]) {
+      assert.equal(loadConfig({ ACCEPT_LEGACY_DOMAIN_NAME: value }).acceptLegacyDomainName, true, value);
+    }
+    for (const value of ["0", "false", "no", "off", " OFF "]) {
+      assert.equal(loadConfig({ ACCEPT_LEGACY_DOMAIN_NAME: value }).acceptLegacyDomainName, false, value);
+    }
   });
 
   it("treats a zero escrow address as unbooked and a real one as booked", () => {

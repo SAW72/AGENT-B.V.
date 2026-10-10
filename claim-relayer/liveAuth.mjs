@@ -99,7 +99,7 @@ export async function prepareLiveClaim(args) {
   assertReleaseRelayable(intent.action);
   assertIntentDomain(intent, config);
   assertIntentDeadline(intent, nowMs);
-  await assertIntentSigner(intent, config, chain);
+  const signer = await assertIntentSigner(intent, config, chain);
   const described = bindLiveCall(intent, body);
   const valueWei = "0";
   const boundEscrowId = intent.escrowId;
@@ -204,5 +204,6 @@ export async function prepareLiveClaim(args) {
     encoded,
     claimId: boundEscrowId,
     sender: intent.sender,
+    domainMatched: signer.domainMatched,
   };
 }

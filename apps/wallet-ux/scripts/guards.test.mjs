@@ -14,6 +14,7 @@ import {
   RETIRED_ESCROW,
   RETIRED_ESCROW_ESC_M1,
 } from "./guard-escrow-addresses.mjs"
+import { DOMAIN_NAME, FORBIDDEN_DASHES, scanDist, scanDistBuffer, scanSourceBuffer, scanSources } from "./guard-domain-dashes.mjs"
 
 const HEADER = "x-claim-secret"
 const ENV_NAME = "VITE_CLAIM_API_SECRET"
@@ -382,4 +383,81 @@ describe("verify-served-bundle", () => {
     })
     assertCleanExit(dns)
   }, 20000)
+})
+
+describe("guard-domain-dashes", () => {
+  function dashedName(id) {
+    return Buffer.concat([
+      Buffer.from('const domainName = "Agent', "utf8"),
+      Buffer.from(id, "hex"),
+      Buffer.from('BV Relayer"\n', "utf8"),
+    ])
+  }
+
+  it("accepts the claim-intent sources in this repo", () => {
+    expect(scanSources()).toEqual([])
+  })
+
+  it("rejects each non-ASCII dash on a domain-name line and inside claimIntent files", () => {
+    for (const dash of FORBIDDEN_DASHES) {
+      const line = dashedName(dash.id)
+      expect(scanSourceBuffer(line, "claim-relayer/README.md").length).toBeGreaterThan(0)
+      expect(scanSourceBuffer(line, "apps/wallet-ux/src/claimIntent.ts").length).toBeGreaterThan(0)
+      const commentOnly = Buffer.concat([
+        Buffer.from("// aside ", "utf8"),
+        dash.bytes,
+        Buffer.from('\nexport const domainName = "Agent-BV Relayer"\n', "utf8"),
+      ])
+      expect(scanSourceBuffer(commentOnly, "apps/wallet-ux/src/claimIntent.ts").length).toBeGreaterThan(0)
+      expect(scanSourceBuffer(commentOnly, "claim-relayer/README.md")).toEqual([])
+    }
+  })
+
+  it("rejects a non-ASCII dash next to the domain name in dist and requires the ASCII name", () => {
+    const near = Buffer.concat([
+      Buffer.from("Agent", "utf8"),
+      Buffer.from("e28093", "hex"),
+      Buffer.from("BV Relayer", "utf8"),
+    ])
+    expect(scanDistBuffer(near, "dist/assets/index.js").length).toBeGreaterThan(0)
+
+    const far = Buffer.concat([
+      Buffer.from(DOMAIN_NAME, "utf8"),
+      Buffer.alloc(200, 0x61),
+      Buffer.from("e28094", "hex"),
+      Buffer.from(" title", "utf8"),
+    ])
+    expect(scanDistBuffer(far, "dist/assets/index.js")).toEqual([])
+
+    const directory = tempDir()
+    mkdirSync(join(directory, "assets"))
+    writeFileSync(join(directory, "assets", "index.js"), `const name = ${JSON.stringify(DOMAIN_NAME)}\n`)
+    expect(scanDist(directory)).toEqual([])
+
+    const missing = tempDir()
+    mkdirSync(join(missing, "assets"))
+    writeFileSync(join(missing, "assets", "index.js"), 'const name = "refund relayer"\n')
+    expect(scanDist(missing).join("\n")).toContain("does not embed")
+
+    const bad = tempDir()
+    mkdirSync(join(bad, "assets"))
+    writeFileSync(join(bad, "assets", "index.js"), near)
+    expect(scanDist(bad).length).toBeGreaterThan(0)
+  })
+
+  it("passes the CLI when dist embeds the ASCII domain name", () => {
+    const directory = tempDir()
+    mkdirSync(join(directory, "assets"))
+    writeFileSync(join(directory, "assets", "index.js"), `const name = ${JSON.stringify(DOMAIN_NAME)}\n`)
+    const passed = runNode("scripts/guard-domain-dashes.mjs", [directory])
+    expect(passed.status).toBe(0)
+    expect(passed.stdout).toContain("Domain dash scan passed")
+
+    const bad = tempDir()
+    mkdirSync(join(bad, "assets"))
+    writeFileSync(join(bad, "assets", "index.js"), dashedName("e28094"))
+    const failed = runNode("scripts/guard-domain-dashes.mjs", [bad])
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain("e28094")
+  })
 })

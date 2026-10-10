@@ -53,5 +53,12 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.mjs"],
+    // Cross-package tests load the relayer as real Node modules so claimIntent.json
+    // stays next to import.meta.url. Vite must not bundle that package.
+    server: {
+      deps: {
+        external: [/\/claim-relayer\/.*\.mjs$/],
+      },
+    },
   },
 })

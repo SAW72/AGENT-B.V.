@@ -33,7 +33,7 @@ const PINNED = {
   voteFalse:
     "0x9f2ce678cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd0000000000000000000000000000000000000000000000000000000000000000",
   withdraw: "0x3ccfd60b",
-  refundIntent: "0xbe12d32385e9153be51f406522ea8b6aa923c649b0742334334232bcbe888e76",
+  refundIntent: "0x66b9ce494d4993731792e0165a5dce2b1b456cd0c92cc7fb5238a23da83c5859",
 } as const
 
 describe("calldata parity with 6c07a04", () => {

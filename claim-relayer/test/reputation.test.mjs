@@ -199,12 +199,18 @@ describe("reputation config", () => {
       ),
     ]);
     const root = fileURLToPath(new URL("../../", import.meta.url));
+    const claimDomainName = "Agent-BV Relayer";
     for (const label of [raw.product.name, raw.product.title]) {
       const hits = filesContaining(root, label).filter((file) => {
         if (allowed.has(file)) return false;
         // The short product name is human-readable copy in docs, Solidity comments,
         // and the reference Blueprint comments. The full title stays in the config object.
         if (label === raw.product.name && /\.(md|yml|yaml|sol)$/.test(file)) return false;
+        // The off-chain EIP-712 domain name contains the product name. That string is
+        // not a scorer hardcode. A file that mentions the product name only inside it stays allowed.
+        if (label === raw.product.name && !readFileSync(file, "utf8").split(claimDomainName).join("").includes(label)) {
+          return false;
+        }
         return true;
       });
       assert.deepEqual(hits, []);

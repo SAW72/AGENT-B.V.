@@ -1,12 +1,15 @@
 /**
  * EIP-712 ClaimIntent types for the connected wallet.
  * claim-relayer/claimIntent.json is the schema the relayer loads.
- * These constants must stay byte-identical with that file. The wallet-ux
- * test reads the JSON and fails if the two copies drift.
+ * Domain name and version come from that file so the packages cannot drift.
+ * The other constants must stay byte-identical with that file. The wallet-ux
+ * test reads the JSON and fails if those copies drift.
  */
 
-export const CLAIM_INTENT_DOMAIN_NAME = "AgentBV Claim Relayer" as const
-export const CLAIM_INTENT_DOMAIN_VERSION = "1" as const
+import claimIntentSchema from "../../../claim-relayer/claimIntent.json" with { type: "json" }
+
+export const CLAIM_INTENT_DOMAIN_NAME = claimIntentSchema.domainName
+export const CLAIM_INTENT_DOMAIN_VERSION = claimIntentSchema.domainVersion
 export const CLAIM_INTENT_PRIMARY_TYPE = "ClaimIntent" as const
 export const CLAIM_DEADLINE_SKEW_SECONDS = 240
 
