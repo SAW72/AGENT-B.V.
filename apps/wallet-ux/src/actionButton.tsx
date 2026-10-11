@@ -256,7 +256,7 @@ export function ActionStatus({
   if (state.status === "confirmed") {
     const done = state.label ?? DONE_LABEL
     return (
-      <div role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
+      <div className="action-confirmed" role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
         <p className="action-done">
           <Mark kind="ok" glyph="✓" /> <span data-testid={confirmedTestId}>{done}</span>
         </p>
