@@ -39,6 +39,17 @@ export function parseEnvFlag(value) {
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
+/**
+ * Previous ClaimIntent domain name stays accepted during the wallet cutover.
+ * Unset or blank is on. A set value is parseEnvFlag, so 0, false, no, and off turn it off.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+export function acceptLegacyDomainName(env) {
+  const raw = env?.ACCEPT_LEGACY_DOMAIN_NAME;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return true;
+  return parseEnvFlag(raw);
+}
+
 export function isAddress(value) {
   return ADDRESS_RE.test(String(value || "").trim());
 }
@@ -283,6 +294,7 @@ export function loadConfig(env = process.env) {
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),
     erc1271Enabled: parseEnvFlag(env.ERC1271_ENABLED),
+    acceptLegacyDomainName: acceptLegacyDomainName(env),
     abuse,
     quoteTtlMs,
     build: buildMetadata(env),

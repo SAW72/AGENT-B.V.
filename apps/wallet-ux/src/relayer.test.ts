@@ -5,10 +5,12 @@ import {
   CallExecutionError,
   ExecutionRevertedError,
   RpcRequestError,
+  hashDomain,
   keccak256,
   parseEther,
   recoverTypedDataAddress,
   toBytes,
+  toHex,
   type Hex,
 } from "viem"
 import { mnemonicToAccount } from "viem/accounts"
@@ -903,6 +905,45 @@ describe("signed claim intent", () => {
     }
     expect(schema.domainName).toBe(CLAIM_INTENT_DOMAIN_NAME)
     expect(schema.domainVersion).toBe(CLAIM_INTENT_DOMAIN_VERSION)
+    expect(toHex(toBytes(CLAIM_INTENT_DOMAIN_NAME))).toBe("0x4167656e742d42562052656c61796572")
+    expect(toBytes(CLAIM_INTENT_DOMAIN_NAME)).toHaveLength(16)
+    expect(toHex(toBytes(schema.domainName))).toBe("0x4167656e742d42562052656c61796572")
+    expect(
+      hashDomain({
+        domain: {
+          name: CLAIM_INTENT_DOMAIN_NAME,
+          version: CLAIM_INTENT_DOMAIN_VERSION,
+          chainId: 84532n,
+          verifyingContract: escrow,
+        },
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+        },
+      }),
+    ).toBe("0x25ac3f837af8762d4769d04a046e12858b0bbbd43683dd1e7e561d85030d8c64")
+    expect(
+      hashDomain({
+        domain: {
+          name: "AgentBV Claim Relayer",
+          version: CLAIM_INTENT_DOMAIN_VERSION,
+          chainId: 84532n,
+          verifyingContract: escrow,
+        },
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+        },
+      }),
+    ).toBe("0x86ccc7c40c6ac58cd64d4005172763a6ffc8f862dd35436ee829cb9f98040a96")
     expect(schema.primaryType).toBe(CLAIM_INTENT_PRIMARY_TYPE)
     expect(schema.typeString).toBe(CLAIM_INTENT_TYPE_STRING)
     expect(schema.actions).toEqual([...CLAIM_INTENT_ACTIONS])

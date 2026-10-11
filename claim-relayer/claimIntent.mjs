@@ -22,6 +22,12 @@ export const CLAIM_INTENT_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL("./claimIntent.json", import.meta.url)), "utf8"),
 );
 
+/**
+ * Previous EIP-712 domain name. One constant, not a second copy of the schema.
+ * assertIntentSigner tries it only when acceptLegacyDomainName is on.
+ */
+export const LEGACY_DOMAIN_NAME = "AgentBV Claim Relayer";
+
 export const CLAIM_INTENT_TYPE_STRING = CLAIM_INTENT_SCHEMA.typeString;
 export const CLAIM_INTENT_TYPEHASH = keccak256(toBytes(CLAIM_INTENT_TYPE_STRING));
 export const DEADLINE_WINDOW_SECONDS = CLAIM_INTENT_SCHEMA.deadlineWindowSeconds;
@@ -253,26 +259,56 @@ export function typedDataFor(intent, config) {
   };
 }
 
+/** Unset stays on. A set value uses parseEnvFlag, so 0, false, no, and off turn it off. */
+export function legacyDomainAccepted(config) {
+  const value = config?.acceptLegacyDomainName;
+  if (value === undefined || value === null) return true;
+  return value === true;
+}
+
+function domainMatch(domainMatched) {
+  console.info(JSON.stringify({ event: "claim_intent_domain", domainMatched }));
+  return { domainMatched };
+}
+
+async function recoverSigner(typed, signature) {
+  try {
+    return await recoverTypedDataAddress({ ...typed, signature });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Step 3. Recovered signer equals intent.sender.
- * ERC-1271 runs only when ERC1271_ENABLED is on, and only after ECDSA does not match.
+ * The current domain name is tried first. The previous name is tried only when
+ * acceptLegacyDomainName is on. Both use the same types and the same message.
+ * ERC-1271 runs only when ERC1271_ENABLED is on, and only after ECDSA does not match,
+ * and only against the current domain name.
+ * @returns {{ domainMatched: "current" | "legacy" }}
  */
 export async function assertIntentSigner(intent, config, chain) {
   const shape = assertLowS(intent.signature);
   const typed = typedDataFor(intent, config);
-  let recovered = null;
   if (shape === "ecdsa") {
-    try {
-      recovered = await recoverTypedDataAddress({ ...typed, signature: intent.signature });
-    } catch {
-      recovered = null;
+    const current = await recoverSigner(typed, intent.signature);
+    if (current && sameAddress(current, intent.sender)) return domainMatch("current");
+    if (legacyDomainAccepted(config)) {
+      const legacyTyped = {
+        domain: { ...typed.domain, name: LEGACY_DOMAIN_NAME },
+        types: typed.types,
+        primaryType: typed.primaryType,
+        message: typed.message,
+      };
+      const legacy = await recoverSigner(legacyTyped, intent.signature);
+      if (legacy && sameAddress(legacy, intent.sender)) return domainMatch("legacy");
     }
-    if (recovered && sameAddress(recovered, intent.sender)) return;
   }
   if (!config.erc1271Enabled) throw httpError(401, "invalid_signature");
   if (!chain || typeof chain.isValidSignature !== "function") throw httpError(401, "invalid_signature");
   const magic = await chain.isValidSignature(intent.sender, typed, intent.signature);
   if (magic !== true) throw httpError(401, "invalid_signature");
+  return domainMatch("current");
 }
 
 export function nonceKey(sender, nonce) {

@@ -1,5 +1,5 @@
 {
-  "domainName": "AgentBV Claim Relayer",
+  "domainName": "Agent-BV Relayer",
   "domainVersion": "1",
   "primaryType": "ClaimIntent",
   "deadlineWindowSeconds": 300,

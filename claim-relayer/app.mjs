@@ -320,12 +320,15 @@ export function createClaimRelayer(deps) {
           });
           let result;
           try {
-            result = await submitLiveClaim({
-              body,
-              config,
-              broadcaster,
-              prepared: { encoded: prepared.encoded, claimId: prepared.claimId },
-            });
+            result = {
+              ...(await submitLiveClaim({
+                body,
+                config,
+                broadcaster,
+                prepared: { encoded: prepared.encoded, claimId: prepared.claimId },
+              })),
+              domainMatched: prepared.domainMatched,
+            };
           } catch (err) {
             await storeClaimResult(intentNonces, prepared.nonceKey, err.status || 502, errorBody(err));
             throw err;
