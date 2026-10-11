@@ -685,9 +685,13 @@ function downHealth(started: number, cause: RelayerHealthCause, status?: number)
   return report
 }
 
+function isOpaqueHealthResponse(response: Response): boolean {
+  return response.type === "opaque" || response.type === "opaqueredirect" || response.status === 0
+}
+
 export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   if (report.state !== "down") return false
-  if (report.cause === "timeout") return true
+  if (report.cause === "timeout" || report.cause === "network_or_cors") return true
   return report.cause === "http_status" && report.status != null && WAKE_HTTP_STATUSES.has(report.status)
 }
 
@@ -722,6 +726,7 @@ export async function readRelayerHealth(input: {
     if (isAbort(cause)) return downHealth(started, "timeout")
     return downHealth(started, "network_or_cors")
   }
+  if (isOpaqueHealthResponse(response)) return downHealth(started, "network_or_cors")
   if (!response.ok) return downHealth(started, "http_status", response.status)
   const json = await readJson(response)
   if (!json || typeof json.killSwitch !== "boolean") return downHealth(started, "bad_body", response.status)
@@ -756,7 +761,7 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Re-check /health until it is usable, a hard failure, or the wake cap.
- * A wake (timeout or 502/503/504) retries health only. This never signs or posts a refund.
+ * A wake (timeout, a network or CORS failure, or 502/503/504) retries health only. This never signs or posts a refund.
  */
 export async function watchRelayerHealth(input: {
   url: string

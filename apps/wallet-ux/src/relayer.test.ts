@@ -945,7 +945,7 @@ describe("relayer health", () => {
     expect(health.cause).toBeUndefined()
   })
 
-  it("logs one line for each health failure cause and wakes only on timeout or 502, 503, 504", async () => {
+  it("logs one line for each health failure cause and wakes on timeout, network or CORS, or 502, 503, 504", async () => {
     const secret = "super-secret-token"
     const cases: Array<{ name: string; run: () => Promise<void>; cause: string; status: string; wakes: boolean }> = [
       {
@@ -1005,7 +1005,7 @@ describe("relayer health", () => {
         name: "network",
         cause: "network_or_cors",
         status: "none",
-        wakes: false,
+        wakes: true,
         run: async () => {
           const report = await readRelayerHealth({
             url: relayerUrl,
@@ -1013,7 +1013,28 @@ describe("relayer health", () => {
               throw new TypeError("Failed to fetch")
             },
           })
-          expect(relayerHealthWakes(report)).toBe(false)
+          expect(relayerHealthWakes(report)).toBe(true)
+        },
+      },
+      {
+        name: "opaque",
+        cause: "network_or_cors",
+        status: "none",
+        wakes: true,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () =>
+              ({
+                ok: false,
+                status: 0,
+                type: "opaque",
+                text: async () => "",
+              }) as Response,
+          })
+          expect(report.cause).toBe("network_or_cors")
+          expect(report.status).toBeUndefined()
+          expect(relayerHealthWakes(report)).toBe(true)
         },
       },
       {

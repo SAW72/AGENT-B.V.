@@ -712,9 +712,7 @@ describe("phase 1 wallet forms", () => {
     vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        throw new Error("down")
-      }),
+      vi.fn(async () => new Response(JSON.stringify({ ok: false }), { status: 400 })),
     )
     escrowFixture.expiresAt = 1n
     renderSurfaces()

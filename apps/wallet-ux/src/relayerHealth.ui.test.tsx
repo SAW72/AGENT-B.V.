@@ -18,6 +18,8 @@ import {
 } from "./relayer"
 import { resetSubmitLock } from "./submitLock"
 
+const { signCalls } = vi.hoisted(() => ({ signCalls: { n: 0 } }))
+
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
 const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as Address
 const panel = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb" as Address
@@ -58,14 +60,17 @@ vi.mock("wagmi", () => ({
   useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
   useWalletClient: () => ({
     data: {
-      signTypedData: async () => SIG,
+      signTypedData: async () => {
+        signCalls.n += 1
+        return SIG
+      },
     },
   }),
   useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
   useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
-type Step = "hang" | "hold" | "ok" | "502" | "400"
+type Step = "hang" | "hold" | "ok" | "502" | "400" | "typeerror"
 type Held = {
   url: string
   init: RequestInit
@@ -107,6 +112,7 @@ function installFetch() {
       expect(init.credentials).toBeUndefined()
       expect(init.body).toBeUndefined()
       const step = steps.shift() ?? "ok"
+      if (step === "typeerror") return Promise.reject(new TypeError("Failed to fetch"))
       if (step === "502") return Promise.resolve(jsonResponse(502, {}))
       if (step === "400") return Promise.resolve(jsonResponse(400, { ok: false }))
       if (step === "ok") return Promise.resolve(okHealth())
@@ -155,6 +161,7 @@ describe("refund service health", () => {
     escrowFixture.expiresAt = 1n
     escrowFixture.state = 0
     steps = []
+    signCalls.n = 0
     resetCarriedIds()
     resetSubmitLock()
     resetPendingRuntime()
@@ -224,6 +231,60 @@ describe("refund service health", () => {
     expect(refund.queryByTestId("relayer-note")).toBeNull()
     expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
     expect(counts.post).toBe(0)
+  })
+
+  it("treats repeated TypeErrors as starting, then enables with one post on click", async () => {
+    steps = ["typeerror", "typeerror", "typeerror", "ok"]
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    await flush(RELAYER_HEALTH_RETRY_MS * 3)
+    expect(counts.health).toBe(4)
+    expect(refund.queryByTestId("relayer-note")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    const line = String(warn.mock.calls[0]?.[0])
+    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+$/)
+    await act(async () => {
+      fireEvent.click(refund.getByTestId("relayer-submit"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(counts.health).toBe(5)
+    expect(counts.post).toBe(1)
+    expect(signCalls.n).toBe(1)
+  })
+
+  it("gives up after a minute of TypeErrors, and Try again checks health only", async () => {
+    steps = Array.from({ length: 40 }, () => "typeerror" as const)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(refund.getByTestId("relayer-health-retry").textContent).toBe(RELAYER_HEALTH_RETRY_LABEL)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    const line = String(warn.mock.calls[0]?.[0])
+    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+$/)
+    const beforeRetry = counts.health
+    steps = ["ok"]
+    fireEvent.click(refund.getByTestId("relayer-health-retry"))
+    await flush(0)
+    expect(counts.health).toBe(beforeRetry + 1)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    expect(refund.queryByTestId("relayer-health-retry")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
   })
 
   it("stops starting at 60s, and Try again restarts only the health check", async () => {
