@@ -10,6 +10,7 @@ import {
   type ActionButtonState,
 } from "./actionButton"
 import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
+import { confirmedNext } from "./routes"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
@@ -35,11 +36,13 @@ export function WalletOnlySubmit({
   preview,
   allowed,
   hold = false,
+  guided = false,
   onConfirmed,
 }: {
   preview: CallPreview
   allowed: readonly Address[]
   hold?: boolean
+  guided?: boolean
   onConfirmed?: () => void
 }) {
   const account = useAccount()
@@ -123,6 +126,9 @@ export function WalletOnlySubmit({
     }
   }
 
+  const guidedNext = guided ? confirmedNext(preview.functionName, receipt.subjectId ?? sent?.subjectId ?? null) : null
+  const nextHref = guided ? guidedNext?.href : progress.next?.href
+  const nextLabel = guided ? guidedNext?.label : progress.next?.label
   const state: ActionButtonState = !decision.ok
     ? decision.code === "disconnected"
       ? { status: "needs-wallet" }
@@ -134,8 +140,8 @@ export function WalletOnlySubmit({
           label: progress.done,
           resultId: receipt.subjectId ?? undefined,
           resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? undefined : undefined,
-          nextHref: progress.next?.href,
-          nextLabel: progress.next?.label,
+          nextHref,
+          nextLabel,
         }
       : receipt.phase === "pending" && receipt.txHash
         ? {
@@ -146,7 +152,7 @@ export function WalletOnlySubmit({
             unsaved: receipt.unsaved,
           }
         : receipt.phase === "unconfirmed" && receipt.txHash
-          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice) }
+          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice), unsaved: receipt.unsaved }
           : waiting
             ? { status: "waiting-wallet" }
             : { status: "idle", label: "Submit on Base Sepolia" }

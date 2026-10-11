@@ -15,6 +15,7 @@ import {
   type ActionButtonState,
 } from "./actionButton"
 import { PENDING_SLOW_TEXT } from "./actionProgress"
+import { PENDING_UNSAVED_TEXT } from "./walletCopy"
 import { shortHash } from "./format"
 
 const HASH = `0x${"ab".repeat(32)}`
@@ -36,6 +37,16 @@ const states: ActionButtonState[] = [
 ]
 
 describe("ActionButton states", () => {
+  it("keeps the unsaved note once a row is unconfirmed", () => {
+    render(
+      <ActionStatus
+        state={{ status: "unconfirmed", hash: HASH, message: "The receipt could not be read.", unsaved: true }}
+      />,
+    )
+    expect(screen.getByTestId("pending-unsaved").textContent).toBe(PENDING_UNSAVED_TEXT)
+    expect(screen.getByTestId("tx-unconfirmed")).toBeTruthy()
+  })
+
   it.each(states)("renders $status", (state) => {
     render(
       <>

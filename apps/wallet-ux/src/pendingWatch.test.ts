@@ -1,13 +1,32 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import type { Hex } from "viem"
 import { previewCreateEscrow, previewDispute, previewRelease, previewVote, previewWithdraw } from "./preview"
-import { pendingSlot, pendingStorageKey, readPending, resetPendingStore, subjectFromCalldata, writePending } from "./pendingTx"
+import {
+  clearPending,
+  dismissClockNote,
+  listClockNotes,
+  pendingSlot,
+  pendingStorageKey,
+  readPending,
+  resetPendingStore,
+  subjectFromCalldata,
+  writePending,
+} from "./pendingTx"
 import { checkPendingReceipt, isPendingExpired, receiptWatchConfig } from "./pendingWatch"
 import { hasLivePending, resetSubmitLock } from "./submitLock"
 
 const hash = `0x${"ab".repeat(32)}` as Hex
+const keyReads = { n: 0 }
+
+beforeAll(() => {
+  const original = Storage.prototype.key
+  vi.spyOn(Storage.prototype, "key").mockImplementation(function (this: Storage, index: number) {
+    keyReads.n += 1
+    return original.call(this, index)
+  })
+})
 
 function missing(name: string): Error {
   return Object.assign(new Error(name), { name })
@@ -128,7 +147,7 @@ describe("pending receipt checks", () => {
     expect(readPending(pendingSlot("createEscrow", disputeId))).toBeNull()
   })
 
-  it("drops a stored clock that is more than a minute ahead", () => {
+  it("keeps a future clock as a Basescan hold until it is dismissed", () => {
     const slot = pendingSlot("release", hash)
     localStorage.setItem(
       pendingStorageKey(slot),
@@ -136,7 +155,39 @@ describe("pending receipt checks", () => {
     )
     expect(readPending(slot)).toBeNull()
     expect(localStorage.getItem(pendingStorageKey(slot))).toBeNull()
+    expect(listClockNotes().map((note) => note.hash.toLowerCase())).toContain(hash.toLowerCase())
+    expect(hasLivePending()).toBe(true)
+    resetPendingStore()
+    resetSubmitLock()
+    expect(listClockNotes().map((note) => note.hash.toLowerCase())).toContain(hash.toLowerCase())
+    expect(hasLivePending()).toBe(true)
+    dismissClockNote(hash)
+    expect(listClockNotes()).toEqual([])
     expect(hasLivePending()).toBe(false)
+  })
+
+  it("keeps a skew of under a minute as a normal pending record", () => {
+    const slot = pendingSlot("release", hash)
+    const startedAt = Date.now() + 59_000
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({ hash, startedAt, action: "release", subjectId: hash }),
+    )
+    expect(readPending(slot)?.startedAt).toBe(startedAt)
+    expect(listClockNotes()).toEqual([])
+    expect(hasLivePending()).toBe(true)
+  })
+
+  it("does not throw when clearing a pending row and storage refuses the delete", () => {
+    writePending({ action: "release", subjectId: hash, hash, startedAt: Date.now() })
+    const spy = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new Error("blocked")
+    })
+    try {
+      expect(() => clearPending(pendingSlot("release", hash))).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it("keeps an in-memory pending record when storage throws", () => {
@@ -155,16 +206,15 @@ describe("pending receipt checks", () => {
 
   it("reads pending storage once until a write or a storage event", () => {
     writePending({ action: "release", subjectId: hash, hash, startedAt: Date.now() })
-    const spy = vi.spyOn(Storage.prototype, "key")
+    const before = keyReads.n
     expect(hasLivePending()).toBe(true)
-    const reads = spy.mock.calls.length
-    expect(reads).toBeGreaterThan(0)
+    const after = keyReads.n
+    expect(after).toBeGreaterThan(before)
     expect(hasLivePending()).toBe(true)
-    expect(spy.mock.calls.length).toBe(reads)
+    expect(keyReads.n).toBe(after)
     window.dispatchEvent(new StorageEvent("storage", { key: pendingStorageKey(pendingSlot("release", hash)) }))
     expect(hasLivePending()).toBe(true)
-    expect(spy.mock.calls.length).toBeGreaterThan(reads)
-    spy.mockRestore()
+    expect(keyReads.n).toBeGreaterThan(after)
   })
 })
 

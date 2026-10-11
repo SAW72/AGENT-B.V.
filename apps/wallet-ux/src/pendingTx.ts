@@ -2,6 +2,7 @@ import { decodeFunctionData, type Hex } from "viem"
 import { disputePanelAbi, escrowAbi } from "./abi"
 
 const PREFIX = "agent-bv.pending."
+const CLOCK_PREFIX = "agent-bv.clock."
 const HEX_32 = /^0x[0-9a-fA-F]{64}$/
 const CALL_ABI = [...escrowAbi, ...disputePanelAbi]
 
@@ -18,9 +19,15 @@ export type PendingRecord = {
 /** A stored clock more than a minute ahead is not a live transaction. */
 export const PENDING_FUTURE_SKEW_MS = 60_000
 
+export type ClockNote = {
+  hash: Hex
+  action: string
+  subjectId: Hex | null
+}
+
 const listeners = new Set<() => void>()
 const memoryRecords = new Map<string, PendingRecord>()
-const clockNotes = new Map<string, Hex>()
+const clockNotes = new Map<string, ClockNote>()
 let storageVersion = 0
 
 export function subscribePending(listener: () => void): () => void {
@@ -48,13 +55,77 @@ export function resetPendingStore(): void {
   bumpStorageVersion()
 }
 
-function rememberClockNote(hash: Hex) {
-  clockNotes.set(hash, hash)
+function clockStorageKey(hash: Hex): string {
+  return `${CLOCK_PREFIX}${hash.toLowerCase()}`
 }
 
-/** Records dropped because their clock was in the future. Kept until the page reloads. */
-export function listClockNotes(): Hex[] {
-  return [...clockNotes.values()]
+function rememberClockNote(note: ClockNote) {
+  clockNotes.set(note.hash.toLowerCase(), note)
+}
+
+function parseClockNote(raw: string | null): ClockNote | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<ClockNote>
+    if (!isHex32(parsed.hash)) return null
+    const subjectId = parsed.subjectId == null ? null : parsed.subjectId
+    if (subjectId != null && !isHex32(subjectId)) return null
+    const action = typeof parsed.action === "string" && parsed.action.trim() !== "" ? parsed.action : "unknown"
+    return { hash: parsed.hash, action, subjectId }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A future clock is not treated as a live send, but the hash stays on disk and holds the lock
+ * until the user dismisses it. Reloading must not drop the hash or open submit.
+ */
+function persistClockNote(note: ClockNote) {
+  rememberClockNote(note)
+  if (typeof localStorage === "undefined") return
+  try {
+    localStorage.setItem(clockStorageKey(note.hash), JSON.stringify(note))
+  } catch {
+    // The in-memory note still holds the lock for this page.
+  }
+}
+
+export function listClockNotes(): ClockNote[] {
+  const out = new Map<string, ClockNote>()
+  if (typeof localStorage !== "undefined") {
+    const keys: string[] = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key?.startsWith(CLOCK_PREFIX)) keys.push(key)
+    }
+    for (const key of keys) {
+      const note = parseClockNote(localStorage.getItem(key))
+      if (!note) continue
+      out.set(note.hash.toLowerCase(), note)
+    }
+  }
+  for (const note of clockNotes.values()) {
+    if (!out.has(note.hash.toLowerCase())) out.set(note.hash.toLowerCase(), note)
+  }
+  return [...out.values()]
+}
+
+export function hasClockHold(): boolean {
+  return listClockNotes().length > 0
+}
+
+export function dismissClockNote(hash: Hex): void {
+  clockNotes.delete(hash.toLowerCase())
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(clockStorageKey(hash))
+    } catch {
+      // The in-memory note is already gone. A later read may see the stored copy.
+    }
+  }
+  bumpStorageVersion()
+  emitPending()
 }
 
 if (typeof window !== "undefined") {
@@ -95,13 +166,16 @@ export function readPending(slot: string): PendingRecord | null {
     if (!isHex32(parsed.hash)) return null
     if (typeof parsed.startedAt !== "number" || !Number.isFinite(parsed.startedAt)) return null
     if (parsed.startedAt > Date.now() + PENDING_FUTURE_SKEW_MS) {
+      const subjectId = isHex32(parsed.subjectId) ? parsed.subjectId : null
+      const action = typeof parsed.action === "string" && parsed.action.trim() !== "" ? parsed.action : "unknown"
+      persistClockNote({ hash: parsed.hash, action, subjectId })
       try {
         localStorage.removeItem(pendingStorageKey(slot))
       } catch {
-        // The record is still ignored when storage will not delete it.
+        // The clock note is already stored. The original row is still ignored.
       }
-      if (isHex32(parsed.hash)) rememberClockNote(parsed.hash)
       bumpStorageVersion()
+      emitPending()
       return null
     }
     if (typeof parsed.action !== "string" || parsed.action.trim() === "") return null
@@ -200,7 +274,13 @@ export function writeRelayerPending(slot: string, hash: Hex, startedAt = Date.no
 export function clearPending(slot: string): void {
   freshSlots.delete(slot)
   memoryRecords.delete(slot)
-  if (typeof localStorage !== "undefined") localStorage.removeItem(pendingStorageKey(slot))
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(pendingStorageKey(slot))
+    } catch {
+      // The in-memory record is already gone. A stuck row must not throw into the receipt watch.
+    }
+  }
   bumpStorageVersion()
   emitPending()
 }

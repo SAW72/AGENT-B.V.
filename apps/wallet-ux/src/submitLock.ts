@@ -1,11 +1,12 @@
 import { useEffect, useId, useSyncExternalStore } from "react"
-import { listPending, pendingStorageVersion, subscribePending, type PendingRecord } from "./pendingTx"
+import { hasClockHold, listPending, pendingStorageVersion, subscribePending, type PendingRecord } from "./pendingTx"
 import { isPendingExpired } from "./pendingWatch"
 
 let holder: string | null = null
 const listeners = new Set<() => void>()
 let cachedVersion = -1
 let cachedRecords: PendingRecord[] = []
+let cachedClockHold = false
 
 function emit() {
   for (const listener of listeners) listener()
@@ -20,14 +21,19 @@ function liveRecords(): readonly PendingRecord[] {
   const version = pendingStorageVersion()
   if (version !== cachedVersion) {
     cachedRecords = listPending()
+    cachedClockHold = hasClockHold()
     cachedVersion = pendingStorageVersion()
   }
   return cachedRecords
 }
 
-/** A stored transaction that has not expired holds the lock, even when its form is unmounted. */
+/**
+ * A stored transaction that has not expired holds the lock, even when its form is unmounted.
+ * A future-dated record does too, until the user dismisses its Basescan note.
+ */
 export function hasLivePending(now = Date.now()): boolean {
-  return liveRecords().some((record) => !isPendingExpired(record.startedAt, now))
+  const records = liveRecords()
+  return cachedClockHold || records.some((record) => !isPendingExpired(record.startedAt, now))
 }
 
 /** Take the single in-flight transaction slot. A pending record or another caller refuses it. */
@@ -49,6 +55,7 @@ export function resetSubmitLock() {
   holder = null
   cachedVersion = -1
   cachedRecords = []
+  cachedClockHold = false
   emit()
 }
 

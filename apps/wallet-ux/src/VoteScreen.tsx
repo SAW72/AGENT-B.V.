@@ -7,10 +7,13 @@ import { WALLET_SIGNED_TEST_LINE } from "./brand"
 import { parseBytes32 } from "./bytes32"
 import { ActionButton, ActionStatus, DISPUTE_ID_HINT, DISPUTE_ID_LABEL } from "./actionButton"
 import { CONTRACT_LABELS, GAS_FEE_TEXT, PREPARE_FIRST_REASON, VOTE_SEAT_REASON } from "./actionProgress"
-import { readUrlBytes32, useCarriedIds } from "./carriedIds"
+import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
+import { shortAddress } from "./format"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewVote, type CallPreview } from "./preview"
+import { REVIEW_EMPTY, navigate, type WalletRoute } from "./routes"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
+import { FilledFromLink, StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
 import {
   ALREADY_VOTED_TEXT,
@@ -70,6 +73,53 @@ function Field({
   )
 }
 
+export type VoteSeat = "loading" | "yes" | "no" | "unreadable"
+
+export function voteTaskReason(seat: VoteSeat, address?: Address): string | null {
+  if (seat === "yes") return null
+  const who = address ? `Connected: ${shortAddress(address)}.` : "No wallet is connected."
+  return `${VOTE_SEAT_REASON} ${who}`
+}
+
+export function useVoteSeat(panel: Address): VoteSeat {
+  const account = useAccount()
+  const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
+  const [seat, setSeat] = useState<VoteSeat>("loading")
+  useEffect(() => {
+    const accountAddress = account.address
+    if (!account.isConnected || !accountAddress) {
+      setSeat("no")
+      return
+    }
+    if (!client) {
+      setSeat("unreadable")
+      return
+    }
+    let cancelled = false
+    setSeat("loading")
+    void client
+      .readContract({
+        address: panel,
+        abi: disputePanelAbi,
+        functionName: "isArbitrator",
+        args: [accountAddress],
+      })
+      .then(
+        (value) => {
+          if (cancelled) return
+          setSeat(typeof value === "boolean" ? (value ? "yes" : "no") : "unreadable")
+        },
+        () => {
+          if (!cancelled) setSeat("unreadable")
+        },
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [account.address, account.isConnected, client, panel])
+  return seat
+}
+
 function caseBlockMessage(read: CaseRead): string | null {
   if (read.status === "unreadable") return CASE_UNREADABLE_TEXT
   if (read.status === "missing") return NO_DISPUTE_TEXT
@@ -79,13 +129,18 @@ function caseBlockMessage(read: CaseRead): string | null {
   return null
 }
 
-export function VoteScreen({ panel }: { panel: Address }) {
+export function VoteScreen({ panel, route = null }: { panel: Address; route?: WalletRoute | null }) {
+  const guided = route?.flow === "vote" ? route : null
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const carried = useCarriedIds()
   const [urlDispute] = useState(() => readUrlBytes32("dispute"))
-  const [disputeId, setDisputeId] = useState(urlDispute.value ?? "")
-  const [touched, setTouched] = useState(false)
+  const prefill = useSyncedPrefill(guided?.dispute.value, urlDispute.value ?? "")
+  const setDisputeId = prefill.setValue
+  const touched = prefill.touched
+  const setTouched = prefill.setTouched
+  const disputeLink = guided?.dispute.value ?? null
+  const disputeId = disputeLink != null && !touched ? disputeLink : prefill.value
   const [choice, setChoice] = useState<"" | "payee" | "payer">("")
   const [arbitrator, setArbitrator] = useState<ArbitratorRead>("loading")
   const [caseRead, setCaseRead] = useState<CaseRead>({ status: "idle" })
@@ -102,11 +157,11 @@ export function VoteScreen({ panel }: { panel: Address }) {
   arbitratorRef.current = arbitrator
 
   useEffect(() => {
-    if (touched || !carried.disputeId) return
+    if (touched || guided?.dispute.value || !carried.disputeId) return
     if (carried.disputeId === disputeIdRef.current) return
     setDisputeId(carried.disputeId)
     session.clear()
-  }, [carried.disputeId, touched])
+  }, [carried.disputeId, guided?.dispute.value, setDisputeId, touched])
 
   useEffect(() => {
     const accountAddress = account.address
@@ -269,34 +324,60 @@ export function VoteScreen({ panel }: { panel: Address }) {
     }
   }
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault()
-    if (arbitratorRef.current !== "yes" || caseBlockMessage(caseRef.current)) return
-    if (!session.begin()) return
+  const step = guided?.step ?? 1
+  const linked = disputeLink != null && !touched
+  const seatReason = voteTaskReason(arbitrator === "yes" ? "yes" : arbitrator, account.address)
+
+  async function onSubmit(event?: FormEvent): Promise<boolean> {
+    event?.preventDefault()
+    if (arbitratorRef.current !== "yes" || caseBlockMessage(caseRef.current)) return false
+    if (!session.begin()) return false
     try {
       await yieldPrepareTick()
       await settleCase()
       const blocked = caseBlockMessage(caseRef.current)
       if (arbitratorRef.current !== "yes" || blocked) {
         if (blocked) session.publish(blocked, null)
-        return
+        return false
       }
       const id = parseBytes32(disputeIdRef.current)
       if (!id) {
         session.publish(FORM_ERRORS.voteId, null)
-        return
+        return false
       }
       const selected = choiceRef.current
       if (selected !== "payee" && selected !== "payer") {
         session.publish(FORM_ERRORS.voteChoice, null)
-        return
+        return false
       }
       session.publish(null, previewVote(panel, id, selected === "payee"))
+      return true
     } catch (cause) {
       session.publish(prepareFailure("vote", cause), null)
+      return false
     } finally {
       session.finish()
     }
+  }
+
+  function go(next: number) {
+    if (!guided) return
+    const params = new URLSearchParams()
+    if (guided.dispute.value) params.set("dispute", guided.dispute.value)
+    if (next > 1) params.set("step", String(next))
+    const search = params.toString()
+    navigate(search ? `/vote?${search}` : "/vote")
+  }
+
+  function back() {
+    if (!guided) return
+    if (guided.step > 1) go(guided.step - 1)
+    else navigate("/")
+  }
+
+  async function onNext() {
+    const ok = await onSubmit()
+    if (ok) go(2)
   }
 
   const arbitratorMessage =
@@ -307,6 +388,162 @@ export function VoteScreen({ panel }: { panel: Address }) {
         : arbitrator === "no"
           ? NOT_ARBITRATOR_TEXT
           : null
+
+  if (guided) {
+    const voteLead =
+      choice === "payee"
+        ? "You are voting that the deal stands. The payee gets paid."
+        : choice === "payer"
+          ? "You are voting to undo the deal. The payer gets refunded."
+          : "You are casting an arbitrator vote on this dispute."
+    const nextBlocked = !canPrepare || (caseRead.status === "loading" && parsedId != null)
+    return (
+      <section className="card guided-flow" aria-labelledby="vote-heading" data-testid="vote-screen">
+        <Stepper step={step} total={2} />
+        <h2 id="vote-heading">{VOTE_HEADING}</h2>
+        <p data-testid="vote-test-only">{WALLET_SIGNED_TEST_LINE}</p>
+        {guided.stepNotice ? (
+          <p className="banner" role="status" data-testid="url-step-notice">
+            {guided.stepNotice}
+          </p>
+        ) : null}
+        {guided.dispute.notice ? (
+          <p className="banner" role="status" data-testid="url-dispute-notice">
+            {guided.dispute.notice}
+          </p>
+        ) : null}
+        {seatReason ? (
+          <p className="action-reason" role="status" data-testid="vote-seat-reason">
+            {seatReason}
+          </p>
+        ) : null}
+        {step === 1 ? (
+          <form
+            id="vote-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void onNext()
+            }}
+          >
+            <p className="muted">{VOTE_MUTED}</p>
+            <AddressRow label="Agent-BV dispute panel" value={panel} testId="vote-panel" />
+            {arbitratorMessage ? (
+              <p role="status" data-testid="vote-arbitrator">
+                {arbitratorMessage}
+              </p>
+            ) : null}
+            <CaseStatus read={caseRead} />
+            {linked && guided.dispute.value ? (
+              <>
+                <FilledFromLink label={DISPUTE_ID_LABEL} value={guided.dispute.value} testId="vote-filled" />
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setTouched(true)
+                    setDisputeId("")
+                    session.clear()
+                  }}
+                >
+                  Use a different id
+                </button>
+              </>
+            ) : (
+              <Field
+                id="vote-dispute-id"
+                label={DISPUTE_ID_LABEL}
+                hint={DISPUTE_ID_HINT}
+                value={disputeId}
+                onChange={(value) => {
+                  setTouched(true)
+                  setDisputeId(value)
+                  session.clear()
+                }}
+              />
+            )}
+            <fieldset className="choice">
+              <legend>Who gets the money</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="vote-support"
+                  value="payee"
+                  checked={choice === "payee"}
+                  onChange={() => {
+                    setChoice("payee")
+                    session.clear()
+                  }}
+                />
+                {DEAL_STANDS_LABEL}
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="vote-support"
+                  value="payer"
+                  checked={choice === "payer"}
+                  onChange={() => {
+                    setChoice("payer")
+                    session.clear()
+                  }}
+                />
+                {UNDO_DEAL_LABEL}
+              </label>
+            </fieldset>
+            <StepFooter onBack={back}>
+              <ActionButton
+                type="button"
+                disabled={session.preparing || nextBlocked}
+                reason={
+                  canPrepare
+                    ? null
+                    : arbitrator !== "yes"
+                      ? seatReason
+                      : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
+                }
+                onClick={() => void onNext()}
+                state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
+              />
+            </StepFooter>
+            {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
+          </form>
+        ) : (
+          <div data-testid="review-step">
+            {session.error ? (
+              <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
+            ) : session.preview ? (
+              <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
+                <p data-testid="review-plain">{voteLead}</p>
+                <p>{previewCardCopy(session.preview.functionName, false)}</p>
+                <p data-testid="review-contract">{CONTRACT_LABELS.panel}</p>
+                <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
+                <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
+                <CalldataDetails calldata={session.preview.calldata} />
+              </div>
+            ) : (
+              <p className="hint" role="status" data-testid="review-empty">
+                {REVIEW_EMPTY}
+              </p>
+            )}
+            <StepFooter onBack={back}>
+              {session.preview ? (
+                <WalletOnlySubmit
+                  key={session.preview.calldata}
+                  preview={session.preview}
+                  allowed={[panel]}
+                  hold={!canPrepare}
+                  guided
+                  onConfirmed={() => setGeneration((value) => value + 1)}
+                />
+              ) : (
+                <ActionButton disabled reason={REVIEW_EMPTY} state={{ status: "idle", label: "Submit on Base Sepolia" }} />
+              )}
+            </StepFooter>
+          </div>
+        )}
+      </section>
+    )
+  }
 
   return (
     <section className="card" aria-labelledby="vote-heading" data-testid="vote-screen">

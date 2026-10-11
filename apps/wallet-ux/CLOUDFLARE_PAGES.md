@@ -142,7 +142,7 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 /* /index.html 200
 ```
 
-Vite copies that file to `dist/_redirects`. The app is one page today. Keep this rule if client routes are added later so those paths serve `index.html`.
+Vite copies that file to `dist/_redirects`. The wallet uses path routes (`/fund`, `/release`, `/refund`, `/dispute`, `/vote`, `/withdraw`). This rule serves `index.html` for those paths, so a deep link and a refresh both load the app. The client reads the path and does not prepare or submit from the address bar.
 
 [`public/_headers`](public/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. There is no `Content-Security-Policy`. `scripts/guard-pages-headers.mjs` fails when that file's bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
 

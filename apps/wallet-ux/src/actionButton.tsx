@@ -1,7 +1,8 @@
-import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
+import { useEffect, useState, type ButtonHTMLAttributes, type MouseEvent, type ReactNode } from "react"
 import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
 import { chunkHex, shortHash } from "./format"
 import { receiptWatchConfig } from "./pendingWatch"
+import { navigate } from "./routes"
 import { ChunkedHex, CopyButton } from "./ui"
 import type { PendingBanner } from "./usePendingReceipt"
 import {
@@ -44,7 +45,7 @@ export type ActionButtonState =
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
   | { status: "pending"; hash: string; label?: string; startedAt?: number; unsaved?: boolean }
-  | { status: "unconfirmed"; hash: string; message?: string }
+  | { status: "unconfirmed"; hash: string; message?: string; unsaved?: boolean }
   | {
       status: "confirmed"
       hash: string
@@ -239,6 +240,11 @@ export function ActionStatus({
         <p className="may-confirm" data-testid="tx-may-confirm">
           {state.message ?? RECEIPT_MAY_CONFIRM_TEXT}
         </p>
+        {state.unsaved ? (
+          <p className="hint" data-testid="pending-unsaved">
+            {PENDING_UNSAVED_TEXT}
+          </p>
+        ) : null}
         {onTryAgain ? (
           <button type="button" className="secondary" data-testid="try-again" onClick={onTryAgain}>
             {TRY_AGAIN_LABEL}
@@ -266,7 +272,12 @@ export function ActionStatus({
         <TransactionRow hash={state.hash} />
         {state.nextHref ? (
           <p>
-            <a className="next-step" href={state.nextHref} data-testid="next-step">
+            <a
+              className="next-step"
+              href={state.nextHref}
+              data-testid="next-step"
+              onClick={(event) => followNext(event, state.nextHref)}
+            >
               {state.nextLabel ?? "Next step"}
             </a>
           </p>
@@ -278,7 +289,19 @@ export function ActionStatus({
   return null
 }
 
-export function PendingClearedNote({ banner }: { banner: PendingBanner | null }) {
+function followNext(event: MouseEvent<HTMLAnchorElement>, href: string | undefined) {
+  if (!href?.startsWith("/")) return
+  event.preventDefault()
+  navigate(href)
+}
+
+export function PendingClearedNote({
+  banner,
+  onDismiss,
+}: {
+  banner: PendingBanner | null
+  onDismiss?: () => void
+}) {
   if (!banner || banner.kind === "reverted") return null
   const text =
     banner.kind === "expired" ? PENDING_EXPIRED_TEXT : banner.kind === "clock" ? PENDING_CLOCK_TEXT : PENDING_UNKNOWN_TEXT
@@ -295,6 +318,11 @@ export function PendingClearedNote({ banner }: { banner: PendingBanner | null })
           {TX_LINK_LABEL}
         </a>
       </p>
+      {onDismiss ? (
+        <button type="button" className="secondary" data-testid="try-again" onClick={onDismiss}>
+          {TRY_AGAIN_LABEL}
+        </button>
+      ) : null}
     </div>
   )
 }

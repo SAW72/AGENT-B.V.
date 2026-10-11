@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react"
+import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { parseBytes32 } from "./bytes32"
 
 export type CarriedIds = {
@@ -48,6 +48,21 @@ export const ESCROW_URL_IGNORED = "The escrow in the link was ignored because it
 export const DISPUTE_URL_IGNORED = "The dispute in the link was ignored because it is not a valid id."
 
 /** Read one untrusted query param. Invalid values are dropped. Nothing is submitted. */
+/** Keep a displayed id aligned with a validated link param without submitting it. */
+export function useSyncedPrefill(link: `0x${string}` | null | undefined, fallback: string) {
+  const [value, setValue] = useState(link ?? fallback)
+  const [touched, setTouched] = useState(false)
+  const seen = useRef<string | null>(link ?? null)
+  useEffect(() => {
+    const next = link ?? null
+    if (seen.current === next) return
+    seen.current = next
+    setTouched(false)
+    setValue(next ?? "")
+  }, [link])
+  return { value, setValue, touched, setTouched }
+}
+
 export function readUrlBytes32(param: "escrow" | "dispute"): { value: `0x${string}` | null; notice: string | null } {
   if (typeof window === "undefined") return { value: null, notice: null }
   const raw = new URLSearchParams(window.location.search).get(param)
