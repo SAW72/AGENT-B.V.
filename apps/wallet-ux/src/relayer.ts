@@ -761,7 +761,7 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Re-check /health until it is usable, a hard failure, or the wake cap.
- * A wake (timeout, a network or CORS failure, or 502/503/504) retries health only. This never signs or posts a refund.
+ * A wake (timeout, any fetch failure (network, CORS or other non-abort error), or 502/503/504) retries health only. This never signs or posts a refund.
  */
 export async function watchRelayerHealth(input: {
   url: string
