@@ -87,6 +87,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Install claim relayer deps
+        # The cross-package domain test loads claim-relayer as Node modules.
+        working-directory: claim-relayer
+        run: npm ci
+
       - name: Test
         run: npm test
 
