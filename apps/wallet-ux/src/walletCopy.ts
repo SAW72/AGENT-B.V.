@@ -19,7 +19,7 @@ export const UNDO_DEAL_LABEL = "Undo the deal: the payer gets refunded"
 export const VOTE_CHOICE_TEXT = "Choose who should get the money before voting."
 
 export const VOTE_NOTE =
-  "A case resolves automatically on the 3rd vote. A vote can't be changed. After it resolves, someone still has to call release when the payee gets paid, or refund when the payer gets refunded, on the Agent-BV escrow. Then the recipient withdraws."
+  "A case resolves automatically on the 3rd vote. A vote can't be changed. After it resolves, someone still has to call release when the payee gets paid, or refund when the payer gets refunded, on the Agent-BV escrow."
 
 export const VOTE_MUTED =
   "Only an Agent-BV dispute panel arbitrator can vote. The deal stands and the payee gets paid, or the deal is undone and the payer gets refunded. The connected wallet signs this. This page does not ask for a private key or a recovery phrase."

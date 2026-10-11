@@ -565,29 +565,67 @@ a.task-link {
 }
 
 .stepper { margin: 4px 0 12px; }
-.step-count { margin: 0; font-weight: 700; }
-.step-dots { margin: 2px 0 0; letter-spacing: 0.2em; }
+.step-count { margin: 0 0 8px; font-weight: 700; }
+.step-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.step-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin: 0;
+  padding: 2px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+.step-dot-mark { font-weight: 700; line-height: 1; }
+.step-dot.done {
+  border-style: solid;
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.step-dot.current {
+  border-style: solid;
+  border-width: 2px;
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+}
+.step-dot.upcoming .step-dot-mark { font-weight: 400; }
 
-.step-footer {
+.step-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin-top: 16px;
 }
 
-.back-link {
+.back-button {
   background: transparent;
-  color: #1e4d78;
-  border: 0;
-  text-decoration: underline;
-  padding: 8px 4px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 14px;
   min-height: 44px;
   width: auto;
+  flex: 0 0 auto;
+  text-decoration: none;
 }
 
-.step-primary { flex: 1; }
+.step-primary { flex: 1; min-width: 0; }
 .step-primary button { width: 100%; min-height: 44px; }
+
+.action-confirmed .kv-row {
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+}
 
 .system-status { margin: 18px 0; }
 .system-status summary {
@@ -599,7 +637,7 @@ a.task-link {
 }
 
 @media (max-width: 640px) {
-  .step-footer {
+  .step-actions {
     position: fixed;
     left: 0;
     right: 0;
@@ -611,7 +649,8 @@ a.task-link {
     padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   }
   .guided-flow { padding-bottom: 96px; }
-  .step-footer .back-link { width: auto; flex: 0 0 auto; }
+  .step-actions .back-button { min-height: 44px; width: auto; flex: 0 0 auto; }
+  .action-confirmed .kv-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 360px) {

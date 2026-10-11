@@ -1,4 +1,5 @@
 import { useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import type { Address } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
 import {
@@ -38,12 +39,14 @@ export function WalletOnlySubmit({
   hold = false,
   guided = false,
   onConfirmed,
+  statusRoot = null,
 }: {
   preview: CallPreview
   allowed: readonly Address[]
   hold?: boolean
   guided?: boolean
   onConfirmed?: () => void
+  statusRoot?: HTMLElement | null
 }) {
   const account = useAccount()
   const { switchChain } = useSwitchChain()
@@ -157,9 +160,30 @@ export function WalletOnlySubmit({
             ? { status: "waiting-wallet" }
             : { status: "idle", label: "Submit on Base Sepolia" }
 
+  const status = (
+    <>
+      {guided ? <p>{submitSenderNote(preview.functionName)}</p> : null}
+      <ActionStatus
+        state={state}
+        walletHint={walletHint}
+        cancelled={cancelled}
+        onTryAgain={state.status === "pending" || state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+      />
+      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
+      <PendingClearedNote banner={receipt.banner} />
+      {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
+      {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
+      {submitError?.link ? (
+        <p>
+          <a href={submitError.link.href}>{submitError.link.label}</a>
+        </p>
+      ) : null}
+    </>
+  )
+
   return (
-    <div>
-      <p>{submitSenderNote(preview.functionName)}</p>
+    <>
+      {guided ? null : <p>{submitSenderNote(preview.functionName)}</p>}
       <ActionButton
         testId={control.testId}
         state={state}
@@ -181,21 +205,7 @@ export function WalletOnlySubmit({
           void onClick()
         }}
       />
-      <ActionStatus
-        state={state}
-        walletHint={walletHint}
-        cancelled={cancelled}
-        onTryAgain={state.status === "pending" || state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
-      />
-      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
-      <PendingClearedNote banner={receipt.banner} />
-      {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
-      {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
-      {submitError?.link ? (
-        <p>
-          <a href={submitError.link.href}>{submitError.link.label}</a>
-        </p>
-      ) : null}
-    </div>
+      {statusRoot ? createPortal(status, statusRoot) : status}
+    </>
   )
 }

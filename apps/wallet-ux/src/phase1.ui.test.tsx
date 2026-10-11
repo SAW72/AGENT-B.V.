@@ -707,11 +707,11 @@ describe("phase 1 wallet forms", () => {
       expect(screen.getByTestId("pending-transactions").querySelector("[data-id]")?.getAttribute("data-id")).toBe(claim)
 
       succeed = true
-      await waitFor(() => expect(screen.getByTestId("pending-transactions").textContent).toContain("Escrow funded"))
-      const confirmed = screen.getByTestId("pending-transactions")
-      expect(confirmed.querySelector("[data-id]")?.getAttribute("data-id")).toBe(claim)
-      expect(confirmed.textContent?.replace(/\s/g, "")).toContain(claim.slice(2))
-      expect((sectionOf("Prepare this payout").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim)
+      await waitFor(() =>
+        expect((sectionOf("Prepare this payout").getByLabelText("Escrow ID") as HTMLInputElement).value).toBe(claim),
+      )
+      expect(screen.queryByTestId("pending-transactions")).toBeNull()
+      expect(screen.queryByRole("link", { name: "Next: release the payment" })).toBeNull()
       expect(readPending(pendingSlot("createEscrow", claim))).toBeNull()
       expect(sendTransactionAsync).toHaveBeenCalledTimes(1)
     } finally {

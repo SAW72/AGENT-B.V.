@@ -351,7 +351,7 @@ export function App() {
         </span>
       </header>
       <p className="lede">
-        {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+        Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
       </p>
 
       {route.pageNotice ? (

@@ -200,7 +200,8 @@ describe("prepare this escrow", () => {
     expect(preview.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(scope.queryByRole("alert")).toBeNull()
     expect(document.querySelectorAll('[data-testid="calldata-preview"]')).toHaveLength(1)
-    expect(preview.textContent).toContain("This prepares a new escrow.")
+    expect(preview.textContent).toContain("You are sending 0.001 test ETH into escrow for the payee below.")
+    expect(preview.textContent).not.toContain("This prepares a new escrow.")
     expect(preview.textContent).toContain("0.001 test ETH")
 
     const calldata = preview.querySelector("pre")?.textContent

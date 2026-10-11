@@ -7,9 +7,10 @@ import { WALLET_SIGNED_TEST_LINE } from "./brand"
 import { formatEth } from "./format"
 import { ActionButton, ActionStatus } from "./actionButton"
 import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
-import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { preparedMatches } from "./pendingTx"
+import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
-import { REVIEW_EMPTY, navigate, type WalletRoute } from "./routes"
+import { historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
 import { previewCardCopy } from "./submit"
 import { StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
@@ -63,7 +64,6 @@ export function WithdrawScreen({
       aria-labelledby="withdraw-heading"
       data-testid="withdraw-screen"
     >
-      {guided ? <Stepper step={route?.step ?? 1} total={2} /> : null}
       <TestnetHeading />
       {route?.stepNotice ? (
         <p className="banner" role="status" data-testid="url-step-notice">
@@ -145,9 +145,17 @@ function WithdrawForm({
     return () => {
       cancelled = true
     }
-  }, [account.address, account.isConnected, client, escrow, generation, readsEnabled])
+  }, [account.address, account.isConnected, Boolean(client), escrow, generation, readsEnabled])
 
   const canPrepare = creditState === "ready" && credit != null && credit > 0n
+  const withdrawReady = session.preview != null && preparedMatches(session.preview.calldata, { action: "withdraw" })
+  const guard = usePreparedRouteGuard(session.clear, `withdraw|${step}`)
+  const displayStep = guided ? shownStep(step, 2, guard.allowed || historyAllowsStep(), withdrawReady) : 1
+  const [withdrawStatus, setWithdrawStatus] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!guided || step <= 1 || displayStep !== 1) return
+    replaceRoute("/withdraw")
+  }, [guided, step, displayStep])
 
   async function onWithdraw(event?: FormEvent): Promise<boolean> {
     event?.preventDefault()
@@ -168,7 +176,10 @@ function WithdrawForm({
 
   async function onNext() {
     const ok = await onWithdraw()
-    if (ok) navigate("/withdraw?step=2")
+    if (ok) {
+      guard.arm("withdraw|2")
+      navigate("/withdraw?step=2", { allowStep: true })
+    }
   }
 
   const availableText =
@@ -193,42 +204,32 @@ function WithdrawForm({
             ? WITHDRAW_HIDDEN_TEXT
             : WITHDRAW_READING_TEXT
 
-  if (guided && step >= 2) {
+  if (guided && displayStep >= 2 && withdrawReady && session.preview) {
     const lead =
       credit != null && credit > 0n
         ? `You are withdrawing ${formatEth(credit)} test ETH to this connected wallet.`
         : "You are withdrawing the credited test ETH to this connected wallet."
     return (
       <div data-testid="review-step">
-        {session.error ? (
-          <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
-        ) : session.preview ? (
-          <div className="preview" data-testid="withdraw-preview" tabIndex={-1} aria-label="Prepared withdrawal" ref={session.setNode}>
-            <p data-testid="review-plain">{lead}</p>
-            <p>{previewCardCopy(session.preview.functionName, false)}</p>
-            <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
-            <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
-            <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
-            <CalldataDetails calldata={session.preview.calldata} />
-          </div>
-        ) : (
-          <p className="hint" role="status" data-testid="review-empty">
-            {REVIEW_EMPTY}
-          </p>
-        )}
-        <StepFooter onBack={() => navigate("/withdraw")}>
-          {session.preview ? (
-            <WalletOnlySubmit
-              key={session.preview.calldata}
-              preview={session.preview}
-              allowed={[escrow]}
-              hold={!canPrepare}
-              guided
-              onConfirmed={() => setGeneration((value) => value + 1)}
-            />
-          ) : (
-            <ActionButton disabled reason={REVIEW_EMPTY} state={{ status: "idle", label: "Submit on Base Sepolia" }} />
-          )}
+        <Stepper step={2} total={2} />
+        <div className="preview" data-testid="withdraw-preview" tabIndex={-1} aria-label="Prepared withdrawal" ref={session.setNode}>
+          <p data-testid="review-plain">{lead}</p>
+          <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
+          <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
+          <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
+          <CalldataDetails calldata={session.preview.calldata} />
+        </div>
+        <div ref={setWithdrawStatus} />
+        <StepFooter onBack={() => navigate("/withdraw", { allowStep: true })}>
+          <WalletOnlySubmit
+            key={session.preview.calldata}
+            preview={session.preview}
+            allowed={[escrow]}
+            hold={!canPrepare}
+            guided
+            statusRoot={withdrawStatus}
+            onConfirmed={() => setGeneration((value) => value + 1)}
+          />
         </StepFooter>
       </div>
     )
@@ -236,6 +237,7 @@ function WithdrawForm({
 
   return (
     <>
+      {guided ? <Stepper step={1} total={2} /> : null}
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
       <p data-testid="withdraw-available">{availableText}</p>
       {guided ? (
@@ -250,7 +252,7 @@ function WithdrawForm({
             <ActionButton
               type="button"
               disabled={session.preparing || !canPrepare}
-              reason={canPrepare ? null : blockedLabel}
+              reason={canPrepare || creditState === "loading" ? null : blockedLabel}
               onClick={() => void onNext()}
               state={
                 session.preparing

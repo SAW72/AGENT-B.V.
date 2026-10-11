@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import {
@@ -34,12 +35,13 @@ import {
   clearPending,
   pendingSlot,
   pendingSubjectLabel,
+  preparedMatches,
   subjectFromCalldata,
   writePending,
   writeRelayerPending,
 } from "./pendingTx"
 import { parsePayeeAddress, payeeHasChecksumError } from "./payeeAddress"
-import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
+import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { resolveWalletChainId } from "./guard"
 import {
   ERROR_GLOSSARY,
@@ -98,8 +100,8 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { REVIEW_EMPTY, confirmedNext, flowHref, navigate, type WalletRoute } from "./routes"
-import { FilledFromLink, ReadonlyValue, StepFooter, Stepper } from "./steps"
+import { confirmedNext, flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
+import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -114,7 +116,9 @@ function ActionTestnet({ title }: { title: string }) {
 
 export function PendingStrip() {
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
-  const views = usePendingViews(client).filter((view) => view.phase !== "idle" || view.banner)
+  const views = usePendingViews(client).filter(
+    (view) => view.phase !== "confirmed" && (view.phase !== "idle" || view.banner),
+  )
   if (views.length === 0) return null
   return (
     <section className="card pending-strip" data-testid="pending-transactions" aria-label="Pending transactions">
@@ -193,6 +197,7 @@ function SepoliaSubmit({
   submitReason,
   prepareEpoch = 0,
   guided = false,
+  statusRoot = null,
 }: {
   preview: CallPreview
   escrow: Address
@@ -203,6 +208,7 @@ function SepoliaSubmit({
   submitReason?: string | null
   prepareEpoch?: number
   guided?: boolean
+  statusRoot?: HTMLElement | null
 }) {
   const progress = actionProgress(preview.functionName)
   const sent = subjectFromCalldata(preview.calldata)
@@ -552,35 +558,9 @@ function SepoliaSubmit({
                 ? { status: "busy", label: CHECKING_LABEL }
                 : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
 
-  return (
-    <div>
-      <p>{submitSenderNote(preview.functionName)}</p>
-      <ActionButton
-        testId={control.testId}
-        state={walletState}
-        reason={
-          submitReason && walletState.status === "idle"
-            ? submitReason
-            : blocked && walletState.status === "idle"
-              ? ANOTHER_PENDING_REASON
-              : walletState.status === "needs-wallet"
-                ? NO_WALLET_REASON
-                : null
-        }
-        disabled={
-          Boolean(submitReason) ||
-          blocked ||
-          walletState.status === "unconfirmed" ||
-          (decision.ok && control.disabled && walletState.status === "idle")
-        }
-        onClick={() => {
-          if (walletState.status === "wrong-network") {
-            switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })
-            return
-          }
-          void onClick()
-        }}
-      />
+  const status = (
+    <>
+      {guided ? <p>{submitSenderNote(preview.functionName)}</p> : null}
       <ActionStatus
         state={walletState}
         walletHint={walletHint}
@@ -677,7 +657,40 @@ function SepoliaSubmit({
       {submitError ? (
         <ErrorNotice main={submitError.main} detail={submitError.detail} link={submitError.link} />
       ) : null}
-    </div>
+    </>
+  )
+
+  return (
+    <>
+      {guided ? null : <p>{submitSenderNote(preview.functionName)}</p>}
+      <ActionButton
+        testId={control.testId}
+        state={walletState}
+        reason={
+          submitReason && walletState.status === "idle"
+            ? submitReason
+            : blocked && walletState.status === "idle"
+              ? ANOTHER_PENDING_REASON
+              : walletState.status === "needs-wallet"
+                ? NO_WALLET_REASON
+                : null
+        }
+        disabled={
+          Boolean(submitReason) ||
+          blocked ||
+          walletState.status === "unconfirmed" ||
+          (decision.ok && control.disabled && walletState.status === "idle")
+        }
+        onClick={() => {
+          if (walletState.status === "wrong-network") {
+            switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })
+            return
+          }
+          void onClick()
+        }}
+      />
+      {statusRoot ? createPortal(status, statusRoot) : status}
+    </>
   )
 }
 
@@ -725,11 +738,13 @@ function PreviewBlock({
   const contractName = preview.to.toLowerCase() === panel.toLowerCase() ? CONTRACT_LABELS.panel : CONTRACT_LABELS.escrow
   const expiry =
     durationSeconds != null ? formatLocalTimestamp(currentNowSeconds() + BigInt(durationSeconds)) : null
-  const amountUnit = guided ? "test ETH" : "ETH"
+  const amountUnit = "test ETH"
+  const fundLeadOnly = Boolean(lead) && preview.functionName === "createEscrow"
   return (
     <div className="preview" data-testid="calldata-preview" tabIndex={-1} aria-label={label} ref={nodeRef}>
       {lead ? <p data-testid="review-plain">{lead}</p> : null}
-      <p>{previewCardCopy(preview.functionName, relayerConfigured)}</p>
+      {fundLeadOnly ? null : <p>{previewCardCopy(preview.functionName, relayerConfigured)}</p>}
+      {resultId ? <IdRow label={resultLabel ?? "Escrow ID"} value={resultId} testId="review-id" /> : null}
       <p data-testid="review-contract">{contractName}</p>
       <LabeledChunks label="Contract" address={preview.to} testId="review-contract-address" />
       {payee ? <LabeledChunks label="Payee" address={payee} testId="review-payee" /> : null}
@@ -867,7 +882,7 @@ type GuidedStep = {
   step: number
   notice: string | null
   linkEscrow: `0x${string}` | null
-  go: (step: number) => void
+  go: (step: number, allowStep?: boolean) => void
   back: () => void
 }
 
@@ -878,14 +893,33 @@ function guidedFor(flow: "fund" | "release" | "refund" | "dispute", route: Walle
     step: route.step,
     notice: route.stepNotice,
     linkEscrow: route.escrow.value,
-    go(step: number) {
-      navigate(flowHref(flow, step, query))
+    go(step: number, allowStep = false) {
+      navigate(flowHref(flow, step, query), { allowStep })
     },
     back() {
-      if (route.step > 1) navigate(flowHref(flow, route.step - 1, query))
+      if (route.step > 1) navigate(flowHref(flow, route.step - 1, query), { allowStep: true })
       else navigate("/")
     },
   }
+}
+
+function useFlowStep(
+  clear: () => void,
+  flow: string,
+  routeStep: number,
+  reviewStep: number,
+  idPart: string,
+  reviewReady: boolean,
+  step1Href: string | null,
+) {
+  const identity = `${flow}|${idPart}|${routeStep}`
+  const guard = usePreparedRouteGuard(clear, identity)
+  const display = shownStep(routeStep, reviewStep, guard.allowed || historyAllowsStep(), reviewReady)
+  useEffect(() => {
+    if (!step1Href || routeStep <= 1 || display !== 1) return
+    replaceRoute(step1Href)
+  }, [step1Href, routeStep, display])
+  return { arm: guard.arm, display, identity }
 }
 
 export function FlowPreview({
@@ -1046,6 +1080,19 @@ function CreateForm({
   const [customDuration, setCustomDuration] = useState("")
   const [value, setValue] = useState("")
   const session = usePrepareSession<CallPreview>("create", active)
+  const [fundStatus, setFundStatus] = useState<HTMLElement | null>(null)
+  const escrowHex = parseBytes32(escrowId)
+  const fundReady =
+    session.preview != null && preparedMatches(session.preview.calldata, { action: "createEscrow", escrowId: escrowHex })
+  const flowStep = useFlowStep(
+    session.clear,
+    "fund",
+    guided?.step ?? 1,
+    4,
+    escrowHex ?? "",
+    fundReady,
+    guided ? flowHref("fund", 1) : null,
+  )
   const payeeAddress = parsePayeeAddress(payee)
   const payeeIsSelf =
     payeeAddress != null && account.address != null && sameAddress(payeeAddress, account.address)
@@ -1165,7 +1212,8 @@ function CreateForm({
         return
       }
       session.clear()
-      guided.go(2)
+      flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|2`)
+      guided.go(2, true)
       return
     }
     if (guided.step === 2) {
@@ -1180,16 +1228,20 @@ function CreateForm({
         return
       }
       session.clear()
-      guided.go(3)
+      flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|3`)
+      guided.go(3, true)
       return
     }
     if (guided.step === 3) {
       const ok = await onSubmit()
-      if (ok) guided.go(4)
+      if (ok) {
+        flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|4`)
+        guided.go(4, true)
+      }
     }
   }
 
-  const step = guided?.step ?? 1
+  const step = guided ? flowStep.display : 1
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
 
@@ -1338,48 +1390,34 @@ function CreateForm({
         )}
           </>
         ) : null}
-        {guided && step === 4 ? (
+        {guided && step === 4 && fundReady && session.preview ? (
           <div data-testid="review-step">
-            {session.error ? (
-              <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
-            ) : session.preview ? (
-              <PreviewBlock
+            <PreviewBlock
+              preview={session.preview}
+              escrow={escrow}
+              panel={panel}
+              relayerConfigured={relayerConfigured}
+              label="Prepared escrow"
+              nodeRef={session.setNode}
+              payee={payeeAddress}
+              durationSeconds={shownDuration}
+              resultId={escrowHex ?? undefined}
+              resultLabel={ESCROW_ID_LABEL}
+              guided
+              lead={plainLead}
+              omitSubmit
+            />
+            <div ref={setFundStatus} />
+            <StepFooter onBack={() => guided.back()}>
+              <SepoliaSubmit
                 preview={session.preview}
                 escrow={escrow}
                 panel={panel}
-                relayerConfigured={relayerConfigured}
-                label="Prepared escrow"
-                nodeRef={session.setNode}
-                payee={payeeAddress}
-                durationSeconds={shownDuration}
-                resultId={parseBytes32(escrowId) ?? undefined}
+                resultId={escrowHex ?? undefined}
                 resultLabel={ESCROW_ID_LABEL}
                 guided
-                lead={plainLead}
-                omitSubmit
+                statusRoot={fundStatus}
               />
-            ) : (
-              <p className="hint" role="status" data-testid="review-empty">
-                {REVIEW_EMPTY}
-              </p>
-            )}
-            <StepFooter onBack={() => guided.back()}>
-              {session.preview ? (
-                <SepoliaSubmit
-                  preview={session.preview}
-                  escrow={escrow}
-                  panel={panel}
-                  resultId={parseBytes32(escrowId) ?? undefined}
-                  resultLabel={ESCROW_ID_LABEL}
-                  guided
-                />
-              ) : (
-                <ActionButton
-                  disabled
-                  reason={REVIEW_EMPTY}
-                  state={{ status: "idle", label: "Submit on Base Sepolia" }}
-                />
-              )}
             </StepFooter>
           </div>
         ) : null}
@@ -1451,6 +1489,19 @@ function IdForm({
   const escrowId = linked ? linkId : prefill.value
   const session = usePrepareSession<CallPreview>(slot, active)
   const [prepareEpoch, setPrepareEpoch] = useState(0)
+  const [idStatus, setIdStatus] = useState<HTMLElement | null>(null)
+  const idHex = parseBytes32(escrowId)
+  const actionReady =
+    session.preview != null && preparedMatches(session.preview.calldata, { action: slot, escrowId: idHex })
+  const flowStep = useFlowStep(
+    session.clear,
+    slot,
+    guided?.step ?? 1,
+    2,
+    idHex ?? "",
+    actionReady,
+    guided && (slot === "release" || slot === "refund") ? flowHref(slot, 1, { escrow: idHex }) : null,
+  )
   const gate = useEscrowActionGate(client, escrow, panel, escrowId)
   const decision = slot === "release" ? gate.release : gate.refund
   const gated = gate.status === "ready" && !decision.allowed
@@ -1460,7 +1511,7 @@ function IdForm({
     setEscrowId(carried.escrowId)
   }, [carried.escrowId, guided?.linkEscrow, setEscrowId, touched])
 
-  const step = guided?.step ?? 1
+  const step = guided ? flowStep.display : 1
   const other = otherFlow ? (otherFlow === "release" ? gate.release : gate.refund) : null
   const plainLead =
     slot === "release"
@@ -1495,7 +1546,10 @@ function IdForm({
   async function onNext() {
     if (!guided || gated) return
     const ok = await onSubmit()
-    if (ok) guided.go(2)
+    if (ok) {
+      flowStep.arm(`${slot}|${parseBytes32(escrowId) ?? ""}|2`)
+      guided.go(2, true)
+    }
   }
 
   return (
@@ -1620,42 +1674,36 @@ function IdForm({
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </>
         ) : null}
-        {guided && step === 2 ? (
+        {guided && step === 2 && actionReady && session.preview ? (
           <div data-testid="review-step">
-            {session.error ? (
-              <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
-            ) : session.preview ? (
-              <PreviewBlock
+            <PreviewBlock
+              preview={session.preview}
+              escrow={escrow}
+              panel={panel}
+              relayerConfigured={relayerConfigured}
+              label={resultLabel}
+              nodeRef={session.setNode}
+              submitReason={gated ? decision.reason : null}
+              guided
+              lead={plainLead}
+              payee={gate.face?.payee}
+              resultId={idHex ?? undefined}
+              resultLabel={ESCROW_ID_LABEL}
+              omitSubmit
+            />
+            <div ref={setIdStatus} />
+            <StepFooter onBack={() => guided.back()}>
+              <SepoliaSubmit
                 preview={session.preview}
                 escrow={escrow}
                 panel={panel}
-                relayerConfigured={relayerConfigured}
-                label={resultLabel}
-                nodeRef={session.setNode}
+                resultId={idHex ?? undefined}
+                resultLabel={ESCROW_ID_LABEL}
                 submitReason={gated ? decision.reason : null}
+                prepareEpoch={prepareEpoch}
                 guided
-                lead={plainLead}
-                payee={gate.face?.payee}
-                omitSubmit
+                statusRoot={idStatus}
               />
-            ) : (
-              <p className="hint" role="status" data-testid="review-empty">
-                {REVIEW_EMPTY}
-              </p>
-            )}
-            <StepFooter onBack={() => guided.back()}>
-              {session.preview ? (
-                <SepoliaSubmit
-                  preview={session.preview}
-                  escrow={escrow}
-                  panel={panel}
-                  submitReason={gated ? decision.reason : null}
-                  prepareEpoch={prepareEpoch}
-                  guided
-                />
-              ) : (
-                <ActionButton disabled reason={REVIEW_EMPTY} state={{ status: "idle", label: "Submit on Base Sepolia" }} />
-              )}
             </StepFooter>
           </div>
         ) : null}
@@ -1780,7 +1828,24 @@ function OpenDisputeForm({
     }
   }
 
-  const step = guided?.step ?? 1
+  const claimHex = parseBytes32(claimId)
+  const disputeHex = parseBytes32(disputeId)
+  const disputeReady =
+    claimHex != null &&
+    disputeHex != null &&
+    session.preview != null &&
+    preparedMatches(session.preview.calldata, { action: "dispute", escrowId: claimHex, disputeId: disputeHex })
+  const [disputeStatus, setDisputeStatus] = useState<HTMLElement | null>(null)
+  const flowStep = useFlowStep(
+    session.clear,
+    "dispute",
+    guided?.step ?? 1,
+    2,
+    `${claimHex ?? ""}|${disputeHex ?? ""}`,
+    disputeReady,
+    guided ? flowHref("dispute", 1, { escrow: claimHex }) : null,
+  )
+  const step = guided ? flowStep.display : 1
   const linked =
     guided?.linkEscrow != null && !claimTouched && claimId.toLowerCase() === guided.linkEscrow.toLowerCase()
   const plainLead = "You are opening a dispute. The panel will decide who should get the test ETH."
@@ -1841,7 +1906,12 @@ function OpenDisputeForm({
   async function onNext() {
     if (!guided) return
     const ok = await onSubmit()
-    if (ok) guided.go(2)
+    if (ok) {
+      const claim = parseBytes32(claimIdRef.current)
+      const id = parseBytes32(disputeIdRef.current)
+      flowStep.arm(`dispute|${claim ?? ""}|${id ?? ""}|2`)
+      guided.go(2, true)
+    }
   }
 
   return (
@@ -1975,42 +2045,33 @@ function OpenDisputeForm({
           {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
         </>
       ) : null}
-      {guided && step === 2 ? (
+      {guided && step === 2 && disputeReady && session.preview ? (
         <div data-testid="review-step">
-          {session.error ? (
-            <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
-          ) : session.preview ? (
-            <PreviewBlock
+          <PreviewBlock
+            preview={session.preview}
+            escrow={escrow}
+            panel={panel}
+            relayerConfigured={relayerConfigured}
+            label="Prepared dispute"
+            nodeRef={session.setNode}
+            resultId={disputeHex ?? undefined}
+            resultLabel={DISPUTE_ID_LABEL}
+            guided
+            lead={plainLead}
+            omitSubmit
+          />
+          <IdRow label={ESCROW_ID_LABEL} value={claimHex ?? ""} testId="review-escrow-id" />
+          <div ref={setDisputeStatus} />
+          <StepFooter onBack={() => guided.back()}>
+            <SepoliaSubmit
               preview={session.preview}
               escrow={escrow}
               panel={panel}
-              relayerConfigured={relayerConfigured}
-              label="Prepared dispute"
-              nodeRef={session.setNode}
-              resultId={parseBytes32(disputeId) ?? undefined}
+              resultId={disputeHex ?? undefined}
               resultLabel={DISPUTE_ID_LABEL}
               guided
-              lead={plainLead}
-              omitSubmit
+              statusRoot={disputeStatus}
             />
-          ) : (
-            <p className="hint" role="status" data-testid="review-empty">
-              {REVIEW_EMPTY}
-            </p>
-          )}
-          <StepFooter onBack={() => guided.back()}>
-            {session.preview ? (
-              <SepoliaSubmit
-                preview={session.preview}
-                escrow={escrow}
-                panel={panel}
-                resultId={parseBytes32(disputeId) ?? undefined}
-                resultLabel={DISPUTE_ID_LABEL}
-                guided
-              />
-            ) : (
-              <ActionButton disabled reason={REVIEW_EMPTY} state={{ status: "idle", label: "Submit on Base Sepolia" }} />
-            )}
           </StepFooter>
         </div>
       ) : null}

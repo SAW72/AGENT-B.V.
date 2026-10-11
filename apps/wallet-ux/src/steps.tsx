@@ -4,26 +4,52 @@ import { FILLED_FROM_LINK } from "./routes"
 import { ChunkedHex, CopyButton } from "./ui"
 
 export function Stepper({ step, total }: { step: number; total: number }) {
-  const dots = Array.from({ length: total }, (_, index) => (index < step ? "●" : "○")).join("")
   return (
     <div className="stepper" data-testid="stepper">
       <p data-testid="step-count">
         Step {step} of {total}
       </p>
-      <p className="step-dots" aria-hidden="true">
-        {dots}
-      </p>
+      <ol className="step-dots">
+        {Array.from({ length: total }, (_, index) => {
+          const n = index + 1
+          const state = n < step ? "done" : n === step ? "current" : "upcoming"
+          const mark = state === "done" ? "✓" : state === "current" ? "●" : "○"
+          const word = state === "done" ? "Done" : state === "current" ? "Now" : "Later"
+          return (
+            <li key={n} className={`step-dot ${state}`} aria-current={state === "current" ? "step" : undefined}>
+              <span className="step-dot-mark" aria-hidden="true">
+                {mark}
+              </span>
+              <span className="step-dot-word">
+                {word} {n}
+              </span>
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }
 
 export function StepFooter({ onBack, children }: { onBack: () => void; children: ReactNode }) {
   return (
-    <div className="step-footer">
-      <button type="button" className="back-link" onClick={onBack}>
+    <div className="step-actions">
+      <button type="button" className="back-button" onClick={onBack}>
         Back
       </button>
       <div className="step-primary">{children}</div>
+    </div>
+  )
+}
+
+export function IdRow({ label, value, testId }: { label: string; value: string; testId: string }) {
+  return (
+    <div className="kv-row" data-testid={testId}>
+      <div className="kv-label">{label}</div>
+      <div className="kv-value">
+        <ChunkedHex parts={chunkHex(value)} />
+        <CopyButton value={value} />
+      </div>
     </div>
   )
 }

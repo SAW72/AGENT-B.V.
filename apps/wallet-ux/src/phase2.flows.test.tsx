@@ -10,7 +10,7 @@ import { escrowAbi } from "./abi"
 import { GAS_FEE_TEXT } from "./actionProgress"
 import { FlowPreview } from "./FlowPreview"
 import { previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
-import { PAGE_IGNORED, REVIEW_EMPTY, STEP_IGNORED, navigate, readWalletRoute, useWalletRoute } from "./routes"
+import { PAGE_IGNORED, STEP_IGNORED, navigate, readWalletRoute, useWalletRoute } from "./routes"
 import { resetCarriedIds } from "./carriedIds"
 import { pendingSlot, pendingStorageKey, resetPendingStore } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
@@ -125,6 +125,7 @@ afterEach(() => {
 describe("phase 2 guided flows", () => {
   it("reads a route without preparing or sending", () => {
     expect(readWalletRoute("http://localhost/fund?step=2")).toMatchObject({ flow: "fund", step: 2, stepNotice: null })
+    expect(readWalletRoute("http://localhost/fund?step=+2")).toMatchObject({ flow: "fund", step: 1, stepNotice: STEP_IGNORED })
     expect(readWalletRoute("http://localhost/fund?step=9").stepNotice).toBe(STEP_IGNORED)
     expect(readWalletRoute("http://localhost/fund?step=review").stepNotice).toBe(STEP_IGNORED)
     expect(readWalletRoute("http://localhost/no-such").pageNotice).toBe(PAGE_IGNORED)
@@ -136,8 +137,8 @@ describe("phase 2 guided flows", () => {
   it("renders each route on its step and ignores a bad step or id", async () => {
     render(<Host />)
     navigate("/fund?step=2")
-    expect(screen.getByTestId("step-count").textContent).toBe("Step 2 of 4")
-    expect(screen.getByLabelText("Payer bot identifier")).toBeTruthy()
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.getByLabelText("Escrow ID")).toBeTruthy()
     expect(screen.queryByTestId("calldata-preview")).toBeNull()
     expect(sendTransactionAsync).not.toHaveBeenCalled()
 
@@ -146,10 +147,9 @@ describe("phase 2 guided flows", () => {
     expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
 
     navigate("/fund?step=4")
-    expect(screen.getByTestId("review-empty").textContent).toBe(REVIEW_EMPTY)
-    const blocked = screen.getByRole("button", { name: "Submit on Base Sepolia" }) as HTMLButtonElement
-    expect(blocked.disabled).toBe(true)
-    expect(blocked.onclick).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.queryByTestId("review-empty")).toBeNull()
+    expect(screen.queryByTestId("review-step")).toBeNull()
     expect(screen.queryByTestId("calldata-preview")).toBeNull()
     expect(sendTransactionAsync).not.toHaveBeenCalled()
 
@@ -226,6 +226,7 @@ describe("phase 2 guided flows", () => {
     expect(sendTransactionAsync).not.toHaveBeenCalled()
     fireEvent.click(within(review).getByTestId("sepolia-submit"))
     const next = await waitFor(() => within(review).getByRole("link", { name: "Next: release the payment" }))
+    expect(screen.getAllByRole("link", { name: "Next: release the payment" })).toHaveLength(1)
     expect(next.getAttribute("href")).toBe(`/release?escrow=${id}`)
     fireEvent.click(next)
     expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
@@ -329,6 +330,116 @@ describe("phase 2 guided flows", () => {
     const subject = screen.getByTestId("pending-subject")
     expect(within(subject).getByRole("button", { name: "Copy" })).toBeTruthy()
     expect(subject.textContent).toContain(id.slice(0, 6))
+  })
+
+  it("drops a prepared review when Back returns to a different id", async () => {
+    const other = `0x${"ef".repeat(32)}` as Hex
+    render(<Host />)
+
+    async function openRelease(escrowId: Hex) {
+      navigate(`/release?escrow=${escrowId}`)
+      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+      const review = await waitFor(() => screen.getByTestId("review-step"))
+      expect(calldataOf(review)).toBe(previewRelease(escrow, escrowId).calldata)
+      return review
+    }
+
+    await openRelease(id)
+    await openRelease(other)
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByTestId("review-step")).toBeNull())
+    expect(screen.queryByTestId("calldata-preview")).toBeNull()
+    expect(screen.queryByTestId("sepolia-submit")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+    expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
+
+    world.expiresAt = 1n
+    async function openRefund(escrowId: Hex) {
+      navigate(`/refund?escrow=${escrowId}`)
+      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+      const review = await waitFor(() => screen.getByTestId("review-step"))
+      expect(calldataOf(review)).toBe(previewRefund(escrow, escrowId).calldata)
+    }
+    await openRefund(id)
+    await openRefund(other)
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByTestId("review-step")).toBeNull())
+    expect(screen.queryByTestId("sepolia-submit")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+
+    world.expiresAt = 4_000_000_000n
+    world.state = 0
+    async function openDispute(escrowId: Hex) {
+      navigate(`/dispute?escrow=${escrowId}`)
+      fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
+      fireEvent.change(screen.getByLabelText("Dispute ID"), { target: { value: disputeId } })
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
+      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+      const review = await waitFor(() => screen.getByTestId("review-step"))
+      expect(calldataOf(review)).toContain(escrowId.slice(2))
+    }
+    await openDispute(id)
+    await openDispute(other)
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByTestId("review-step")).toBeNull())
+    expect(screen.queryByTestId("sepolia-submit")).toBeNull()
+
+    world.arbitrator = true
+    async function openVote(dispute: Hex) {
+      navigate(`/vote?dispute=${dispute}`)
+      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+      const review = await waitFor(() => screen.getByTestId("review-step"))
+      expect(calldataOf(review)).toBe(previewVote(panel, dispute, true).calldata)
+    }
+    await openVote(id)
+    await openVote(other)
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByTestId("review-step")).toBeNull())
+    expect(screen.queryByTestId("sepolia-submit")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+
+    navigate("/fund")
+    fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
+    fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: id } })
+    fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.change(screen.getByLabelText("Payer bot identifier"), { target: { value: id } })
+    fireEvent.change(screen.getByLabelText("Payee bot identifier"), { target: { value: disputeId } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.change(screen.getByLabelText("Amount in ETH"), { target: { value: "0.001" } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    const fundA = await waitFor(() => screen.getByTestId("review-step"))
+    expect(calldataOf(fundA)).toBe(PINNED.createEscrow)
+    window.history.back()
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.getByLabelText("Escrow ID")).toBeTruthy())
+    fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
+    fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: other } })
+    fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.change(screen.getByLabelText("Payer bot identifier"), { target: { value: id } })
+    fireEvent.change(screen.getByLabelText("Payee bot identifier"), { target: { value: disputeId } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    const fundB = await waitFor(() => screen.getByTestId("review-step"))
+    expect(calldataOf(fundB)).toContain(other.slice(2))
+    expect(screen.queryByTestId("sepolia-submit")).toBeTruthy()
+    window.history.back()
+    window.history.back()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByTestId("sepolia-submit")).toBeNull())
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
   })
 
   it("serves client routes from the Pages SPA fallback", () => {

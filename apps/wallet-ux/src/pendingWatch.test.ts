@@ -166,6 +166,26 @@ describe("pending receipt checks", () => {
     expect(hasLivePending()).toBe(false)
   })
 
+  it("hides a dismissed clock note when removeItem throws", () => {
+    const slot = pendingSlot("release", hash)
+    localStorage.setItem(
+      pendingStorageKey(slot),
+      JSON.stringify({ hash, startedAt: Date.now() + 1e12, action: "release", subjectId: hash }),
+    )
+    expect(readPending(slot)).toBeNull()
+    expect(listClockNotes().map((note) => note.hash.toLowerCase())).toContain(hash.toLowerCase())
+    const spy = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new Error("blocked")
+    })
+    try {
+      expect(() => dismissClockNote(hash)).not.toThrow()
+      expect(listClockNotes()).toEqual([])
+      expect(hasLivePending()).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it("keeps a skew of under a minute as a normal pending record", () => {
     const slot = pendingSlot("release", hash)
     const startedAt = Date.now() + 59_000

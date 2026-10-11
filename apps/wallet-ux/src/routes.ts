@@ -72,10 +72,11 @@ export function readWalletRoute(href = typeof window === "undefined" ? "http://l
   const flow = head
   const total = FLOW_STEPS[flow]
   const rawStep = url.searchParams.get("step")
-  if (rawStep == null || rawStep.trim() === "") {
+  if (rawStep == null || rawStep === "") {
     return { flow, step: 1, stepNotice: null, pageNotice: null, escrow, dispute }
   }
-  if (!/^[1-9][0-9]*$/.test(rawStep.trim()) || Number(rawStep) > total) {
+  // Do not trim. `?step=+2` is decoded as a leading space, and that must not become step 2.
+  if (!/^[1-9][0-9]*$/.test(rawStep) || Number(rawStep) > total) {
     return { flow, step: 1, stepNotice: STEP_IGNORED, pageNotice: null, escrow, dispute }
   }
   return { flow, step: Number(rawStep), stepNotice: null, pageNotice: null, escrow, dispute }
@@ -131,14 +132,44 @@ function inputFocused(): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
 }
 
-export function navigate(href: string) {
+export function historyAllowsStep(): boolean {
+  return typeof window !== "undefined" && window.history.state?.allowStep === true
+}
+
+export function navigate(href: string, options?: { allowStep?: boolean }) {
   if (typeof window === "undefined") return
   const url = new URL(href, window.location.href)
   const next = `${url.pathname}${url.search}`
   const current = `${window.location.pathname}${window.location.search}`
-  if (next !== current) window.history.pushState({ route: next }, "", next)
+  if (next !== current) window.history.pushState({ route: next, allowStep: options?.allowStep === true }, "", next)
   emitRoute()
   if (!inputFocused()) window.scrollTo(0, 0)
+}
+
+/** Drop a review URL that has nothing prepared, without adding another history entry. */
+let replaceEmitQueued = false
+export function replaceRoute(href: string) {
+  if (typeof window === "undefined") return
+  const url = new URL(href, window.location.href)
+  const next = `${url.pathname}${url.search}`
+  const current = `${window.location.pathname}${window.location.search}`
+  if (next === current) return
+  window.history.replaceState({ route: next, allowStep: false }, "", next)
+  // Called from an effect after a render that already shows step 1. Emit on a
+  // microtask so this does not flushSync inside that lifecycle.
+  if (replaceEmitQueued) return
+  replaceEmitQueued = true
+  queueMicrotask(() => {
+    replaceEmitQueued = false
+    emitRoute()
+  })
+}
+
+/** Review with nothing prepared, or a step link the user did not open from Next, shows step 1. */
+export function shownStep(routeStep: number, reviewStep: number, allowed: boolean, reviewReady: boolean): number {
+  if (routeStep === reviewStep && !reviewReady) return 1
+  if (routeStep > 1 && !allowed) return 1
+  return routeStep
 }
 
 if (typeof window !== "undefined") {

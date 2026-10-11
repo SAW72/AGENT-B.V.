@@ -28,6 +28,8 @@ export type ClockNote = {
 const listeners = new Set<() => void>()
 const memoryRecords = new Map<string, PendingRecord>()
 const clockNotes = new Map<string, ClockNote>()
+/** Dismissals that must stick for this page even when removeItem throws. A reload clears this set. */
+const dismissedHashes = new Set<string>()
 let storageVersion = 0
 
 export function subscribePending(listener: () => void): () => void {
@@ -51,6 +53,7 @@ export function pendingStorageVersion(): number {
 export function resetPendingStore(): void {
   memoryRecords.clear()
   clockNotes.clear()
+  dismissedHashes.clear()
   freshSlots.clear()
   bumpStorageVersion()
 }
@@ -101,11 +104,12 @@ export function listClockNotes(): ClockNote[] {
     }
     for (const key of keys) {
       const note = parseClockNote(localStorage.getItem(key))
-      if (!note) continue
+      if (!note || dismissedHashes.has(note.hash.toLowerCase())) continue
       out.set(note.hash.toLowerCase(), note)
     }
   }
   for (const note of clockNotes.values()) {
+    if (dismissedHashes.has(note.hash.toLowerCase())) continue
     if (!out.has(note.hash.toLowerCase())) out.set(note.hash.toLowerCase(), note)
   }
   return [...out.values()]
@@ -116,12 +120,14 @@ export function hasClockHold(): boolean {
 }
 
 export function dismissClockNote(hash: Hex): void {
-  clockNotes.delete(hash.toLowerCase())
+  const key = hash.toLowerCase()
+  dismissedHashes.add(key)
+  clockNotes.delete(key)
   if (typeof localStorage !== "undefined") {
     try {
       localStorage.removeItem(clockStorageKey(hash))
     } catch {
-      // The in-memory note is already gone. A later read may see the stored copy.
+      // The dismissed set is checked before the stored copy, so the note stays gone until reload.
     }
   }
   bumpStorageVersion()
@@ -285,8 +291,14 @@ export function clearPending(slot: string): void {
   emitPending()
 }
 
-/** Escrow id or dispute id taken from the calldata that was sent. Withdraw has none. */
-export function subjectFromCalldata(calldata: Hex): { action: string; subjectId: Hex | null } | null {
+export type CallParties = {
+  action: string
+  escrowId: Hex | null
+  disputeId: Hex | null
+}
+
+/** Ids encoded in a prepared call. Dispute carries both the escrow id and the dispute id. */
+export function calldataParties(calldata: Hex): CallParties | null {
   try {
     const decoded = decodeFunctionData({ abi: CALL_ABI, data: calldata })
     const args = decoded.args ?? []
@@ -294,19 +306,44 @@ export function subjectFromCalldata(calldata: Hex): { action: string; subjectId:
       case "createEscrow":
       case "release":
       case "refund":
-        return { action: decoded.functionName, subjectId: args[0] as Hex }
+        return { action: decoded.functionName, escrowId: args[0] as Hex, disputeId: null }
       case "dispute":
-        return { action: "dispute", subjectId: args[1] as Hex }
+        return { action: "dispute", escrowId: args[0] as Hex, disputeId: args[1] as Hex }
       case "vote":
-        return { action: "vote", subjectId: args[0] as Hex }
+        return { action: "vote", escrowId: null, disputeId: args[0] as Hex }
       case "withdraw":
-        return { action: "withdraw", subjectId: null }
+        return { action: "withdraw", escrowId: null, disputeId: null }
       default:
         return null
     }
   } catch {
     return null
   }
+}
+
+function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (left == null || right == null) return false
+  return left.toLowerCase() === right.toLowerCase()
+}
+
+/** True only when the prepared call is this action and every id the caller passes is the one in the calldata. */
+export function preparedMatches(
+  calldata: Hex,
+  expected: { action: string; escrowId?: string | null; disputeId?: string | null },
+): boolean {
+  const parties = calldataParties(calldata)
+  if (!parties || parties.action !== expected.action) return false
+  if (expected.escrowId != null && !sameId(parties.escrowId, expected.escrowId)) return false
+  if (expected.disputeId != null && !sameId(parties.disputeId, expected.disputeId)) return false
+  return true
+}
+
+/** Escrow id or dispute id taken from the calldata that was sent. Withdraw has none. */
+export function subjectFromCalldata(calldata: Hex): { action: string; subjectId: Hex | null } | null {
+  const parties = calldataParties(calldata)
+  if (!parties) return null
+  const subjectId = parties.action === "dispute" || parties.action === "vote" ? parties.disputeId : parties.escrowId
+  return { action: parties.action, subjectId }
 }
 
 export function pendingSubjectLabel(action: string): "Escrow ID" | "Dispute ID" | null {

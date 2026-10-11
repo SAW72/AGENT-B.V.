@@ -11,9 +11,11 @@ import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
 import { shortAddress } from "./format"
 import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewVote, type CallPreview } from "./preview"
-import { REVIEW_EMPTY, navigate, type WalletRoute } from "./routes"
+import { preparedMatches } from "./pendingTx"
+import { usePreparedRouteGuard } from "./prepareFeedback"
+import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
-import { FilledFromLink, StepFooter, Stepper } from "./steps"
+import { FilledFromLink, IdRow, StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
 import {
   ALREADY_VOTED_TEXT,
@@ -76,7 +78,7 @@ function Field({
 export type VoteSeat = "loading" | "yes" | "no" | "unreadable"
 
 export function voteTaskReason(seat: VoteSeat, address?: Address): string | null {
-  if (seat === "yes") return null
+  if (seat === "yes" || seat === "loading") return null
   const who = address ? `Connected: ${shortAddress(address)}.` : "No wallet is connected."
   return `${VOTE_SEAT_REASON} ${who}`
 }
@@ -145,6 +147,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
   const [arbitrator, setArbitrator] = useState<ArbitratorRead>("loading")
   const [caseRead, setCaseRead] = useState<CaseRead>({ status: "idle" })
   const [generation, setGeneration] = useState(0)
+  const [voteStatus, setVoteStatus] = useState<HTMLElement | null>(null)
   const session = usePrepareSession<CallPreview>("vote", null)
   const parsedId = parseBytes32(disputeId)
   const caseRef = useRef<CaseRead>({ status: "idle" })
@@ -304,7 +307,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
     return () => {
       cancelled = true
     }
-  }, [account.address, account.isConnected, client, generation, panel, parsedId])
+  }, [account.address, account.isConnected, Boolean(client), generation, panel, parsedId])
 
   const caseBlocks =
     parsedId != null &&
@@ -324,9 +327,16 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
     }
   }
 
-  const step = guided?.step ?? 1
+  const routeStep = guided?.step ?? 1
+  const voteHex = parseBytes32(disputeId)
+  const voteReady =
+    voteHex != null &&
+    session.preview != null &&
+    preparedMatches(session.preview.calldata, { action: "vote", disputeId: voteHex })
+  const voteGuard = usePreparedRouteGuard(session.clear, `vote|${voteHex ?? ""}|${routeStep}`)
+  const step = guided ? shownStep(routeStep, 2, voteGuard.allowed || historyAllowsStep(), voteReady) : 1
   const linked = disputeLink != null && !touched
-  const seatReason = voteTaskReason(arbitrator === "yes" ? "yes" : arbitrator, account.address)
+  const seatReason = voteTaskReason(arbitrator === "yes" || arbitrator === "loading" ? "yes" : arbitrator, account.address)
 
   async function onSubmit(event?: FormEvent): Promise<boolean> {
     event?.preventDefault()
@@ -360,25 +370,34 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
     }
   }
 
-  function go(next: number) {
+  function go(next: number, allowStep = false) {
     if (!guided) return
     const params = new URLSearchParams()
     if (guided.dispute.value) params.set("dispute", guided.dispute.value)
     if (next > 1) params.set("step", String(next))
     const search = params.toString()
-    navigate(search ? `/vote?${search}` : "/vote")
+    navigate(search ? `/vote?${search}` : "/vote", { allowStep })
   }
 
   function back() {
     if (!guided) return
-    if (guided.step > 1) go(guided.step - 1)
+    if (guided.step > 1) go(guided.step - 1, true)
     else navigate("/")
   }
 
   async function onNext() {
     const ok = await onSubmit()
-    if (ok) go(2)
+    if (ok) {
+      const id = parseBytes32(disputeIdRef.current)
+      voteGuard.arm(`vote|${id ?? ""}|2`)
+      go(2, true)
+    }
   }
+
+  useEffect(() => {
+    if (!guided || routeStep <= 1 || step !== 1) return
+    replaceRoute(flowHref("vote", 1, { dispute: voteHex }))
+  }, [guided, routeStep, step, voteHex])
 
   const arbitratorMessage =
     arbitrator === "loading"
@@ -427,7 +446,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
           >
             <p className="muted">{VOTE_MUTED}</p>
             <AddressRow label="Agent-BV dispute panel" value={panel} testId="vote-panel" />
-            {arbitratorMessage ? (
+            {arbitratorMessage && !seatReason ? (
               <p role="status" data-testid="vote-arbitrator">
                 {arbitratorMessage}
               </p>
@@ -495,11 +514,9 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
                 type="button"
                 disabled={session.preparing || nextBlocked}
                 reason={
-                  canPrepare
+                  canPrepare || seatReason
                     ? null
-                    : arbitrator !== "yes"
-                      ? seatReason
-                      : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
+                    : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
                 }
                 onClick={() => void onNext()}
                 state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
@@ -507,40 +524,30 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
             </StepFooter>
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </form>
-        ) : (
+        ) : voteReady && session.preview ? (
           <div data-testid="review-step">
-            {session.error ? (
-              <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
-            ) : session.preview ? (
-              <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
-                <p data-testid="review-plain">{voteLead}</p>
-                <p>{previewCardCopy(session.preview.functionName, false)}</p>
-                <p data-testid="review-contract">{CONTRACT_LABELS.panel}</p>
-                <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
-                <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
-                <CalldataDetails calldata={session.preview.calldata} />
-              </div>
-            ) : (
-              <p className="hint" role="status" data-testid="review-empty">
-                {REVIEW_EMPTY}
-              </p>
-            )}
+            <div className="preview" data-testid="vote-preview" tabIndex={-1} aria-label="Prepared vote" ref={session.setNode}>
+              <p data-testid="review-plain">{voteLead}</p>
+              <p data-testid="review-contract">{CONTRACT_LABELS.panel}</p>
+              <LabeledChunks label="Contract" address={session.preview.to} testId="review-contract-address" />
+              <IdRow label={DISPUTE_ID_LABEL} value={voteHex ?? ""} testId="review-id" />
+              <p data-testid="review-gas">{GAS_FEE_TEXT}</p>
+              <CalldataDetails calldata={session.preview.calldata} />
+            </div>
+            <div ref={setVoteStatus} />
             <StepFooter onBack={back}>
-              {session.preview ? (
-                <WalletOnlySubmit
-                  key={session.preview.calldata}
-                  preview={session.preview}
-                  allowed={[panel]}
-                  hold={!canPrepare}
-                  guided
-                  onConfirmed={() => setGeneration((value) => value + 1)}
-                />
-              ) : (
-                <ActionButton disabled reason={REVIEW_EMPTY} state={{ status: "idle", label: "Submit on Base Sepolia" }} />
-              )}
+              <WalletOnlySubmit
+                key={session.preview.calldata}
+                preview={session.preview}
+                allowed={[panel]}
+                hold={!canPrepare}
+                guided
+                statusRoot={voteStatus}
+                onConfirmed={() => setGeneration((value) => value + 1)}
+              />
             </StepFooter>
           </div>
-        )}
+        ) : null}
       </section>
     )
   }
