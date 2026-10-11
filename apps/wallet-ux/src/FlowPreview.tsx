@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import {
@@ -55,9 +55,13 @@ import {
   type CallPreview,
 } from "./preview"
 import {
+  isHealthCancelled,
+  previewSupportsRelayer,
   readRelayerHealth,
   RELAYER_CONFIRMED_TEXT,
   RELAYER_CONNECT_NOTE,
+  RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_PANEL_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_SUBMITTED_TEXT,
   RELAYER_SUBMITTING_TEXT,
@@ -65,10 +69,13 @@ import {
   RELAYER_WAITING_TEXT,
   relayerButtonModel,
   relayerConfigFromEnv,
+  relayerHealthWakes,
   relayerSubmitAllowed,
   relayerTxUrl,
   runRelayerSubmission,
+  watchRelayerHealth,
   type RelayerHealth,
+  type RelayerHealthUpdate,
   type RelayerPhase,
 } from "./relayer"
 import { submitAfterPreflight } from "./preflight"
@@ -165,6 +172,7 @@ function SepoliaSubmit({
   resultId,
   resultLabel,
   submitReason,
+  prepareEpoch,
 }: {
   preview: CallPreview
   escrow: Address
@@ -173,6 +181,7 @@ function SepoliaSubmit({
   resultId?: string
   resultLabel?: string
   submitReason?: string | null
+  prepareEpoch: number
 }) {
   const progress = actionProgress(preview.functionName)
   const sent = subjectFromCalldata(preview.calldata)
@@ -195,6 +204,8 @@ function SepoliaSubmit({
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
   const relayerFlight = useRef(false)
+  const healthGen = useRef(0)
+  const healthAbort = useRef<AbortController | null>(null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
   const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
@@ -215,16 +226,57 @@ function SepoliaSubmit({
     action: preview.functionName,
   })
 
-  useEffect(() => {
-    if (!relayer.url) return
-    let cancelled = false
-    void readRelayerHealth({ url: relayer.url }).then((health) => {
-      if (!cancelled) setRelayerHealth(health)
-    })
-    return () => {
-      cancelled = true
+  const applyHealthUpdate = useCallback((gen: number, update: RelayerHealthUpdate) => {
+    if (healthGen.current !== gen) return
+    if (update.phase === "ok") {
+      setRelayerHealth("ok")
+      setRelayerNotice(null)
+      return
     }
-  }, [relayer.url])
+    if (update.phase === "paused") {
+      setRelayerHealth("paused")
+      return
+    }
+    if (update.phase === "waking") {
+      setRelayerHealth("waking")
+      setRelayerNotice(null)
+      return
+    }
+    if (update.phase === "gave_up") {
+      setRelayerHealth("gave_up")
+      setRelayerNotice(null)
+      return
+    }
+    if (update.phase === "down") {
+      setRelayerHealth("down")
+      return
+    }
+    setRelayerHealth("unknown")
+  }, [])
+
+  const beginHealthWatch = useCallback(() => {
+    healthAbort.current?.abort()
+    const controller = new AbortController()
+    healthAbort.current = controller
+    const gen = ++healthGen.current
+    setRelayerHealth("unknown")
+    setRelayerNotice(null)
+    if (!relayer.url || !previewSupportsRelayer(preview.functionName)) return
+    const url = relayer.url
+    void watchRelayerHealth({
+      url,
+      signal: controller.signal,
+      onUpdate: (update) => applyHealthUpdate(gen, update),
+    })
+  }, [applyHealthUpdate, preview.functionName, relayer.url])
+
+  useEffect(() => {
+    beginHealthWatch()
+    return () => {
+      healthAbort.current?.abort()
+      healthGen.current += 1
+    }
+  }, [beginHealthWatch, prepareEpoch, escrow])
 
   async function onClick() {
     if (receipt.phase === "pending" || receipt.phase === "unconfirmed") return
@@ -288,7 +340,6 @@ function SepoliaSubmit({
   async function onRelayer() {
     if (relayerFlight.current) return
     setSubmitError(null)
-    setRelayerNotice(null)
     setCancelled(false)
     setConfirmedHash(null)
     setPendingHash(null)
@@ -300,29 +351,51 @@ function SepoliaSubmit({
       setSubmitError(notice(gate.reason))
       return
     }
-    if (!tryHoldSubmit(submitSlot)) return
-    if (!relayer.url || relayerHealth !== "ok") {
-      releaseSubmit(submitSlot)
+    if (!relayer.url || !previewSupportsRelayer(preview.functionName)) {
+      setRelayerHealth("down")
       setRelayerNotice(RELAYER_SERVICE_DOWN_TEXT)
       return
     }
     if (!publicClient) {
-      releaseSubmit(submitSlot)
       setSubmitError(notice("The network client isn't ready, so nothing was sent."))
       return
     }
     if (!account.address || !walletClient) {
-      releaseSubmit(submitSlot)
       setSubmitError(notice(RELAYER_CONNECT_NOTE))
       return
     }
     const signer = walletClient
     const sender = account.address
+    const url = relayer.url
+    if (relayerHealth !== "ok") return
     relayerFlight.current = true
-    setRelayerPhase("submitting")
+    const gen = healthGen.current
+    const signal = healthAbort.current?.signal
+    let held = false
     try {
+      const report = await readRelayerHealth({ url, signal })
+      if (healthGen.current !== gen || signal?.aborted) return
+      if (report.state !== "ok") {
+        if (relayerHealthWakes(report)) {
+          void watchRelayerHealth({
+            url,
+            signal,
+            initial: { report, loopStart: Date.now() - report.elapsedMs },
+            onUpdate: (update) => applyHealthUpdate(gen, update),
+          })
+        } else {
+          setRelayerHealth(report.state === "paused" ? "paused" : "down")
+          setRelayerNotice(RELAYER_SERVICE_DOWN_TEXT)
+        }
+        return
+      }
+      setRelayerHealth("ok")
+      setRelayerNotice(null)
+      if (healthGen.current !== gen || signal?.aborted) return
+      if (!tryHoldSubmit(submitSlot)) return
+      held = true
+      setRelayerPhase("submitting")
       assertSubmitTarget(preview.to, [escrow, panel])
-      const url = relayer.url
       const outcome = await runRelayerSubmission({
         url,
         preview,
@@ -351,6 +424,7 @@ function SepoliaSubmit({
     } catch (cause) {
       setPendingHash(null)
       clearPending(`${preview.functionName}:relayer`)
+      if (isHealthCancelled(cause) || signal?.aborted) return
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
@@ -359,7 +433,7 @@ function SepoliaSubmit({
     } finally {
       relayerFlight.current = false
       setRelayerPhase("idle")
-      releaseSubmit(submitSlot)
+      if (held) releaseSubmit(submitSlot)
     }
   }
 
@@ -446,7 +520,7 @@ function SepoliaSubmit({
       <PendingClearedNote banner={receipt.banner} />
       {relayerButton.visible ? (
         <div data-testid="relayer-panel">
-          <p>Submit the refund request through the relayer, or send it from your wallet.</p>
+          <p>{RELAYER_PANEL_TEXT}</p>
           {relayerButton.note ? (
             <p className="relayer-pending" role="status" data-testid="relayer-note">
               {relayerButton.note}
@@ -496,6 +570,11 @@ function SepoliaSubmit({
               {relayerNotice ?? RELAYER_SERVICE_DOWN_TEXT}
             </p>
           ) : null}
+          {relayerHealth === "gave_up" ? (
+            <button type="button" className="link-button" data-testid="relayer-health-retry" onClick={() => beginHealthWatch()}>
+              {RELAYER_HEALTH_RETRY_LABEL}
+            </button>
+          ) : null}
           <ActionStatus state={relayerState} walletHint={walletHint && relayerPhase === "submitting"} pendingTestId="relayer-pending-label" confirmedTestId="relayer-confirmed-label" />
         </div>
       ) : null}
@@ -535,6 +614,7 @@ function PreviewBlock({
   resultId,
   resultLabel,
   submitReason,
+  prepareEpoch = 0,
 }: {
   preview: CallPreview | null
   escrow: Address
@@ -548,6 +628,7 @@ function PreviewBlock({
   resultId?: string
   resultLabel?: string
   submitReason?: string | null
+  prepareEpoch?: number
 }) {
   if (!preview) return null
   const contractName = CONTRACT_LABELS.escrow
@@ -576,6 +657,7 @@ function PreviewBlock({
         resultId={resultId}
         resultLabel={resultLabel}
         submitReason={submitReason}
+        prepareEpoch={prepareEpoch}
       />
     </div>
   )
@@ -1041,6 +1123,7 @@ function IdForm({
   const [escrowId, setEscrowId] = useState(urlEscrow.value ?? "")
   const [touched, setTouched] = useState(false)
   const session = usePrepareSession<CallPreview>(slot, active)
+  const [prepareEpoch, setPrepareEpoch] = useState(0)
   const gate = useEscrowActionGate(client, escrow, panel, escrowId)
   const decision = slot === "release" ? gate.release : gate.refund
   const gated = gate.status === "ready" && !decision.allowed
@@ -1053,6 +1136,7 @@ function IdForm({
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
     if (!session.begin()) return
+    if (slot === "refund") setPrepareEpoch((value) => value + 1)
     try {
       await yieldPrepareTick()
       const id = parseBytes32(escrowId)
@@ -1110,6 +1194,7 @@ function IdForm({
             label={resultLabel}
             nodeRef={session.setNode}
             submitReason={gated ? decision.reason : null}
+            prepareEpoch={prepareEpoch}
           />
         )}
       </form>

@@ -109,7 +109,7 @@ export function previewCardCopy(functionName: string, relayerConfigured: boolean
                   : "This prepares a transaction."
   const relayer =
     relayerConfigured && functionName === "refund"
-      ? " A refund can also be sent through the refund relayer on Base Sepolia."
+      ? " A refund can also be sent through the refund service on Base Sepolia."
       : ""
   return `${lead} Submit sends it from the connected wallet on Base Sepolia only.${relayer}`
 }

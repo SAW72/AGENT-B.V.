@@ -72,12 +72,12 @@ describe("submit target", () => {
     expect(previewCardCopy("dispute", false)).toBe(
       "This prepares one dispute on this escrow. The connected wallet sends the Escrow ID, a new Dispute ID, and the reason. Submit sends it from the connected wallet on Base Sepolia only.",
     )
-    expect(previewCardCopy("dispute", true)).not.toMatch(/refund relayer/)
-    expect(previewCardCopy("release", true)).not.toMatch(/refund relayer/)
+    expect(previewCardCopy("dispute", true)).not.toMatch(/refund service/)
+    expect(previewCardCopy("release", true)).not.toMatch(/refund service/)
     expect(previewCardCopy("release", true)).toMatch(/connected wallet on Base Sepolia only/)
-    expect(previewCardCopy("refund", true)).toMatch(/refund relayer on Base Sepolia/)
-    expect(previewCardCopy("openDispute", true)).not.toMatch(/refund relayer/)
-    expect(previewCardCopy("createEscrow", true)).not.toMatch(/refund relayer/)
+    expect(previewCardCopy("refund", true)).toMatch(/refund service on Base Sepolia/)
+    expect(previewCardCopy("openDispute", true)).not.toMatch(/refund service/)
+    expect(previewCardCopy("createEscrow", true)).not.toMatch(/refund service/)
     expect(FORM_ERRORS.disputeClaim).toBe("Enter the Escrow ID before opening a dispute.")
     expect(FORM_ERRORS.valueEmpty).toBe("Enter an amount of test ETH, such as 0.001.")
     expect(FORM_ERRORS.valueFormat).toBe("Enter an amount of ETH, such as 0.001.")

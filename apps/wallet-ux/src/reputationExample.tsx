@@ -17,7 +17,7 @@ createRoot(root).render(
     <div className="wrap">
       <div className="callout" data-testid="example-data-page" role="status">
         <strong>EXAMPLE DATA</strong>
-        <p>Dev harness. These rows are copied fixtures, not a live relayer response.</p>
+        <p>Dev harness. These rows are copied fixtures, not a live refund service response.</p>
       </div>
       <ReputationView
         connected

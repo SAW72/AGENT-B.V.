@@ -106,6 +106,16 @@ button.secondary {
   padding: 4px 8px;
 }
 
+button.link-button {
+  background: transparent;
+  color: #1e4d78;
+  border: 0;
+  padding: 0;
+  min-height: 0;
+  text-decoration: underline;
+  width: auto;
+}
+
 button:disabled { opacity: 0.55; cursor: not-allowed; }
 form > button { margin: 0 8px 8px 0; }
 
@@ -490,6 +500,9 @@ footer { color: var(--muted); font-size: 0.92rem; }
   a.next-step {
     width: 100%;
     margin-right: 0;
+  }
+  .preview button.link-button {
+    width: auto;
   }
 }
 

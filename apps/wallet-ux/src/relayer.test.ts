@@ -14,7 +14,7 @@ import {
   type Hex,
 } from "viem"
 import { mnemonicToAccount } from "viem/accounts"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   CLAIM_INTENT_ACTIONS,
   CLAIM_INTENT_ACTION_VALUES,
@@ -33,6 +33,11 @@ import {
   RelayerRequestError,
   readRelayerHealth,
   readRelayerPaused,
+  relayerHealthWakes,
+  watchRelayerHealth,
+  RELAYER_HEALTH_RETRY_MS,
+  RELAYER_HEALTH_TIMEOUT_MS,
+  RELAYER_HEALTH_WAKE_CAP_MS,
   RELAYER_CHECK_WALLET_LABEL,
   RELAYER_CHECKING_NOTE,
   RELAYER_CONNECT_NOTE,
@@ -458,7 +463,7 @@ describe("release is not relayed", () => {
   })
 })
 
-describe("refund submit via the refund relayer", () => {
+describe("refund submit via the refund service", () => {
   const release = previewRefund(escrow, id)
 
   it("posts a signed refund and lets the relayer build the calldata", async () => {
@@ -536,7 +541,7 @@ describe("refund submit via the refund relayer", () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.code).toBe("action_not_claim")
-      expect(result.presentation.main).toBe("This step has to be sent from your wallet, not the refund relayer.")
+      expect(result.presentation.main).toBe("This step has to be sent from your wallet, not the refund service.")
     }
     const dispute = await runRelayerSubmission({
       url: relayerUrl,
@@ -662,43 +667,43 @@ describe("relayer response copy", () => {
     {
       status: 400,
       body: { ok: false, error: "invalid_json" },
-      main: "The refund relayer could not accept this submission. Nothing was sent.",
+      main: "The refund service could not accept this submission. Nothing was sent.",
       detail: "Details: 400 invalid_json",
     },
     {
       status: 401,
       body: { ok: false, error: "unauthorized" },
-      main: "The refund relayer refused this request. Nothing was sent.",
+      main: "The refund service refused this request. Nothing was sent.",
       detail: "Details: 401 unauthorized",
     },
     {
       status: 403,
       body: { ok: false, error: "forbidden" },
-      main: "The refund relayer refused this request. Nothing was sent.",
+      main: "The refund service refused this request. Nothing was sent.",
       detail: "Details: 403 forbidden",
     },
     {
       status: 404,
       body: { ok: false, error: "not_found" },
-      main: "The refund relayer could not find that submission path. Nothing was sent.",
+      main: "The refund service could not find that submission path. Nothing was sent.",
       detail: "Details: 404 not_found",
     },
     {
       status: 409,
       body: { ok: false, error: "live_submit_blocked", reason: "live_submit_off", txHash: null },
-      main: "The refund relayer isn't accepting live submissions right now. Nothing was sent.",
+      main: "The refund service isn't accepting live submissions right now. Nothing was sent.",
       detail: "Details: 409 live_submit_blocked",
     },
     {
       status: 422,
       body: { ok: false, error: "unprocessable" },
-      main: "The refund relayer could not accept this submission. Nothing was sent.",
+      main: "The refund service could not accept this submission. Nothing was sent.",
       detail: "Details: 422 unprocessable",
     },
     {
       status: 429,
       body: { ok: false, error: "rate_limited" },
-      main: "The refund relayer is limiting submissions. Wait a moment and try again. Nothing was sent.",
+      main: "The refund service is limiting submissions. Wait a moment and try again. Nothing was sent.",
       detail: "Details: 429 rate_limited",
     },
     {
@@ -727,7 +732,7 @@ describe("relayer response copy", () => {
         address: retiredEscrow,
         current: escrow,
       },
-      main: "The refund relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
+      main: "The refund service is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
       detail: "Details: 400 retired_or_superseded_address",
     },
     {
@@ -739,13 +744,13 @@ describe("relayer response copy", () => {
         escrowAddress: retiredEscrow,
         txHash: null,
       },
-      main: "The refund relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
+      main: "The refund service is pointed at a retired escrow, so this was not submitted. Use your wallet instead.",
       detail: "Details: 409 live_submit_blocked",
     },
     {
       status: 503,
       body: { ok: false, error: "kill_switch" },
-      main: "The refund relayer is paused. Nothing was sent.",
+      main: "The refund service is paused. Nothing was sent.",
       detail: "Details: 503 kill_switch",
     },
   ]
@@ -785,7 +790,7 @@ describe("relayer response copy", () => {
       expect(result.ok).toBe(false)
       if (result.ok) return
       expect(result.code).toBe("retired_or_superseded_address")
-      expect(result.presentation.main).toBe("The refund relayer used a retired escrow. Check the transaction before you try again.")
+      expect(result.presentation.main).toBe("The refund service used a retired escrow. Check the transaction before you try again.")
       expect(result.presentation.main.toLowerCase()).not.toContain("nothing was sent")
       expect(result.presentation.link?.href).toBe(relayerTxUrl(txHash))
       expect(result.presentation.detail).toBe("Details: 200 retired_or_superseded_address")
@@ -898,34 +903,262 @@ describe("relayer button", () => {
 })
 
 describe("relayer health", () => {
-  it("reads the kill switch from /health and stays quiet when the check fails", async () => {
+  let warn!: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  })
+
+  afterEach(() => {
+    warn.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it("reads the kill switch from /health without credentials or extra headers", async () => {
     let target = ""
+    let init: RequestInit | undefined
     const paused = await readRelayerPaused({
       url: `${relayerUrl}/`,
-      fetchImpl: async (url) => {
+      fetchImpl: async (url, next) => {
         target = String(url)
+        init = next
         return jsonResponse(200, { ok: true, killSwitch: true })
       },
     })
     expect(paused).toBe(true)
     expect(target).toBe(`${relayerUrl}/health`)
+    expect(init?.method).toBe("GET")
+    expect(init?.headers).toBeUndefined()
+    expect(init?.credentials).toBeUndefined()
+    expect(init?.body).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
     const open = await readRelayerPaused({
       url: relayerUrl,
       fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false }),
     })
     expect(open).toBe(false)
-    const down = await readRelayerPaused({
-      url: relayerUrl,
-      fetchImpl: async () => {
-        throw new TypeError("Failed to fetch")
-      },
-    })
-    expect(down).toBeNull()
     const health = await readRelayerHealth({
       url: relayerUrl,
       fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false }),
     })
-    expect(health).toBe("ok")
+    expect(health.state).toBe("ok")
+    expect(health.cause).toBeUndefined()
+  })
+
+  it("logs one line for each health failure cause and wakes only on timeout or 502, 503, 504", async () => {
+    const secret = "super-secret-token"
+    const cases: Array<{ name: string; run: () => Promise<void>; cause: string; status: string; wakes: boolean }> = [
+      {
+        name: "http",
+        cause: "http_status",
+        status: "500",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(500, { ok: false }),
+          })
+          expect(report.status).toBe(500)
+        },
+      },
+      {
+        name: "wake-502",
+        cause: "http_status",
+        status: "502",
+        wakes: true,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(502, {}),
+          })
+          expect(relayerHealthWakes(report)).toBe(true)
+        },
+      },
+      {
+        name: "wake-http",
+        cause: "http_status",
+        status: "503",
+        wakes: true,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(503, "nope"),
+          })
+          expect(relayerHealthWakes(report)).toBe(true)
+          expect(report.status).toBe(503)
+        },
+      },
+      {
+        name: "wake-504",
+        cause: "http_status",
+        status: "504",
+        wakes: true,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(504, {}),
+          })
+          expect(relayerHealthWakes(report)).toBe(true)
+        },
+      },
+      {
+        name: "network",
+        cause: "network_or_cors",
+        status: "none",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => {
+              throw new TypeError("Failed to fetch")
+            },
+          })
+          expect(relayerHealthWakes(report)).toBe(false)
+        },
+      },
+      {
+        name: "timeout",
+        cause: "timeout",
+        status: "none",
+        wakes: true,
+        run: async () => {
+          vi.useFakeTimers()
+          const pending = readRelayerHealth({
+            url: relayerUrl,
+            timeoutMs: 10_000,
+            fetchImpl: () => new Promise(() => undefined),
+          })
+          const finished = pending.then((report) => report)
+          await vi.advanceTimersByTimeAsync(10_000)
+          const report = await finished
+          expect(report.cause).toBe("timeout")
+          expect(report.elapsedMs).toBeGreaterThanOrEqual(8_000)
+          expect(relayerHealthWakes(report)).toBe(true)
+          vi.useRealTimers()
+        },
+      },
+      {
+        name: "bad-body",
+        cause: "bad_body",
+        status: "200",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true }),
+          })
+          expect(report.cause).toBe("bad_body")
+        },
+      },
+      {
+        name: "not-ok",
+        cause: "not_ok",
+        status: "200",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: false, killSwitch: false }),
+          })
+          expect(report.cause).toBe("not_ok")
+        },
+      },
+    ]
+    for (const item of cases) {
+      warn.mockClear()
+      await item.run()
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0]?.[0])
+      expect(line).toMatch(new RegExp(`^refund health cause=${item.cause} status=${item.status} elapsedMs=\\d+$`))
+      expect(line).not.toContain(secret)
+      expect(line).not.toContain(relayerUrl)
+      expect(line).not.toContain("0x")
+      expect(line).not.toMatch(/authorization/i)
+      expect(line.toLowerCase()).not.toContain("cookie")
+    }
+    const badUrl = await readRelayerHealth({ url: "not a url", fetchImpl: async () => jsonResponse(200, { ok: true }) })
+    expect(badUrl.cause).toBe("bad_body")
+    expect(relayerHealthWakes(badUrl)).toBe(false)
+  })
+
+  it("spaces wake checks by about 4s, stops at 60s, and never posts", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    const calls: string[] = []
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push(`${init?.method ?? ""} ${String(url)}`)
+      expect(init?.headers).toBeUndefined()
+      expect(init?.credentials).toBeUndefined()
+      return jsonResponse(502, { ok: false })
+    }
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS - 1)
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_WAKE_CAP_MS)
+    await done
+    expect(phases.at(-1)).toBe("gave_up")
+    expect(phases.every((phase) => phase === "waking" || phase === "gave_up")).toBe(true)
+    expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
+    expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+    const starts = calls.length
+    expect(starts).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
+  })
+
+  it("shows a waking cold start then accepts a later ok without another post", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    let attempt = 0
+    const fetchImpl: typeof fetch = (_url, init) => {
+      attempt += 1
+      expect(init?.method).toBe("GET")
+      if (attempt === 1) return new Promise(() => undefined)
+      return Promise.resolve(jsonResponse(200, { ok: true, killSwitch: false }))
+    }
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(8_000)
+    expect(phases).not.toContain("ok")
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_TIMEOUT_MS - 8_000)
+    expect(phases).toContain("waking")
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    expect(phases.at(-1)).toBe("ok")
+    expect(attempt).toBe(2)
+  })
+
+  it("ignores a health result after the watch is cancelled", async () => {
+    vi.useFakeTimers()
+    const pending: { resolve: ((response: Response) => void) | null } = { resolve: null }
+    const fetchImpl: typeof fetch = () =>
+      new Promise((resolve) => {
+        pending.resolve = resolve
+      })
+    const controller = new AbortController()
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      signal: controller.signal,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    controller.abort()
+    pending.resolve?.(jsonResponse(200, { ok: true, killSwitch: false }))
+    await done
+    expect(phases).not.toContain("ok")
   })
 })
 
