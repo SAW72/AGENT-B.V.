@@ -182,7 +182,10 @@ describe("postLiveClaim", () => {
     })
     await expect(cors).rejects.toMatchObject({ code: "cors_or_network", status: null })
     await expect(cors).rejects.toThrow(/CORS/)
-    await expect(cors).rejects.toThrow(/agent-a-wallet-ux\.pages\.dev/)
+    await expect(cors).rejects.toThrow(/Agent-BV/)
+    await expect(cors).rejects.toThrow(/https:\/\/agent-bv\.pages\.dev/)
+    await expect(cors).rejects.toThrow(/https:\/\/agent-a-wallet-ux\.pages\.dev/)
+    await expect(cors).rejects.toThrow(/live refund/)
     await expect(cors).rejects.not.toThrow(/x-claim-secret/)
 
     let fetches = 0

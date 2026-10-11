@@ -1,16 +1,47 @@
 /**
  * CORS for the reputation read API only.
- * Allows one Pages origin, single-label preview subdomains of that project,
- * and http://localhost / http://127.0.0.1 on any port.
- * Never matches *.pages.dev. Never sets credentials.
+ * Exact https origins. No suffix match, no substring match, no credentials,
+ * and no Access-Control-Allow-Origin: *.
  */
 
-const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const EXACT_HTTPS_ORIGIN =
+  /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * Accept only `https://host` with no userinfo, port, path, query, hash,
+ * trailing slash, or `*`. Empty input is skipped by the caller.
+ * @param {unknown} raw
+ */
+export function parseExactHttpsOrigin(raw) {
+  const entry = String(raw ?? "").trim();
+  if (!entry) return { ok: false, reason: "empty", entry };
+  if (entry.includes("*")) return { ok: false, reason: "wildcard", entry };
+  if (entry.endsWith("/")) return { ok: false, reason: "trailing_slash", entry };
+  if (!entry.startsWith("https://")) return { ok: false, reason: "scheme", entry };
+  if (!EXACT_HTTPS_ORIGIN.test(entry)) return { ok: false, reason: "malformed", entry };
+  let url;
+  try {
+    url = new URL(entry);
+  } catch {
+    return { ok: false, reason: "malformed", entry };
+  }
+  if (
+    url.origin !== entry ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  ) {
+    return { ok: false, reason: "malformed", entry };
+  }
+  return { ok: true, origin: entry };
+}
 
 export function createReputationCors(policy) {
-  const pagesOrigin = normalizeOrigin(policy?.pagesOrigin);
-  const previewHost = String(policy?.previewHost || "").toLowerCase();
-  const localHosts = new Set((policy?.localHosts || []).map((host) => String(host).toLowerCase()));
+  const allowed = new Set(Array.isArray(policy?.origins) ? policy.origins : []);
   return function reputationCorsHeaders(req) {
     const headers = {
       "access-control-allow-headers": "content-type",
@@ -18,37 +49,9 @@ export function createReputationCors(policy) {
       vary: "Origin",
     };
     const origin = req.headers?.origin;
-    if (origin && reputationOriginAllowed(String(origin), { pagesOrigin, previewHost, localHosts })) {
-      headers["access-control-allow-origin"] = String(origin);
+    if (typeof origin === "string" && allowed.has(origin)) {
+      headers["access-control-allow-origin"] = origin;
     }
     return headers;
   };
-}
-
-export function reputationOriginAllowed(origin, policy) {
-  let url;
-  try {
-    url = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (url.username || url.password || url.search || url.hash) return false;
-  if (url.pathname !== "/" && url.pathname !== "") return false;
-  const host = url.hostname.toLowerCase();
-  if (url.protocol === "http:" && policy.localHosts.has(host)) return true;
-  if (url.protocol !== "https:") return false;
-  if (policy.pagesOrigin && url.origin === policy.pagesOrigin) return true;
-  const suffix = `.${policy.previewHost}`;
-  if (!policy.previewHost || !host.endsWith(suffix)) return false;
-  const label = host.slice(0, -suffix.length);
-  return LABEL.test(label);
-}
-
-function normalizeOrigin(value) {
-  if (!value) return "";
-  try {
-    return new URL(value).origin;
-  } catch {
-    return "";
-  }
 }

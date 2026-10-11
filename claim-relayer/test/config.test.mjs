@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAddressBook, parseStartBlock } from "../addressBook.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_RELAYER_ADDRESS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, buildMetadata, healthPayload, liveSubmitStatus, loadConfig } from "../config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_CORS_ORIGINS, DEFAULT_RELAYER_ADDRESS, DEFAULT_REPUTATION_CORS_ORIGINS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, buildMetadata, healthPayload, liveSubmitStatus, loadConfig, reputationCorsFromEnv } from "../config.mjs";
 
 const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c";
 const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
@@ -16,7 +16,7 @@ const LIVE_PANEL = "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb";
 const SECRET = "0x" + "ab".repeat(32);
 
 describe("config gates", () => {
-  it("defaults to Base Sepolia fixtures and the public hot wallet", () => {
+  it("defaults to Base Sepolia fixtures and the public hot wallet", async () => {
     const config = loadConfig({ RELAYER_PRIVATE_KEY: SECRET });
     assert.equal(config.chainId, 84532);
     assert.equal(config.relayerAddress, DEFAULT_RELAYER_ADDRESS);
@@ -43,10 +43,17 @@ describe("config gates", () => {
     assert.equal(config.abuse.ipLimit, 30);
     assert.equal(config.abuse.escrowCap, 8);
     assert.equal(config.abuse.dailyGasBudgetWei, "10000000000000000");
+    assert.equal(config.corsOrigins, DEFAULT_CORS_ORIGINS);
     assert.equal(
       config.corsOrigins,
-      "https://agent-a-wallet-ux.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
+      "https://agent-bv.pages.dev,https://agent-a-wallet-ux.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
     );
+    assert.deepEqual(config.reputationCors.origins, DEFAULT_REPUTATION_CORS_ORIGINS);
+    assert.deepEqual(config.reputationCors.warnings, []);
+    const render = await readFile(new URL("../render.yaml", import.meta.url), "utf8");
+    const example = await readFile(new URL("../.env.example", import.meta.url), "utf8");
+    assert.equal(render.includes(DEFAULT_CORS_ORIGINS), true);
+    assert.equal(example.includes(DEFAULT_CORS_ORIGINS), true);
     assert.deepEqual(config.liveSubmit.blockers, ["spencer_run_auth_required", "live_submit_off"]);
     assert.equal(JSON.stringify(config).includes(SECRET), false);
     assert.equal(Object.hasOwn(config, "RELAYER_PRIVATE_KEY"), false);

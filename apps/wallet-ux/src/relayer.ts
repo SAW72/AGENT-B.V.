@@ -576,7 +576,7 @@ export async function postLiveClaim(input: {
       )
     }
     throw new RelayerRequestError(
-      "Could not reach the refund relayer. If this is the Pages site, CORS on Render must allow this origin (https://agent-a-wallet-ux.pages.dev).",
+      "Could not reach the refund relayer. If this is the Agent-BV Pages site, CORS on Render must allow this origin (https://agent-bv.pages.dev). https://agent-a-wallet-ux.pages.dev stays allowed until a live refund passes on the new site.",
       null,
       "cors_or_network",
     )

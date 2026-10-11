@@ -11,8 +11,25 @@ import {
   rejectRetiredAddress,
   currentBooking,
 } from "./addressBook.mjs";
+import { parseExactHttpsOrigin } from "./reputation/cors.mjs";
 
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
+
+/** Exact Pages origins. The previous project stays until a live refund passes on agent-bv. */
+export const DEFAULT_REPUTATION_CORS_ORIGINS = [
+  "https://agent-bv.pages.dev",
+  "https://agent-a-wallet-ux.pages.dev",
+];
+
+/** Claim-route allowlist. Local Vite origins stay. Reputation CORS does not use this list. */
+export const DEFAULT_CORS_ORIGINS = [
+  ...DEFAULT_REPUTATION_CORS_ORIGINS,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+].join(",");
+
+const PREVIEW_HOSTNAME =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 export const DEFAULT_RELAYER_ADDRESS = "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861";
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 /** Booked BotAttestationEscrow on Base Sepolia. Live submit refuses every other target. */
@@ -304,9 +321,7 @@ export function loadConfig(env = process.env) {
       escrowRetired: escrow.escrowRetired,
       chainId: BASE_SEPOLIA_CHAIN_ID,
     }),
-    corsOrigins:
-      env.CORS_ORIGINS ||
-      "https://agent-a-wallet-ux.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
+    corsOrigins: env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS,
     reputationCors: reputationCorsFromEnv(env),
   };
 }
@@ -326,33 +341,95 @@ export function buildMetadata(env = process.env) {
   };
 }
 
+function configuredEnv(env, key) {
+  if (env == null || !Object.prototype.hasOwnProperty.call(env, key)) return null;
+  const value = env[key];
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text === "" ? null : text;
+}
+
 /**
  * CORS for GET /v1/reputation only. Claim routes keep corsOrigins.
- * Preview matching is one label under previewHost. `pages.dev` and `*` are refused.
+ * Exact `https://host` origins. No `*`, no suffix match, no any-port localhost.
+ * A blank or unset REPUTATION_CORS_ORIGINS uses both Pages origins.
+ * A non-blank value replaces that default. Malformed entries are dropped
+ * with a warning and never widen the list to allow-all.
+ * REPUTATION_CORS_PAGES_ORIGIN, REPUTATION_CORS_PREVIEW_HOST, and
+ * REPUTATION_CORS_LOCAL_HOSTS are read only when set, and only as extra
+ * exact origins, so an existing Render env does not lose an origin it named.
+ * Preview host adds `https://<host>` and does not allow subdomains.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ warn?: (message: string) => void }} [options]
  */
-export function reputationCorsFromEnv(env) {
-  const pagesOrigin = String(env.REPUTATION_CORS_PAGES_ORIGIN ?? "https://agent-a-wallet-ux.pages.dev")
-    .trim()
-    .replace(/\/$/, "");
-  const previewHost = String(env.REPUTATION_CORS_PREVIEW_HOST ?? "agent-a-wallet-ux.pages.dev")
-    .trim()
-    .toLowerCase()
-    .replace(/^\./, "")
-    .replace(/\.$/, "");
-  const localHosts = String(env.REPUTATION_CORS_LOCAL_HOSTS ?? "localhost,127.0.0.1")
-    .split(",")
-    .map((host) => host.trim().toLowerCase())
-    .filter(Boolean);
-  if (!pagesOrigin || pagesOrigin === "*" || pagesOrigin.includes("*")) {
-    throw httpError(500, "reputation_cors_invalid", { field: "pages_origin" });
+export function reputationCorsFromEnv(env = {}, options = {}) {
+  const warnings = [];
+  const warn = options.warn || ((message) => console.warn(`reputation CORS: ${message}`));
+  const note = (message) => {
+    warnings.push(message);
+    warn(message);
+  };
+  const origins = [];
+  const addOrigin = (entry, source) => {
+    const parsed = parseExactHttpsOrigin(entry);
+    if (!parsed.ok) {
+      if (parsed.reason !== "empty") {
+        note(`ignored ${source} entry ${JSON.stringify(parsed.entry)} (${parsed.reason})`);
+      }
+      return;
+    }
+    if (!origins.includes(parsed.origin)) origins.push(parsed.origin);
+  };
+
+  const configured = configuredEnv(env, "REPUTATION_CORS_ORIGINS");
+  const base = configured == null ? DEFAULT_REPUTATION_CORS_ORIGINS : configured.split(",");
+  for (const entry of base) addOrigin(entry, "REPUTATION_CORS_ORIGINS");
+
+  const pagesOrigin = configuredEnv(env, "REPUTATION_CORS_PAGES_ORIGIN");
+  if (pagesOrigin != null) {
+    const stripped = pagesOrigin.endsWith("/") ? pagesOrigin.slice(0, -1) : pagesOrigin;
+    if (stripped !== pagesOrigin) {
+      note(
+        `REPUTATION_CORS_PAGES_ORIGIN trailing slash is not kept; checking ${JSON.stringify(stripped)}`,
+      );
+    }
+    addOrigin(stripped, "REPUTATION_CORS_PAGES_ORIGIN");
   }
-  if (!previewHost || previewHost.includes("*") || previewHost === "pages.dev" || !previewHost.includes(".")) {
-    throw httpError(500, "reputation_cors_invalid", { field: "preview_host" });
+
+  const previewHost = configuredEnv(env, "REPUTATION_CORS_PREVIEW_HOST");
+  if (previewHost != null) {
+    const host = previewHost.toLowerCase();
+    const origin = `https://${host}`;
+    const parsed = parseExactHttpsOrigin(origin);
+    if (host.includes("*") || host === "pages.dev" || !PREVIEW_HOSTNAME.test(host) || !parsed.ok) {
+      note(
+        `ignored REPUTATION_CORS_PREVIEW_HOST ${JSON.stringify(previewHost)} (not an exact host). Subdomains are not matched.`,
+      );
+    } else {
+      if (!origins.includes(parsed.origin)) origins.push(parsed.origin);
+      note(
+        `REPUTATION_CORS_PREVIEW_HOST adds only ${parsed.origin}. Preview subdomains are refused unless that exact origin is listed.`,
+      );
+    }
   }
-  if (localHosts.some((host) => host.includes("*") || host.includes("/") || host.includes(":"))) {
-    throw httpError(500, "reputation_cors_invalid", { field: "local_hosts" });
+
+  const localHosts = configuredEnv(env, "REPUTATION_CORS_LOCAL_HOSTS");
+  if (localHosts != null) {
+    for (const host of localHosts.split(",")) {
+      const token = host.trim();
+      if (!token) continue;
+      const parsed = parseExactHttpsOrigin(token);
+      if (!parsed.ok) {
+        note(
+          `ignored REPUTATION_CORS_LOCAL_HOSTS entry ${JSON.stringify(token)} (${parsed.reason}). Any-port localhost matching is retired.`,
+        );
+        continue;
+      }
+      if (!origins.includes(parsed.origin)) origins.push(parsed.origin);
+    }
   }
-  return { pagesOrigin, previewHost, localHosts };
+
+  return { origins, warnings };
 }
 
 /** Clear refusal for a configured escrow that is on the retired list. Does not exit the process. */
