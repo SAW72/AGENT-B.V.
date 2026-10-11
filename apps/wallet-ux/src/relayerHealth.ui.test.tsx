@@ -142,6 +142,15 @@ async function prepareRefund(scope = refundSection()) {
 }
 
 describe("refund service health", () => {
+  it("pins the starting sentence, the no-response sentence, and the unchanged unavailable note", () => {
+    expect(RELAYER_WAKING_TEXT).toBe("Starting the refund service… This can take up to a minute.")
+    expect(RELAYER_NO_RESPONSE_TEXT).toBe(
+      "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet.",
+    )
+    expect(RELAYER_DOWN_NOTE).toBe("The refund service is unavailable. Use your wallet to submit instead.")
+    expect(RELAYER_HEALTH_RETRY_LABEL).toBe("Try again")
+  })
+
   beforeEach(() => {
     escrowFixture.expiresAt = 1n
     escrowFixture.state = 0
@@ -192,7 +201,7 @@ describe("refund service health", () => {
     expect((refund.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it("shows Waking through a cold start longer than 8s, then enables with no post", async () => {
+  it("shows Starting through a cold start longer than 8s, then enables with no post", async () => {
     steps = ["hang", "hold"]
     render(<FlowPreview escrow={escrow} panel={panel} />)
     const refund = refundSection()
@@ -217,7 +226,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
   })
 
-  it("stops waking at 60s, and Try again restarts only the health check", async () => {
+  it("stops starting at 60s, and Try again restarts only the health check", async () => {
     steps = Array.from({ length: 40 }, () => "502" as const)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     render(<FlowPreview escrow={escrow} panel={panel} />)
