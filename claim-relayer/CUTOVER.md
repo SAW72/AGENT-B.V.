@@ -396,7 +396,7 @@ Do not send a live claim in this step, and do not set `KILL_SWITCH` to `0` here.
 
 The CORS check does not depend on the gate. On #46, `access-control-allow-headers` is `content-type,x-admin-secret,authorization`. It does not list `x-claim-secret`.
 
-Run this preflight for the current site. Repeat it with `origin: https://agent-a-wallet-ux.pages.dev` and expect that origin echoed as well. Both sites are live until a live refund passes on the new one.
+Run this preflight for the current site. Relayer defaults now allow only https://agent-bv.pages.dev. A repeat with `origin: https://agent-a-wallet-ux.pages.dev` gets no `Access-Control-Allow-Origin` unless the relayer env adds that origin. The old Pages project stays live until a live refund passes on the new site.
 
 ```bash
 curl -sS -D - -o /dev/null -X OPTIONS "$BASE/v1/claims" \

@@ -649,15 +649,21 @@ describe("claim relayer HTTP", () => {
       CLAIM_API_SECRET: CLAIM_SECRET,
     });
     try {
-      for (const origin of [pages, previous]) {
-        const allowed = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
-          origin,
-          "access-control-request-method": "POST",
-          "access-control-request-headers": "content-type,x-claim-secret",
-        });
-        assert.equal(allowed.status, 204);
-        assert.equal(allowed.headers["access-control-allow-origin"], origin);
-      }
+      const allowed = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
+        origin: pages,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type,x-claim-secret",
+      });
+      assert.equal(allowed.status, 204);
+      assert.equal(allowed.headers["access-control-allow-origin"], pages);
+
+      const refused = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
+        origin: previous,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type,x-claim-secret",
+      });
+      assert.equal(refused.status, 204);
+      assert.equal(refused.headers["access-control-allow-origin"], undefined);
 
       const local = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
         origin: "http://127.0.0.1:5173",

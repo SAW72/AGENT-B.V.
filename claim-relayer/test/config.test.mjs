@@ -46,13 +46,17 @@ describe("config gates", () => {
     assert.equal(config.corsOrigins, DEFAULT_CORS_ORIGINS);
     assert.equal(
       config.corsOrigins,
-      "https://agent-bv.pages.dev,https://agent-a-wallet-ux.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
+      "https://agent-bv.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
     );
+    assert.equal(config.corsOrigins.includes("agent-a-wallet-ux"), false);
+    assert.deepEqual(DEFAULT_REPUTATION_CORS_ORIGINS, ["https://agent-bv.pages.dev"]);
     assert.deepEqual(config.reputationCors.origins, DEFAULT_REPUTATION_CORS_ORIGINS);
+    assert.equal(config.reputationCors.origins.includes("https://agent-a-wallet-ux.pages.dev"), false);
     assert.deepEqual(config.reputationCors.warnings, []);
     const render = await readFile(new URL("../render.yaml", import.meta.url), "utf8");
     const example = await readFile(new URL("../.env.example", import.meta.url), "utf8");
     assert.equal(render.includes(DEFAULT_CORS_ORIGINS), true);
+    assert.equal(render.includes("agent-a-wallet-ux"), false);
     assert.equal(example.includes(DEFAULT_CORS_ORIGINS), true);
     assert.deepEqual(config.liveSubmit.blockers, ["spencer_run_auth_required", "live_submit_off"]);
     assert.equal(JSON.stringify(config).includes(SECRET), false);
