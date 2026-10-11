@@ -279,50 +279,51 @@ describe("reputation read API", () => {
     }
   });
 
-  it("uses a separate reputation CORS policy and leaves claim CORS unchanged", async () => {
-    const ctx = await boot(
-      {},
-      { CORS_ORIGINS: "https://agent-a-wallet-ux.pages.dev,http://localhost:5173" },
-    );
+  it("allows both default Pages origins and refuses look-alikes", async () => {
+    const ctx = await boot({});
     try {
-      const pages = await request(ctx.port, "GET", `/v1/reputation/${UNKNOWN}`, {
-        origin: "https://agent-a-wallet-ux.pages.dev",
-      });
-      assert.equal(pages.headers["access-control-allow-origin"], "https://agent-a-wallet-ux.pages.dev");
-      assert.equal(pages.headers["access-control-allow-credentials"], undefined);
+      for (const origin of ["https://agent-bv.pages.dev", "https://agent-a-wallet-ux.pages.dev"]) {
+        const pages = await request(ctx.port, "GET", `/v1/reputation/${UNKNOWN}`, { origin });
+        assert.equal(pages.headers["access-control-allow-origin"], origin);
+        assert.equal(pages.headers["access-control-allow-credentials"], undefined);
+        assert.notEqual(pages.headers["access-control-allow-origin"], "*");
+      }
 
       const preview = await request(ctx.port, "OPTIONS", `/v1/reputation/${UNKNOWN}`, {
-        origin: "https://feat-wallet.agent-a-wallet-ux.pages.dev",
+        origin: "https://abc.agent-bv.pages.dev",
         "access-control-request-method": "GET",
       });
       assert.equal(preview.status, 204);
-      assert.equal(preview.headers["access-control-allow-origin"], "https://feat-wallet.agent-a-wallet-ux.pages.dev");
+      assert.equal(preview.headers["access-control-allow-origin"], undefined);
       assert.equal(preview.headers["access-control-allow-credentials"], undefined);
       assert.match(String(preview.headers["access-control-allow-methods"]), /^GET,OPTIONS$/);
       assert.equal(String(preview.headers["access-control-allow-headers"]).includes("x-claim-secret"), false);
 
-      const local = await request(ctx.port, "GET", `/v1/reputation/config`, {
-        origin: "http://localhost:5173",
-      });
-      assert.equal(local.headers["access-control-allow-origin"], "http://localhost:5173");
-      const loopback = await request(ctx.port, "GET", `/v1/reputation/config`, {
-        origin: "http://127.0.0.1:4173",
-      });
-      assert.equal(loopback.headers["access-control-allow-origin"], "http://127.0.0.1:4173");
-
       for (const origin of [
-        "https://evil.pages.dev",
+        "https://evil.example",
+        "https://evil-agent-bv.pages.dev",
+        "https://agent-bv.pages.dev.evil.com",
+        "http://agent-bv.pages.dev",
+        "https://abc.agent-bv.pages.dev",
+        "https://feat-wallet.agent-a-wallet-ux.pages.dev",
         "https://agent-a-wallet-ux.pages.dev.evil.example",
         "https://nested.preview.agent-a-wallet-ux.pages.dev",
+        "http://localhost:5173",
+        "http://127.0.0.1:4173",
         "https://localhost:5173",
         "http://localhost.evil.com",
       ]) {
         const rejected = await request(ctx.port, "GET", "/v1/reputation/config", { origin });
         assert.equal(rejected.headers["access-control-allow-origin"], undefined, origin);
+        assert.notEqual(rejected.headers["access-control-allow-origin"], "*");
       }
 
+      for (const origin of ["https://agent-bv.pages.dev", "https://agent-a-wallet-ux.pages.dev"]) {
+        const claim = await request(ctx.port, "OPTIONS", "/v1/claims", { origin });
+        assert.equal(claim.headers["access-control-allow-origin"], origin);
+      }
       const claimPreview = await request(ctx.port, "OPTIONS", "/v1/claims", {
-        origin: "https://feat-wallet.agent-a-wallet-ux.pages.dev",
+        origin: "https://abc.agent-bv.pages.dev",
         "access-control-request-method": "POST",
         "access-control-request-headers": "content-type,authorization",
       });
@@ -330,49 +331,139 @@ describe("reputation read API", () => {
       assert.equal(claimPreview.headers["access-control-allow-origin"], undefined);
       assert.match(String(claimPreview.headers["access-control-allow-headers"]), /authorization/);
       assert.equal(String(claimPreview.headers["access-control-allow-headers"]).includes("x-claim-secret"), false);
-      assert.match(String(claimPreview.headers["access-control-allow-methods"]), /POST/);
-
-      const claimApex = await request(ctx.port, "OPTIONS", "/v1/claims", {
-        origin: "https://agent-a-wallet-ux.pages.dev",
-      });
-      assert.equal(claimApex.headers["access-control-allow-origin"], "https://agent-a-wallet-ux.pages.dev");
     } finally {
       await ctx.close();
     }
   });
 
-  it("lets reputation CORS origins be configured without widening claim CORS", async () => {
-    assert.throws(
-      () => reputationCorsFromEnv({ REPUTATION_CORS_PREVIEW_HOST: "pages.dev" }),
-      (err) => err.error === "reputation_cors_invalid",
+  it("rejects wildcard reputation origins and keeps old env vars as exact additions", async () => {
+    const warnings = [];
+    const warn = (message) => warnings.push(message);
+    const wildcard = reputationCorsFromEnv(
+      { REPUTATION_CORS_ORIGINS: "*,*.pages.dev,https://*.pages.dev,HTTPS://Wallet.Example/" },
+      { warn },
     );
-    assert.throws(
-      () => reputationCorsFromEnv({ REPUTATION_CORS_PAGES_ORIGIN: "*" }),
-      (err) => err.error === "reputation_cors_invalid",
+    assert.deepEqual(wildcard.origins, ["https://wallet.example"]);
+    assert.equal(wildcard.warnings.some((message) => message.includes("wildcard")), true);
+    assert.equal(wildcard.warnings.some((message) => message.includes("trailing_slash")), false);
+
+    const mixed = reputationCorsFromEnv(
+      { REPUTATION_CORS_ORIGINS: "https://agent-bv.pages.dev, *, https://*.pages.dev" },
+      { warn },
     );
+    assert.deepEqual(mixed.origins, ["https://agent-bv.pages.dev"]);
+
+    const previewHost = reputationCorsFromEnv({ REPUTATION_CORS_PREVIEW_HOST: "pages.dev" }, { warn });
+    assert.deepEqual(previewHost.origins, [
+      "https://agent-bv.pages.dev",
+      "https://agent-a-wallet-ux.pages.dev",
+    ]);
+    assert.equal(previewHost.origins.includes("https://pages.dev"), false);
+    assert.equal(previewHost.origins.includes("*"), false);
+
+    const star = reputationCorsFromEnv({ REPUTATION_CORS_PAGES_ORIGIN: "*" }, { warn });
+    assert.equal(star.origins.includes("*"), false);
+    assert.deepEqual(star.origins, [
+      "https://agent-bv.pages.dev",
+      "https://agent-a-wallet-ux.pages.dev",
+    ]);
+
+    const added = reputationCorsFromEnv(
+      {
+        REPUTATION_CORS_ORIGINS: "https://agent-bv.pages.dev",
+        REPUTATION_CORS_PAGES_ORIGIN: "https://wallet.example/",
+        REPUTATION_CORS_PREVIEW_HOST: "wallet.example",
+        REPUTATION_CORS_LOCAL_HOSTS: "localhost,127.0.0.1",
+      },
+      { warn },
+    );
+    assert.deepEqual(added.origins, ["https://agent-bv.pages.dev", "https://wallet.example"]);
+    assert.equal(added.origins.includes("https://pr-1.wallet.example"), false);
+    assert.equal(added.origins.includes("https://agent-a-wallet-ux.pages.dev"), false);
+
     const ctx = await boot(
       {},
       {
         CORS_ORIGINS: "http://localhost:5173",
+        REPUTATION_CORS_ORIGINS: "https://abc.agent-bv.pages.dev",
         REPUTATION_CORS_PAGES_ORIGIN: "https://wallet.example",
-        REPUTATION_CORS_PREVIEW_HOST: "wallet.example",
+        REPUTATION_CORS_PREVIEW_HOST: "*.pages.dev",
       },
     );
     try {
-      const allowed = await request(ctx.port, "GET", "/v1/reputation/config", {
+      const listed = await request(ctx.port, "GET", "/v1/reputation/config", {
+        origin: "https://abc.agent-bv.pages.dev",
+      });
+      assert.equal(listed.headers["access-control-allow-origin"], "https://abc.agent-bv.pages.dev");
+      const sibling = await request(ctx.port, "GET", "/v1/reputation/config", {
+        origin: "https://other.agent-bv.pages.dev",
+      });
+      assert.equal(sibling.headers["access-control-allow-origin"], undefined);
+      const apex = await request(ctx.port, "GET", "/v1/reputation/config", {
+        origin: "https://agent-bv.pages.dev",
+      });
+      assert.equal(apex.headers["access-control-allow-origin"], undefined);
+      const custom = await request(ctx.port, "GET", "/v1/reputation/config", {
+        origin: "https://wallet.example",
+      });
+      assert.equal(custom.headers["access-control-allow-origin"], "https://wallet.example");
+      const preview = await request(ctx.port, "GET", "/v1/reputation/config", {
         origin: "https://pr-1.wallet.example",
       });
-      assert.equal(allowed.headers["access-control-allow-origin"], "https://pr-1.wallet.example");
-      const oldPages = await request(ctx.port, "GET", "/v1/reputation/config", {
-        origin: "https://agent-a-wallet-ux.pages.dev",
-      });
-      assert.equal(oldPages.headers["access-control-allow-origin"], undefined);
+      assert.equal(preview.headers["access-control-allow-origin"], undefined);
       const claim = await request(ctx.port, "OPTIONS", "/v1/claims", {
-        origin: "https://pr-1.wallet.example",
+        origin: "https://abc.agent-bv.pages.dev",
       });
       assert.equal(claim.headers["access-control-allow-origin"], undefined);
+      const localClaim = await request(ctx.port, "OPTIONS", "/v1/claims", {
+        origin: "http://localhost:5173",
+      });
+      assert.equal(localClaim.headers["access-control-allow-origin"], "http://localhost:5173");
     } finally {
       await ctx.close();
+    }
+
+    const normalized = reputationCorsFromEnv(
+      {
+        REPUTATION_CORS_ORIGINS: [
+          "HTTPS://Wallet.Example/",
+          "https://agent-bv.pages.dev:443",
+          "http://agent-bv.pages.dev",
+          "https://user:pass@agent-bv.pages.dev",
+          "https://agent-bv.pages.dev/path",
+          "https://agent-bv.pages.dev?x=1",
+          "https://agent-bv.pages.dev#h",
+          "null",
+          "*",
+        ].join(","),
+      },
+      { warn },
+    );
+    assert.deepEqual(normalized.origins, ["https://wallet.example"]);
+    for (const reason of ["port", "scheme", "userinfo", "path", "query", "hash", "null", "wildcard"]) {
+      assert.equal(
+        normalized.warnings.some((message) => message.includes(`(${reason})`)),
+        true,
+        reason,
+      );
+    }
+    assert.doesNotThrow(() => reputationCorsFromEnv({ REPUTATION_CORS_ORIGINS: "*,null,http://localhost:5173" }, { warn }));
+    const refusedAll = reputationCorsFromEnv({ REPUTATION_CORS_ORIGINS: "*,null,http://localhost:5173" }, { warn });
+    assert.deepEqual(refusedAll.origins, []);
+    assert.equal(refusedAll.warnings.length > 0, true);
+
+    const closed = await boot({}, { REPUTATION_CORS_ORIGINS: "*" });
+    try {
+      const refused = await request(closed.port, "GET", "/v1/reputation/config", {
+        origin: "https://agent-bv.pages.dev",
+      });
+      assert.equal(refused.headers["access-control-allow-origin"], undefined);
+      const any = await request(closed.port, "GET", "/v1/reputation/config", {
+        origin: "https://evil.example",
+      });
+      assert.equal(any.headers["access-control-allow-origin"], undefined);
+    } finally {
+      await closed.close();
     }
   });
 

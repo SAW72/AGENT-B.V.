@@ -1,5 +1,5 @@
 import { createServer } from "node:http"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -15,6 +15,7 @@ import {
   RETIRED_ESCROW_ESC_M1,
 } from "./guard-escrow-addresses.mjs"
 import { DOMAIN_NAME, FORBIDDEN_DASHES, scanDist, scanDistBuffer, scanSourceBuffer, scanSources } from "./guard-domain-dashes.mjs"
+import { PAGES_HEADERS_FILE, assertPagesHeaders } from "./guard-pages-headers.mjs"
 
 const HEADER = "x-claim-secret"
 const ENV_NAME = "VITE_CLAIM_API_SECRET"
@@ -459,5 +460,19 @@ describe("guard-domain-dashes", () => {
     const failed = runNode("scripts/guard-domain-dashes.mjs", [bad])
     expect(failed.status).toBe(1)
     expect(failed.stderr).toContain("e28094")
+  })
+})
+
+describe("pages security headers", () => {
+  it("keeps public/_headers byte-for-byte, with no Content-Security-Policy", () => {
+    const file = readFileSync(new URL("../public/_headers", import.meta.url), "utf8")
+    expect(file).toBe(PAGES_HEADERS_FILE)
+    expect(file).toContain("X-Content-Type-Options: nosniff")
+    expect(file).toContain("Referrer-Policy: strict-origin-when-cross-origin")
+    expect(file.toLowerCase()).not.toContain("content-security-policy")
+    expect(() => assertPagesHeaders()).not.toThrow()
+    const cli = runNode("scripts/guard-pages-headers.mjs", [])
+    expect(cli.status).toBe(0)
+    expect(cli.stdout).toContain("Pages headers unchanged")
   })
 })

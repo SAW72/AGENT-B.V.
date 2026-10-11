@@ -641,20 +641,23 @@ describe("claim relayer HTTP", () => {
   });
 
   it("allows the Wallet UX Pages origin by default and still requires a signed intent", async () => {
-    const pages = "https://agent-a-wallet-ux.pages.dev";
+    const pages = "https://agent-bv.pages.dev";
+    const previous = "https://agent-a-wallet-ux.pages.dev";
     const ctx = await boot({
       LIVE_SUBMIT: "1",
       SPENCER_RUN_AUTH: "1",
       CLAIM_API_SECRET: CLAIM_SECRET,
     });
     try {
-      const allowed = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
-        origin: pages,
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type,x-claim-secret",
-      });
-      assert.equal(allowed.status, 204);
-      assert.equal(allowed.headers["access-control-allow-origin"], pages);
+      for (const origin of [pages, previous]) {
+        const allowed = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
+          origin,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type,x-claim-secret",
+        });
+        assert.equal(allowed.status, 204);
+        assert.equal(allowed.headers["access-control-allow-origin"], origin);
+      }
 
       const local = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
         origin: "http://127.0.0.1:5173",

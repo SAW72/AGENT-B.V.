@@ -161,7 +161,8 @@ const RELAYER_PLAIN: Record<string, string> = {
   nonce_replay: "This approval was already used. Nothing was sent.",
   relayer_key_missing: "The refund relayer is not ready to submit refunds yet. Nothing was sent.",
   kill_switch: "The refund relayer is paused. Nothing was sent.",
-  cors_or_network: "The refund relayer could not be reached. Nothing was sent.",
+  cors_or_network:
+    "Couldn't reach the refund service. Try again in a minute. If it keeps failing, check Pending transactions before trying again.",
   mainnet_refused: "The refund relayer only submits on the Base Sepolia network. Nothing was sent.",
   wrong_chain: "The refund relayer only submits on the Base Sepolia network. Nothing was sent.",
   action_not_claim: "This step has to be sent from your wallet, not the refund relayer.",
@@ -575,8 +576,15 @@ export async function postLiveClaim(input: {
         "timeout_unknown",
       )
     }
+    const pageOrigin =
+      typeof window !== "undefined" && typeof window.location?.origin === "string" ? window.location.origin : null
+    console.error(
+      pageOrigin
+        ? `Could not reach the refund relayer. CORS on the relayer must allow this origin (${pageOrigin}).`
+        : "Could not reach the refund relayer. CORS on the relayer must allow the page origin.",
+    )
     throw new RelayerRequestError(
-      "Could not reach the refund relayer. If this is the Pages site, CORS on Render must allow this origin (https://agent-a-wallet-ux.pages.dev).",
+      "Couldn't reach the refund service. Try again in a minute. If it keeps failing, check Pending transactions before trying again.",
       null,
       "cors_or_network",
     )

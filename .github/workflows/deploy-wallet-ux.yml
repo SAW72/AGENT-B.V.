@@ -101,6 +101,12 @@ jobs:
       - name: Reject retired claim-secret markers
         run: node scripts/guard-claim-secret.mjs dist
 
+      - name: Reject non-ASCII dashes in the claim domain name
+        run: node scripts/guard-domain-dashes.mjs
+
+      - name: Keep Pages security headers unchanged
+        run: node scripts/guard-pages-headers.mjs
+
       # defaults.run.working-directory does not apply to uses steps.
       # cloudflare/wrangler-action v4.1.3 installs Wrangler 4 by default.
       # gitHubToken is omitted, so the action does not create a GitHub deployment.
@@ -112,7 +118,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/wallet-ux
-          command: pages deploy dist --project-name=agent-a-wallet-ux --branch=preview-${{ github.run_id }} --commit-hash=${{ github.sha }} --commit-dirty=false
+          command: pages deploy dist --project-name=agent-bv --branch=preview-${{ github.run_id }} --commit-hash=${{ github.sha }} --commit-dirty=false
 
       - name: Verify the preview bundle
         env:
@@ -126,7 +132,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/wallet-ux
-          command: pages deploy dist --project-name=agent-a-wallet-ux --branch=main --commit-hash=${{ github.sha }} --commit-dirty=false
+          command: pages deploy dist --project-name=agent-bv --branch=main --commit-hash=${{ github.sha }} --commit-dirty=false
 
       - name: Verify the production bundle
         env:
@@ -145,4 +151,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/wallet-ux
-          command: pages deployment delete ${{ steps.preview.outputs.pages-deployment-id }} --project-name=agent-a-wallet-ux --force
+          command: pages deployment delete ${{ steps.preview.outputs.pages-deployment-id }} --project-name=agent-bv --force
