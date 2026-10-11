@@ -351,10 +351,13 @@ function configuredEnv(env, key) {
 
 /**
  * CORS for GET /v1/reputation only. Claim routes keep corsOrigins.
- * Exact `https://host` origins. No `*`, no suffix match, no any-port localhost.
+ * Exact `https://host` origins. One trailing slash is stripped and the
+ * scheme and host are lowercased before the check. No `*`, no suffix match,
+ * no http, no port, no any-port localhost.
  * A blank or unset REPUTATION_CORS_ORIGINS uses both Pages origins.
  * A non-blank value replaces that default. Malformed entries are dropped
- * with a warning and never widen the list to allow-all.
+ * with a warning. If every entry is invalid, no origin is allowed and the
+ * process still boots. The list never falls open to allow-all.
  * REPUTATION_CORS_PAGES_ORIGIN, REPUTATION_CORS_PREVIEW_HOST, and
  * REPUTATION_CORS_LOCAL_HOSTS are read only when set, and only as extra
  * exact origins, so an existing Render env does not lose an origin it named.
@@ -386,15 +389,7 @@ export function reputationCorsFromEnv(env = {}, options = {}) {
   for (const entry of base) addOrigin(entry, "REPUTATION_CORS_ORIGINS");
 
   const pagesOrigin = configuredEnv(env, "REPUTATION_CORS_PAGES_ORIGIN");
-  if (pagesOrigin != null) {
-    const stripped = pagesOrigin.endsWith("/") ? pagesOrigin.slice(0, -1) : pagesOrigin;
-    if (stripped !== pagesOrigin) {
-      note(
-        `REPUTATION_CORS_PAGES_ORIGIN trailing slash is not kept; checking ${JSON.stringify(stripped)}`,
-      );
-    }
-    addOrigin(stripped, "REPUTATION_CORS_PAGES_ORIGIN");
-  }
+  if (pagesOrigin != null) addOrigin(pagesOrigin, "REPUTATION_CORS_PAGES_ORIGIN");
 
   const previewHost = configuredEnv(env, "REPUTATION_CORS_PREVIEW_HOST");
   if (previewHost != null) {

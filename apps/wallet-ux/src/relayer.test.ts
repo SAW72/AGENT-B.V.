@@ -173,20 +173,56 @@ describe("postLiveClaim", () => {
     await expect(closed).rejects.toMatchObject({ status: 503, code: "relayer_key_missing" })
     await expect(closed).rejects.toThrow(/503 relayer_key_missing/)
 
-    const cors = postLiveClaim({
-      url: relayerUrl,
-      body: release,
-      fetchImpl: async () => {
-        throw new TypeError("Failed to fetch")
-      },
-    })
-    await expect(cors).rejects.toMatchObject({ code: "cors_or_network", status: null })
-    await expect(cors).rejects.toThrow(/CORS/)
-    await expect(cors).rejects.toThrow(/Agent-BV/)
-    await expect(cors).rejects.toThrow(/https:\/\/agent-bv\.pages\.dev/)
-    await expect(cors).rejects.toThrow(/https:\/\/agent-a-wallet-ux\.pages\.dev/)
-    await expect(cors).rejects.toThrow(/live refund/)
-    await expect(cors).rejects.not.toThrow(/x-claim-secret/)
+    const userMessage =
+      "Couldn't reach the refund service. Try again in a minute. If it keeps failing, check Pending transactions before trying again."
+    const origin = "https://current.example"
+    vi.stubGlobal("window", { location: { origin } })
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const cors = postLiveClaim({
+        url: relayerUrl,
+        body: release,
+        fetchImpl: async () => {
+          throw new TypeError("Failed to fetch")
+        },
+      })
+      await expect(cors).rejects.toMatchObject({ code: "cors_or_network", status: null })
+      await expect(cors).rejects.toThrow(userMessage)
+      const error = await cors.catch((cause: unknown) => cause)
+      expect(relayerErrorText(error)).toBe(userMessage)
+      expect(relayerErrorText(error)).not.toMatch(/CORS/)
+      expect(relayerErrorText(error)).not.toMatch(/Render/)
+      expect(relayerErrorText(error)).not.toMatch(/pages\.dev/)
+      expect(relayerErrorText(error)).not.toMatch(/agent-a/)
+      expect(presentRelayerError(error).main).toBe(userMessage)
+      const logged = consoleError.mock.calls.map((args) => args.map(String).join(" ")).join("\n")
+      expect(logged).toContain(origin)
+      expect(logged).toMatch(/CORS on the relayer/)
+      expect(logged).not.toMatch(/agent-a/)
+      expect(logged).not.toMatch(/pages\.dev/)
+      await expect(cors).rejects.not.toThrow(/x-claim-secret/)
+    } finally {
+      consoleError.mockRestore()
+      vi.unstubAllGlobals()
+    }
+
+    const consoleErrorBare = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const offline = postLiveClaim({
+        url: relayerUrl,
+        body: release,
+        fetchImpl: async () => {
+          throw new TypeError("Failed to fetch")
+        },
+      })
+      await expect(offline).rejects.toThrow(userMessage)
+      const logged = consoleErrorBare.mock.calls.map((args) => args.map(String).join(" ")).join("\n")
+      expect(logged).toMatch(/CORS on the relayer/)
+      expect(logged).not.toMatch(/agent-a/)
+      expect(logged).not.toMatch(/pages\.dev/)
+    } finally {
+      consoleErrorBare.mockRestore()
+    }
 
     let fetches = 0
     const mainnet = postLiveClaim({
@@ -208,7 +244,6 @@ describe("postLiveClaim", () => {
     })
     await expect(baseMainnet).rejects.toMatchObject({ code: "mainnet_refused" })
     expect(fetches).toBe(0)
-    expect(relayerErrorText(await cors.catch((error: unknown) => error))).toMatch(/CORS/)
   })
 
   it("refuses a credentialed URL and openDispute", async () => {

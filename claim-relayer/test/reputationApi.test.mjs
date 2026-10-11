@@ -340,12 +340,12 @@ describe("reputation read API", () => {
     const warnings = [];
     const warn = (message) => warnings.push(message);
     const wildcard = reputationCorsFromEnv(
-      { REPUTATION_CORS_ORIGINS: "*,*.pages.dev,https://*.pages.dev,https://agent-bv.pages.dev/" },
+      { REPUTATION_CORS_ORIGINS: "*,*.pages.dev,https://*.pages.dev,HTTPS://Wallet.Example/" },
       { warn },
     );
-    assert.deepEqual(wildcard.origins, []);
+    assert.deepEqual(wildcard.origins, ["https://wallet.example"]);
     assert.equal(wildcard.warnings.some((message) => message.includes("wildcard")), true);
-    assert.equal(wildcard.warnings.some((message) => message.includes("trailing_slash")), true);
+    assert.equal(wildcard.warnings.some((message) => message.includes("trailing_slash")), false);
 
     const mixed = reputationCorsFromEnv(
       { REPUTATION_CORS_ORIGINS: "https://agent-bv.pages.dev, *, https://*.pages.dev" },
@@ -422,6 +422,35 @@ describe("reputation read API", () => {
     } finally {
       await ctx.close();
     }
+
+    const normalized = reputationCorsFromEnv(
+      {
+        REPUTATION_CORS_ORIGINS: [
+          "HTTPS://Wallet.Example/",
+          "https://agent-bv.pages.dev:443",
+          "http://agent-bv.pages.dev",
+          "https://user:pass@agent-bv.pages.dev",
+          "https://agent-bv.pages.dev/path",
+          "https://agent-bv.pages.dev?x=1",
+          "https://agent-bv.pages.dev#h",
+          "null",
+          "*",
+        ].join(","),
+      },
+      { warn },
+    );
+    assert.deepEqual(normalized.origins, ["https://wallet.example"]);
+    for (const reason of ["port", "scheme", "userinfo", "path", "query", "hash", "null", "wildcard"]) {
+      assert.equal(
+        normalized.warnings.some((message) => message.includes(`(${reason})`)),
+        true,
+        reason,
+      );
+    }
+    assert.doesNotThrow(() => reputationCorsFromEnv({ REPUTATION_CORS_ORIGINS: "*,null,http://localhost:5173" }, { warn }));
+    const refusedAll = reputationCorsFromEnv({ REPUTATION_CORS_ORIGINS: "*,null,http://localhost:5173" }, { warn });
+    assert.deepEqual(refusedAll.origins, []);
+    assert.equal(refusedAll.warnings.length > 0, true);
 
     const closed = await boot({}, { REPUTATION_CORS_ORIGINS: "*" });
     try {
