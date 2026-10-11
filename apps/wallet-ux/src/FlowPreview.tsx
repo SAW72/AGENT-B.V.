@@ -13,6 +13,7 @@ import {
   ESCROW_ID_HINT,
   ESCROW_ID_LABEL,
   GENERATE_LABEL,
+  NextStepLink,
   NO_WALLET_REASON,
   PAYEE_SELF_WARNING,
   PendingClearedNote,
@@ -22,7 +23,7 @@ import {
 } from "./actionButton"
 import { actionProgress, CONTRACT_LABELS, GAS_FEE_TEXT, BALANCE_WARN_TEXT, ANOTHER_PENDING_REASON, REFUND_ALREADY_PENDING_REASON } from "./actionProgress"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
-import { parseBytes32, randomBytes32 } from "./bytes32"
+import { isZeroBytes32, parseBytes32, randomBytes32 } from "./bytes32"
 import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
 import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, useEscrowActionGate } from "./escrowGate"
@@ -100,7 +101,7 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { confirmedNext, flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
+import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
@@ -131,7 +132,7 @@ export function PendingStrip() {
 }
 
 function PendingRow({ view }: { view: PendingView }) {
-  const progress = actionProgress(view.record.action)
+  const progress = actionProgress(view.record.action, view.record.subjectId)
   const label = pendingSubjectLabel(view.record.action)
   const state: ActionButtonState =
     view.phase === "confirmed"
@@ -210,8 +211,8 @@ function SepoliaSubmit({
   guided?: boolean
   statusRoot?: HTMLElement | null
 }) {
-  const progress = actionProgress(preview.functionName)
   const sent = subjectFromCalldata(preview.calldata)
+  const progress = actionProgress(preview.functionName, sent?.subjectId ?? resultId ?? null)
   const slot = pendingSlot(sent?.action ?? preview.functionName, sent?.subjectId ?? null)
   const account = useAccount()
   const { switchChain } = useSwitchChain()
@@ -515,10 +516,6 @@ function SepoliaSubmit({
           label: progress.done,
           resultId: receipt.subjectId ?? resultId,
           resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? resultLabel : resultLabel,
-          nextHref: guided ? confirmedNext(preview.functionName, receipt.subjectId ?? resultId ?? null)?.href : progress.next?.href,
-          nextLabel: guided
-            ? confirmedNext(preview.functionName, receipt.subjectId ?? resultId ?? null)?.label
-            : progress.next?.label,
         }
         : receipt.phase === "pending" && receipt.txHash
         ? {
@@ -549,8 +546,6 @@ function SepoliaSubmit({
                 label: progress.done,
                 resultId,
                 resultLabel,
-                nextHref: guided ? confirmedNext(preview.functionName, resultId ?? null)?.href : progress.next?.href,
-                nextLabel: guided ? confirmedNext(preview.functionName, resultId ?? null)?.label : progress.next?.label,
               }
             : !originAllowed
               ? { status: "idle", label: "Submit refund request" }
@@ -602,6 +597,11 @@ function SepoliaSubmit({
               </p>
             </div>
           ) : null}
+          {relayerState.status === "confirmed" ? (
+            walletState.status === "confirmed" || !progress.next ? null : (
+              <NextStepLink href={progress.next.href} label={progress.next.label} />
+            )
+          ) : (
           <ActionButton
             data-testid="relayer-submit"
             state={relayerState}
@@ -625,6 +625,7 @@ function SepoliaSubmit({
               void onRelayer()
             }}
           />
+          )}
           {relayerNotice || relayerHealth === "down" || relayerHealth === "paused" ? (
             <p className="hint" role="status" data-testid="relayer-unavailable">
               {relayerNotice ?? RELAYER_SERVICE_DOWN_TEXT}
@@ -663,6 +664,9 @@ function SepoliaSubmit({
   return (
     <>
       {guided ? null : <p>{submitSenderNote(preview.functionName)}</p>}
+      {walletState.status === "confirmed" ? (
+        progress.next ? <NextStepLink href={progress.next.href} label={progress.next.label} /> : null
+      ) : (
       <ActionButton
         testId={control.testId}
         state={walletState}
@@ -689,6 +693,7 @@ function SepoliaSubmit({
           void onClick()
         }}
       />
+      )}
       {statusRoot ? createPortal(status, statusRoot) : status}
     </>
   )
@@ -1051,6 +1056,70 @@ export function FlowPreview({
   )
 }
 
+export const FUND_ESCROW_STORAGE_KEY = "agent-bv.fund-escrow-id"
+
+function readFundEscrowId(): `0x${string}` | null {
+  if (typeof sessionStorage === "undefined") return null
+  try {
+    const parsed = parseBytes32(sessionStorage.getItem(FUND_ESCROW_STORAGE_KEY) ?? "")
+    if (!parsed || isZeroBytes32(parsed)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeFundEscrowId(id: `0x${string}`) {
+  try {
+    sessionStorage.setItem(FUND_ESCROW_STORAGE_KEY, id)
+  } catch {
+    // The field still shows the id when storage is unavailable.
+  }
+}
+
+function firstFundProblem(
+  targetStep: number,
+  fields: {
+    escrowId: string
+    payee: string
+    payerBotId: string
+    payeeBotId: string
+    value: string
+    preset: number | "custom"
+    customDuration: string
+  },
+): { step: number; message: string } | null {
+  if (targetStep <= 1) return null
+  const id = parseBytes32(fields.escrowId)
+  if (!id) return { step: 1, message: FORM_ERRORS.createIds }
+  if (isZeroBytes32(id)) return { step: 1, message: FORM_ERRORS.zeroEscrowId }
+  if (payeeHasChecksumError(fields.payee)) return { step: 1, message: FORM_ERRORS.payeeChecksum }
+  const payee = parsePayeeAddress(fields.payee)
+  if (!payee) return { step: 1, message: FORM_ERRORS.payee }
+  if (isZeroAddress(payee)) return { step: 1, message: FORM_ERRORS.payeeZero }
+  if (targetStep <= 2) return null
+  const payerBot = parseBytes32(fields.payerBotId)
+  const payeeBot = parseBytes32(fields.payeeBotId)
+  if (!payerBot || !payeeBot) return { step: 2, message: FORM_ERRORS.createIds }
+  if (isZeroBytes32(payerBot) || isZeroBytes32(payeeBot)) {
+    return { step: 2, message: "Enter bot identifiers that are not all zeros." }
+  }
+  if (payerBot === payeeBot) return { step: 2, message: FORM_ERRORS.sameBots }
+  if (targetStep <= 3) return null
+  if (fields.value.trim() === "") return { step: 3, message: FORM_ERRORS.valueEmpty }
+  try {
+    if (parseEther(fields.value.trim()) <= 0n) return { step: 3, message: FORM_ERRORS.valueZero }
+  } catch {
+    return { step: 3, message: FORM_ERRORS.valueFormat }
+  }
+  const duration =
+    fields.preset === "custom" ? parseWholeSeconds(fields.customDuration, MAX_DURATION_SECONDS) : fields.preset
+  if (duration == null || duration <= 0 || duration > MAX_DURATION_SECONDS) {
+    return { step: 3, message: durationValidationMessage(MAX_DURATION_SECONDS) }
+  }
+  return null
+}
+
 function CreateForm({
   escrow,
   panel,
@@ -1072,13 +1141,18 @@ function CreateForm({
     chainId: BASE_SEPOLIA_CHAIN_ID,
     query: { enabled: Boolean(account.address) },
   })
-  const [escrowId, setEscrowId] = useState<string>(() => randomBytes32())
+  const [escrowId, setEscrowId] = useState<string>(() => {
+    const link = guided?.linkEscrow
+    if (link && !isZeroBytes32(link)) return link
+    return readFundEscrowId() ?? randomBytes32()
+  })
   const [payee, setPayee] = useState("")
   const [payerBotId, setPayerBotId] = useState("")
   const [payeeBotId, setPayeeBotId] = useState("")
   const [preset, setPreset] = useState<number | "custom">(DEFAULT_DURATION_SECONDS)
   const [customDuration, setCustomDuration] = useState("")
   const [value, setValue] = useState("")
+  const [heldError, setHeldError] = useState<string | null>(null)
   const session = usePrepareSession<CallPreview>("create", active)
   const [fundStatus, setFundStatus] = useState<HTMLElement | null>(null)
   const escrowHex = parseBytes32(escrowId)
@@ -1091,8 +1165,40 @@ function CreateForm({
     4,
     escrowHex ?? "",
     fundReady,
-    guided ? flowHref("fund", 1) : null,
+    guided ? flowHref("fund", 1, { escrow: escrowHex }) : null,
   )
+  const fundFields = { escrowId, payee, payerBotId, payeeBotId, value, preset, customDuration }
+  const problem = guided && guided.step > 1 ? firstFundProblem(guided.step, fundFields) : null
+  useEffect(() => {
+    if (problem) setHeldError(problem.message)
+  }, [problem?.message])
+  useEffect(() => {
+    if (!guided) return
+    const id = parseBytes32(escrowId)
+    if (!id || isZeroBytes32(id)) return
+    const previous = readFundEscrowId()
+    writeFundEscrowId(id)
+    // A bad step query is the notice. Rewriting the URL would drop it.
+    if (guided.notice) return
+    const link = guided.linkEscrow
+    if (previous && link && previous !== link && id === link && !problem) {
+      setHeldError("The escrow id for this flow changed. The id below is the one that will be funded.")
+    }
+    const current = `${window.location.pathname}${window.location.search}`
+    if (problem) {
+      const href = flowHref("fund", problem.step, { escrow: id })
+      if (current !== href) replaceRoute(href, { allowStep: problem.step > 1 })
+      return
+    }
+    // Put the id in the URL, and leave the step the user just opened alone.
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("escrow")?.toLowerCase() === id.toLowerCase()) return
+    const rawStep = params.get("step")
+    const stepNum = rawStep && /^[1-9][0-9]*$/.test(rawStep) ? Number(rawStep) : 1
+    const href = flowHref("fund", stepNum, { escrow: id })
+    if (current === href) return
+    replaceRoute(href, { allowStep: stepNum > 1 && historyAllowsStep() })
+  }, [guided?.notice, guided?.linkEscrow, escrowId, problem?.step, problem?.message])
   const payeeAddress = parsePayeeAddress(payee)
   const payeeIsSelf =
     payeeAddress != null && account.address != null && sameAddress(payeeAddress, account.address)
@@ -1109,6 +1215,20 @@ function CreateForm({
   function edit(apply: () => void) {
     apply()
     session.clear()
+    setHeldError(null)
+  }
+
+  function goFund(nextStep: number) {
+    const id = parseBytes32(escrowId)
+    setHeldError(null)
+    flowStep.arm(`fund|${id ?? ""}|${nextStep}`)
+    navigate(flowHref("fund", nextStep, { escrow: id }), { allowStep: true })
+  }
+
+  function backFund() {
+    if (!guided) return
+    if (step > 1) navigate(flowHref("fund", step - 1, { escrow: parseBytes32(escrowId) }), { allowStep: true })
+    else navigate("/")
   }
 
   async function onSubmit(event?: FormEvent): Promise<boolean> {
@@ -1121,6 +1241,16 @@ function CreateForm({
       const payeeBot = parseBytes32(payeeBotId)
       if (!id || !payerBot || !payeeBot) {
         session.publish(FORM_ERRORS.createIds, null)
+        onActivate("create")
+        return false
+      }
+      if (isZeroBytes32(id)) {
+        session.publish(FORM_ERRORS.zeroEscrowId, null)
+        onActivate("create")
+        return false
+      }
+      if (isZeroBytes32(payerBot) || isZeroBytes32(payeeBot)) {
+        session.publish("Enter bot identifiers that are not all zeros.", null)
         onActivate("create")
         return false
       }
@@ -1193,9 +1323,13 @@ function CreateForm({
 
   async function onNext() {
     if (!guided) return
-    if (guided.step === 1) {
+    if (step === 1) {
       if (!parseBytes32(escrowId)) {
         session.publish(FORM_ERRORS.createIds, null)
+        return
+      }
+      if (isZeroBytes32(escrowId)) {
+        session.publish(FORM_ERRORS.zeroEscrowId, null)
         return
       }
       if (payeeHasChecksumError(payee)) {
@@ -1212,15 +1346,18 @@ function CreateForm({
         return
       }
       session.clear()
-      flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|2`)
-      guided.go(2, true)
+      goFund(2)
       return
     }
-    if (guided.step === 2) {
+    if (step === 2) {
       const payerBot = parseBytes32(payerBotId)
       const payeeBot = parseBytes32(payeeBotId)
       if (!payerBot || !payeeBot) {
         session.publish(FORM_ERRORS.createIds, null)
+        return
+      }
+      if (isZeroBytes32(payerBot) || isZeroBytes32(payeeBot)) {
+        session.publish("Enter bot identifiers that are not all zeros.", null)
         return
       }
       if (payerBot.toLowerCase() === payeeBot.toLowerCase()) {
@@ -1228,20 +1365,22 @@ function CreateForm({
         return
       }
       session.clear()
-      flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|3`)
-      guided.go(3, true)
+      goFund(3)
       return
     }
-    if (guided.step === 3) {
-      const ok = await onSubmit()
-      if (ok) {
-        flowStep.arm(`fund|${parseBytes32(escrowId) ?? ""}|4`)
-        guided.go(4, true)
+    if (step === 3) {
+      const earlier = firstFundProblem(3, fundFields)
+      if (earlier && earlier.step < 3) {
+        setHeldError(earlier.message)
+        navigate(flowHref("fund", earlier.step, { escrow: parseBytes32(escrowId) }), { allowStep: true })
+        return
       }
+      const ok = await onSubmit()
+      if (ok) goFund(4)
     }
   }
 
-  const step = guided ? flowStep.display : 1
+  const step = problem ? problem.step : guided ? flowStep.display : 1
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
 
@@ -1260,6 +1399,11 @@ function CreateForm({
       >
         {guided ? <Stepper step={step} total={4} /> : null}
         <ActionTestnet title="Fund an escrow" />
+        {heldError ? (
+          <p className="warn-note" role="status" data-testid="step-error">
+            {heldError}
+          </p>
+        ) : null}
         {show(1) ? (
           <>
         <IdField
@@ -1355,7 +1499,7 @@ function CreateForm({
           </>
         ) : null}
         {guided && step < 4 ? (
-          <StepFooter onBack={() => guided.back()}>
+          <StepFooter onBack={backFund}>
             <ActionButton
               type="button"
               onClick={() => void onNext()}
@@ -1408,7 +1552,7 @@ function CreateForm({
               omitSubmit
             />
             <div ref={setFundStatus} />
-            <StepFooter onBack={() => guided.back()}>
+            <StepFooter onBack={backFund}>
               <SepoliaSubmit
                 preview={session.preview}
                 escrow={escrow}
@@ -1528,6 +1672,11 @@ function IdForm({
       const id = parseBytes32(escrowId)
       if (!id) {
         session.publish(missingId, null)
+        onActivate(slot)
+        return false
+      }
+      if (isZeroBytes32(id)) {
+        session.publish(FORM_ERRORS.zeroEscrowId, null)
         onActivate(slot)
         return false
       }
@@ -1860,6 +2009,16 @@ function OpenDisputeForm({
       const claim = parseBytes32(claimIdRef.current)
       if (!id || !claim) {
         session.publish(FORM_ERRORS.openIds, null)
+        onActivate("dispute")
+        return false
+      }
+      if (isZeroBytes32(id)) {
+        session.publish(FORM_ERRORS.zeroDisputeId, null)
+        onActivate("dispute")
+        return false
+      }
+      if (isZeroBytes32(claim)) {
+        session.publish(FORM_ERRORS.zeroEscrowId, null)
         onActivate("dispute")
         return false
       }

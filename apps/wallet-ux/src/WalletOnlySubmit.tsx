@@ -5,13 +5,13 @@ import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from 
 import {
   ActionButton,
   ActionStatus,
+  NextStepLink,
   NO_WALLET_REASON,
   PendingClearedNote,
   useWalletHint,
   type ActionButtonState,
 } from "./actionButton"
 import { actionProgress, ANOTHER_PENDING_REASON } from "./actionProgress"
-import { confirmedNext } from "./routes"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { presentError, type ErrorPresentation } from "./format"
 import { isWalletCancel } from "./revert"
@@ -58,8 +58,8 @@ export function WalletOnlySubmit({
   const [signing, setSigning] = useState(false)
   const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
-  const progress = actionProgress(preview.functionName)
   const sent = subjectFromCalldata(preview.calldata)
+  const progress = actionProgress(preview.functionName, sent?.subjectId ?? null)
   const slot = pendingSlot(sent?.action ?? preview.functionName, sent?.subjectId ?? null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
@@ -129,9 +129,6 @@ export function WalletOnlySubmit({
     }
   }
 
-  const guidedNext = guided ? confirmedNext(preview.functionName, receipt.subjectId ?? sent?.subjectId ?? null) : null
-  const nextHref = guided ? guidedNext?.href : progress.next?.href
-  const nextLabel = guided ? guidedNext?.label : progress.next?.label
   const state: ActionButtonState = !decision.ok
     ? decision.code === "disconnected"
       ? { status: "needs-wallet" }
@@ -143,8 +140,6 @@ export function WalletOnlySubmit({
           label: progress.done,
           resultId: receipt.subjectId ?? undefined,
           resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? undefined : undefined,
-          nextHref,
-          nextLabel,
         }
       : receipt.phase === "pending" && receipt.txHash
         ? {
@@ -184,6 +179,9 @@ export function WalletOnlySubmit({
   return (
     <>
       {guided ? null : <p>{submitSenderNote(preview.functionName)}</p>}
+      {state.status === "confirmed" ? (
+        progress.next ? <NextStepLink href={progress.next.href} label={progress.next.label} /> : null
+      ) : (
       <ActionButton
         testId={control.testId}
         state={state}
@@ -205,6 +203,7 @@ export function WalletOnlySubmit({
           void onClick()
         }}
       />
+      )}
       {statusRoot ? createPortal(status, statusRoot) : status}
     </>
   )

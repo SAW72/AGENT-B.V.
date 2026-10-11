@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
@@ -317,6 +317,7 @@ export function App() {
   })
 
   const showSwitch = account.isConnected && walletChainId !== BASE_SEPOLIA_CHAIN_ID
+  const [systemOpen, setSystemOpen] = useState(false)
   const route = useWalletRoute()
   const voteReason = voteTaskReason(useVoteSeat(ADDRESSES.disputePanel), account.address)
 
@@ -384,7 +385,11 @@ export function App() {
       <PendingStrip />
       {route.flow == null ? <TaskPicker voteReason={voteReason} /> : <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />}
 
-      <details className="system-status" data-testid="system-status">
+      <details
+        className="system-status"
+        data-testid="system-status"
+        onToggle={(event) => setSystemOpen(event.currentTarget.open)}
+      >
         <summary>System status</summary>
       <section className="card" aria-labelledby="connection-heading">
         <h2 id="connection-heading">Connection</h2>
@@ -477,12 +482,14 @@ export function App() {
 
       <DenylistLookup client={client} enabled={guard.ok} blockedReason={blockedReason} />
 
-      <ReputationView
-        connected={account.isConnected}
-        chainId={walletChainId}
-        address={account.address ?? null}
-        relayerUrl={relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL }).url}
-      />
+      {systemOpen ? (
+        <ReputationView
+          connected={account.isConnected}
+          chainId={walletChainId}
+          address={account.address ?? null}
+          relayerUrl={relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL }).url}
+        />
+      ) : null}
 
       </details>
 

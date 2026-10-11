@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { flushSync } from "react-dom"
-import { parseBytes32 } from "./bytes32"
-import { DISPUTE_URL_IGNORED, ESCROW_URL_IGNORED } from "./carriedIds"
+import { isZeroBytes32, parseBytes32 } from "./bytes32"
+import { DISPUTE_URL_IGNORED, DISPUTE_ZERO_IGNORED, ESCROW_URL_IGNORED, ESCROW_ZERO_IGNORED } from "./carriedIds"
 
 export const FLOWS = ["fund", "release", "refund", "dispute", "vote", "withdraw"] as const
 
@@ -51,6 +51,9 @@ function readId(params: URLSearchParams, name: "escrow" | "dispute"): IdParam {
   if (raw == null || raw.trim() === "") return { value: null, notice: null }
   const parsed = parseBytes32(raw)
   if (!parsed) return { value: null, notice: name === "escrow" ? ESCROW_URL_IGNORED : DISPUTE_URL_IGNORED }
+  if (isZeroBytes32(parsed)) {
+    return { value: null, notice: name === "escrow" ? ESCROW_ZERO_IGNORED : DISPUTE_ZERO_IGNORED }
+  }
   return { value: parsed, notice: null }
 }
 
@@ -88,7 +91,7 @@ export function flowHref(
   query: { escrow?: string | null; dispute?: string | null } = {},
 ): string {
   const params = new URLSearchParams()
-  if (query.escrow && flow !== "fund" && flow !== "vote" && flow !== "withdraw") params.set("escrow", query.escrow)
+  if (query.escrow && flow !== "vote" && flow !== "withdraw") params.set("escrow", query.escrow)
   if (query.dispute && flow === "vote") params.set("dispute", query.dispute)
   if (step > 1) params.set("step", String(step))
   const search = params.toString()
@@ -148,13 +151,13 @@ export function navigate(href: string, options?: { allowStep?: boolean }) {
 
 /** Drop a review URL that has nothing prepared, without adding another history entry. */
 let replaceEmitQueued = false
-export function replaceRoute(href: string) {
+export function replaceRoute(href: string, options?: { allowStep?: boolean }) {
   if (typeof window === "undefined") return
   const url = new URL(href, window.location.href)
   const next = `${url.pathname}${url.search}`
   const current = `${window.location.pathname}${window.location.search}`
   if (next === current) return
-  window.history.replaceState({ route: next, allowStep: false }, "", next)
+  window.history.replaceState({ route: next, allowStep: options?.allowStep === true }, "", next)
   // Called from an effect after a render that already shows step 1. Emit on a
   // microtask so this does not flushSync inside that lifecycle.
   if (replaceEmitQueued) return

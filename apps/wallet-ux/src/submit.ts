@@ -119,6 +119,8 @@ export const FORM_ERRORS = {
   payee: "Enter the payee wallet address.",
   payeeChecksum: "This address has a checksum error. Paste it again exactly, or use all lowercase.",
   payeeZero: "Enter a payee wallet that is not the zero address.",
+  zeroEscrowId: "Enter an escrow id that is not all zeros.",
+  zeroDisputeId: "Enter a dispute id that is not all zeros.",
   sameBots: "The payer bot and the payee bot must be different.",
   valueEmpty: "Enter an amount of test ETH, such as 0.001.",
   valueFormat: "Enter an amount of ETH, such as 0.001.",

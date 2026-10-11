@@ -291,6 +291,25 @@ describe("prepare this escrow", () => {
     expect(document.querySelector('[data-testid="calldata-preview"]')).toBeNull()
   })
 
+  it("does not call the relayer from vote or withdraw while system status is closed", async () => {
+    vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId("task-picker")).toBeTruthy())
+    const relayerCalls = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) => String(call[0]).includes("relayer.example.test"))
+    navigate(`/vote?dispute=${CLAIM}`)
+    await waitFor(() => expect(screen.getByTestId("step-count")).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(relayerCalls()).toEqual([])
+    navigate("/withdraw")
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(relayerCalls()).toEqual([])
+    fireEvent.click(screen.getByText("System status"))
+    await waitFor(() => expect(relayerCalls().length).toBeGreaterThan(0))
+    vi.unstubAllEnvs()
+  })
+
   it("keeps element ids unique across the rendered app", async () => {
     renderApp()
     expect(document.getElementById("create-claim")).toBeNull()

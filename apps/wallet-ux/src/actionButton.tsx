@@ -295,6 +295,15 @@ function followNext(event: MouseEvent<HTMLAnchorElement>, href: string | undefin
   navigate(href)
 }
 
+/** The one Next after a confirmed action. `href` is a route, not an in-page anchor. */
+export function NextStepLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a className="next-step" href={href} data-testid="next-step" onClick={(event) => followNext(event, href)}>
+      {label}
+    </a>
+  )
+}
+
 export function PendingClearedNote({
   banner,
   onDismiss,

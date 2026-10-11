@@ -4,7 +4,7 @@ import { useAccount, usePublicClient } from "wagmi"
 import { disputePanelAbi } from "./abi"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { WALLET_SIGNED_TEST_LINE } from "./brand"
-import { parseBytes32 } from "./bytes32"
+import { isZeroBytes32, parseBytes32 } from "./bytes32"
 import { ActionButton, ActionStatus, DISPUTE_ID_HINT, DISPUTE_ID_LABEL } from "./actionButton"
 import { CONTRACT_LABELS, GAS_FEE_TEXT, PREPARE_FIRST_REASON, VOTE_SEAT_REASON } from "./actionProgress"
 import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
@@ -353,6 +353,10 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
       const id = parseBytes32(disputeIdRef.current)
       if (!id) {
         session.publish(FORM_ERRORS.voteId, null)
+        return false
+      }
+      if (isZeroBytes32(id)) {
+        session.publish(FORM_ERRORS.zeroDisputeId, null)
         return false
       }
       const selected = choiceRef.current

@@ -621,7 +621,8 @@ a.task-link {
 }
 
 .step-primary { flex: 1; min-width: 0; }
-.step-primary button { width: 100%; min-height: 44px; }
+.step-primary button,
+.step-primary a.next-step { width: 100%; min-height: 44px; margin-top: 0; }
 
 .action-confirmed .kv-row {
   grid-template-columns: 9.5rem minmax(0, 1fr);
@@ -654,6 +655,18 @@ a.task-link {
 }
 
 @media (max-width: 360px) {
+  .step-actions {
+    gap: 8px;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  }
+  .guided-flow { padding-bottom: 64px; }
+  .step-actions .back-button,
+  .step-primary button,
+  .step-primary a.next-step {
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
   .site-header .wordmark {
     font-size: 0.78rem;
     line-height: 1.15;
