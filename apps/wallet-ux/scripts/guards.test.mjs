@@ -463,6 +463,16 @@ describe("guard-domain-dashes", () => {
   })
 })
 
+describe("deploy-wallet-ux workflow", () => {
+  it("installs claim-relayer deps before Test", () => {
+    const workflow = readFileSync(new URL("../../../.github/workflows/deploy-wallet-ux.yml", import.meta.url), "utf8")
+    const installAt = workflow.indexOf("working-directory: claim-relayer\n        run: npm ci\n")
+    const testAt = workflow.indexOf("\n      - name: Test\n")
+    expect(installAt).toBeGreaterThanOrEqual(0)
+    expect(testAt).toBeGreaterThan(installAt)
+  })
+})
+
 describe("pages security headers", () => {
   it("keeps public/_headers byte-for-byte, with no Content-Security-Policy", () => {
     const file = readFileSync(new URL("../public/_headers", import.meta.url), "utf8")
