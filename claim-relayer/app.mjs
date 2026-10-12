@@ -248,6 +248,17 @@ export function createClaimRelayer(deps) {
         return;
       }
 
+      if ((req.method === "GET" || req.method === "HEAD") && path === "/") {
+        res.writeHead(302, {
+          location: "/health",
+          "cache-control": "no-store",
+          "content-length": 0,
+          ...corsHeaders(req),
+        });
+        res.end();
+        return;
+      }
+
       if (req.method === "GET" && (path === "/health" || path === "/v1/health")) {
         sendJson(res, req, 200, healthPayload(config, killSwitch.isOn()), corsHeaders);
         return;
