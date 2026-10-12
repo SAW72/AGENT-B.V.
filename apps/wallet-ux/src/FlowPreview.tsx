@@ -55,14 +55,18 @@ import {
   type CallPreview,
 } from "./preview"
 import {
+  CANONICAL_WALLET_ORIGIN,
   formatHealthReply,
   isHealthCancelled,
+  pageOrigin,
   previewSupportsRelayer,
   readRelayerHealth,
   RELAYER_CONFIRMED_TEXT,
   RELAYER_CONNECT_NOTE,
   RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_OPEN_CANONICAL_LABEL,
   RELAYER_PANEL_TEXT,
+  RELAYER_WRONG_ORIGIN_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_SUBMITTED_TEXT,
   RELAYER_SUBMITTING_TEXT,
@@ -74,6 +78,7 @@ import {
   relayerSubmitAllowed,
   relayerTxUrl,
   runRelayerSubmission,
+  walletOriginAllowsRelayer,
   warnTerminalHealth,
   watchRelayerHealth,
   type RelayerHealth,
@@ -221,13 +226,17 @@ function SepoliaSubmit({
   const relayerGate = relayerSubmitAllowed({ walletConnected: account.isConnected, walletChainId })
   const relayerBusy = relayerPhase !== "idle"
   const control = submitControl(decision, isPending || relayerBusy)
-  const relayerButton = relayerButtonModel({
+  const originAllowed = walletOriginAllowsRelayer(pageOrigin())
+  const relayerModel = relayerButtonModel({
     url: relayer.url,
     health: relayerHealth,
     phase: relayerPhase,
     gate: relayerGate,
     action: preview.functionName,
   })
+  const relayerButton = originAllowed || !relayerModel.visible
+    ? relayerModel
+    : { visible: true as const, disabled: true, label: "Submit refund request", note: null }
 
   const applyHealthUpdate = useCallback((gen: number, update: RelayerHealthUpdate) => {
     if (healthGen.current !== gen) return
@@ -254,6 +263,12 @@ function SepoliaSubmit({
       setHealthReply(null)
       return
     }
+    if (update.phase === "unreachable") {
+      setRelayerHealth("unreachable")
+      setRelayerNotice(null)
+      setHealthReply(null)
+      return
+    }
     if (update.phase === "down") {
       setRelayerHealth("down")
       setHealthReply(update.report ? formatHealthReply(update.report) : null)
@@ -276,6 +291,7 @@ function SepoliaSubmit({
     setRelayerHealth("unknown")
     setRelayerNotice(null)
     setHealthReply(null)
+    if (!walletOriginAllowsRelayer(pageOrigin())) return
     if (!relayer.url || !previewSupportsRelayer(preview.functionName)) return
     const url = relayer.url
     void watchRelayerHealth({
@@ -286,7 +302,7 @@ function SepoliaSubmit({
   }, [applyHealthUpdate, preview.functionName, relayer.url])
 
   useEffect(() => {
-    if (!account.isConnected) {
+    if (!account.isConnected || !walletOriginAllowsRelayer(pageOrigin())) {
       stopHealthWatch()
       return
     }
@@ -358,6 +374,7 @@ function SepoliaSubmit({
 
   async function onRelayer() {
     if (relayerFlight.current) return
+    if (!walletOriginAllowsRelayer(pageOrigin())) return
     setSubmitError(null)
     setCancelled(false)
     setConfirmedHash(null)
@@ -386,7 +403,12 @@ function SepoliaSubmit({
     const signer = walletClient
     const sender = account.address
     const url = relayer.url
-    if (relayerHealth !== "ok") return
+    if (relayerHealth !== "ok") {
+      // Health only. After the two-minute cap, this click starts a fresh one.
+      // A click while the check is already running does not restart it or send anything.
+      if (relayerHealth === "gave_up") beginHealthWatch()
+      return
+    }
     relayerFlight.current = true
     const gen = healthGen.current
     const signal = healthAbort.current?.signal
@@ -395,7 +417,7 @@ function SepoliaSubmit({
       const report = await readRelayerHealth({ url, signal })
       if (healthGen.current !== gen || signal?.aborted) return
       if (report.state !== "ok") {
-        if (relayerHealthWakes(report)) {
+        if (report.cause === "network_or_cors" || relayerHealthWakes(report)) {
           void watchRelayerHealth({
             url,
             signal,
@@ -500,9 +522,11 @@ function SepoliaSubmit({
           ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: relayerStartedAt ?? undefined }
           : confirmedHash
             ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, resultLabel, nextHref: progress.next?.href, nextLabel: progress.next?.label }
-            : relayerHealth === "unknown"
-              ? { status: "busy", label: CHECKING_LABEL }
-              : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
+      : !originAllowed
+        ? { status: "idle", label: "Submit refund request" }
+        : relayerHealth === "unknown"
+          ? { status: "busy", label: CHECKING_LABEL }
+          : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
 
   return (
     <div>
@@ -549,6 +573,13 @@ function SepoliaSubmit({
           {relayerButton.note ? (
             <p className="relayer-pending" role="status" data-testid="relayer-note">
               {relayerButton.note}
+            </p>
+          ) : null}
+          {pageOrigin() !== CANONICAL_WALLET_ORIGIN && relayerHealth === "unreachable" ? (
+            <p className="hint" role="status" data-testid="relayer-unreachable-link">
+              <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+                {RELAYER_OPEN_CANONICAL_LABEL}
+              </a>
             </p>
           ) : null}
           {relayerPhase === "submitting" ? (
@@ -600,7 +631,7 @@ function SepoliaSubmit({
               {healthReply}
             </p>
           ) : null}
-          {relayerHealth === "gave_up" || relayerHealth === "down" ? (
+          {originAllowed && (relayerHealth === "gave_up" || relayerHealth === "down" || relayerHealth === "unreachable") ? (
             <button type="button" className="link-button" data-testid="relayer-health-retry" onClick={() => beginHealthWatch()}>
               {RELAYER_HEALTH_RETRY_LABEL}
             </button>
@@ -802,8 +833,18 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   }).url != null
 
+  const originAllowed = walletOriginAllowsRelayer(pageOrigin())
+
   return (
     <div>
+      {originAllowed ? null : (
+        <p className="banner" role="status" data-testid="relayer-origin-notice">
+          {RELAYER_WRONG_ORIGIN_TEXT}{" "}
+          <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+            {RELAYER_OPEN_CANONICAL_LABEL}
+          </a>
+        </p>
+      )}
       {escrowUrl.notice ? (
         <p className="banner" role="status" data-testid="url-escrow-notice">
           {escrowUrl.notice}

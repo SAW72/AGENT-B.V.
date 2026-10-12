@@ -52,6 +52,11 @@ import {
   RELAYER_RECEIPT_REVERTED_TEXT,
   RELAYER_RECEIPT_UNKNOWN_TEXT,
   RELAYER_TIMEOUT_TEXT,
+  RELAYER_WAITING_SERVICE_LABEL,
+  RELAYER_WAKING_TEXT,
+  CANONICAL_WALLET_ORIGIN,
+  RELAYER_OPEN_CANONICAL_LABEL,
+  RELAYER_UNREACHABLE_TEXT,
   relayerButtonModel,
   relayerConfigFromEnv,
   relayerErrorText,
@@ -59,6 +64,7 @@ import {
   relayerTxUrl,
   relayerWalletUrl,
   runRelayerSubmission,
+  walletOriginAllowsRelayer,
   type ClaimSignArgs,
   type SignedLiveClaim,
 } from "./relayer"
@@ -1014,7 +1020,7 @@ describe("relayer health", () => {
         name: "network",
         cause: "network_or_cors",
         status: "none",
-        wakes: true,
+        wakes: false,
         run: async () => {
           const report = await readRelayerHealth({
             url: relayerUrl,
@@ -1022,14 +1028,14 @@ describe("relayer health", () => {
               throw new TypeError("Failed to fetch")
             },
           })
-          expect(relayerHealthWakes(report)).toBe(true)
+          expect(relayerHealthWakes(report)).toBe(false)
         },
       },
       {
         name: "opaque",
         cause: "network_or_cors",
         status: "none",
-        wakes: true,
+        wakes: false,
         run: async () => {
           const report = await readRelayerHealth({
             url: relayerUrl,
@@ -1043,7 +1049,7 @@ describe("relayer health", () => {
           })
           expect(report.cause).toBe("network_or_cors")
           expect(report.status).toBeUndefined()
-          expect(relayerHealthWakes(report)).toBe(true)
+          expect(relayerHealthWakes(report)).toBe(false)
         },
       },
       {
@@ -1217,10 +1223,10 @@ describe("relayer health", () => {
       { label: "html 200 mentioning submitsDisabled", wakes: true, cause: "bad_body", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => htmlResponse(200, "<html>submitsDisabled:true</html>") }) },
       { label: "404 with submitsDisabled", wakes: true, cause: "http_status", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(404, { ok: false, killSwitch: false, submitsDisabled: true }) }) },
       { label: "not ok", wakes: true, cause: "not_ok", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(200, { ok: false, killSwitch: false }) }) },
-      { label: "network", wakes: true, cause: "network_or_cors", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => { throw new TypeError("Failed to fetch") } }) },
+      { label: "network", wakes: false, cause: "network_or_cors", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => { throw new TypeError("Failed to fetch") } }) },
       {
         label: "opaque",
-        wakes: true,
+        wakes: false,
         cause: "network_or_cors",
         run: () =>
           readRelayerHealth({
@@ -1278,6 +1284,42 @@ describe("relayer health", () => {
             fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true }),
           })
           expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled string true",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: "true" }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled number 1",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: 1 }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled string 1 stays open",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: "1" }),
+          })
+          expect(report.state).toBe("ok")
           return report
         },
       },
@@ -1585,6 +1627,142 @@ describe("relayer health", () => {
     expect(calls).toHaveLength(atCap + 1)
     expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
     expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+  })
+
+  it("reports network or CORS immediately and keeps a slow recheck, with no post", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
+    let attempt = 0
+    const calls: string[] = []
+    const fetchImpl: typeof fetch = async (url, init) => {
+      attempt += 1
+      calls.push(`${init?.method ?? "GET"} ${String(url)}`)
+      if (attempt < 3) throw new TypeError("Failed to fetch")
+      return jsonResponse(200, { ok: true, killSwitch: false })
+    }
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(phases).toEqual(["unreachable"])
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+    expect(calls).toHaveLength(1)
+    expect(phases).not.toContain("waking")
+    expect(phases).not.toContain("gave_up")
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS - RELAYER_HEALTH_RETRY_MS)
+    expect(calls).toHaveLength(2)
+    expect(phases.at(-1)).toBe("unreachable")
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS)
+    await done
+    expect(phases).toEqual(["unreachable", "ok"])
+    expect(calls).toHaveLength(3)
+    expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
+    expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+  })
+
+  it("keeps starting on the live site when a cold start fails CORS, and never posts", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
+    vi.stubGlobal("window", { location: { origin: CANONICAL_WALLET_ORIGIN } })
+    try {
+      let attempt = 0
+      const calls: string[] = []
+      const fetchImpl: typeof fetch = async (url, init) => {
+        attempt += 1
+        calls.push(`${init?.method ?? "GET"} ${String(url)}`)
+        if (attempt < 3) throw new TypeError("Failed to fetch")
+        return jsonResponse(200, { ok: true, killSwitch: false })
+      }
+      const phases: string[] = []
+      const done = watchRelayerHealth({
+        url: relayerUrl,
+        fetchImpl,
+        onUpdate: (update) => phases.push(update.phase),
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(phases).toEqual(["waking"])
+      expect(phases).not.toContain("unreachable")
+      await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+      expect(calls).toHaveLength(2)
+      expect(phases.at(-1)).toBe("waking")
+      await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+      await done
+      expect(phases).toEqual(["waking", "waking", "ok"])
+      expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
+      expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("does not call the refund service from the health watch on a non-canonical origin", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://82132ae6.agent-bv.pages.dev" } })
+    try {
+      const fetchImpl = vi.fn(async () => jsonResponse(502, {}))
+      const phases: string[] = []
+      await watchRelayerHealth({
+        url: relayerUrl,
+        fetchImpl: fetchImpl as typeof fetch,
+        onUpdate: (update) => phases.push(update.phase),
+      })
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expect(phases).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("allows the live site and local dev, and refuses preview hosts", () => {
+    expect(walletOriginAllowsRelayer(CANONICAL_WALLET_ORIGIN)).toBe(true)
+    expect(walletOriginAllowsRelayer("http://localhost:5173")).toBe(true)
+    expect(walletOriginAllowsRelayer("http://127.0.0.1:5173")).toBe(true)
+    expect(walletOriginAllowsRelayer("https://localhost:4173")).toBe(true)
+    expect(walletOriginAllowsRelayer("https://82132ae6.agent-bv.pages.dev")).toBe(false)
+    expect(walletOriginAllowsRelayer("https://agent-a-wallet-ux.pages.dev")).toBe(false)
+    expect(walletOriginAllowsRelayer("https://agent-bv.pages.dev.evil.test")).toBe(false)
+    expect(walletOriginAllowsRelayer("http://localhost.evil.test")).toBe(false)
+    expect(walletOriginAllowsRelayer(null)).toBe(false)
+    expect(walletOriginAllowsRelayer("")).toBe(false)
+    expect(
+      relayerButtonModel({
+        url: relayerUrl,
+        health: "unreachable",
+        phase: "idle",
+        gate: { ok: true },
+        action: "refund",
+      }),
+    ).toMatchObject({ visible: true, disabled: true, note: RELAYER_UNREACHABLE_TEXT })
+    expect(
+      relayerButtonModel({
+        url: relayerUrl,
+        health: "waking",
+        phase: "idle",
+        gate: { ok: true },
+        action: "refund",
+      }),
+    ).toMatchObject({
+      visible: true,
+      disabled: true,
+      label: RELAYER_WAITING_SERVICE_LABEL,
+      note: RELAYER_WAKING_TEXT,
+    })
+    expect(
+      relayerButtonModel({
+        url: relayerUrl,
+        health: "gave_up",
+        phase: "idle",
+        gate: { ok: true },
+        action: "refund",
+      }),
+    ).toMatchObject({ visible: true, disabled: false, label: "Submit refund request" })
+    expect(RELAYER_OPEN_CANONICAL_LABEL).toBe("Open agent-bv.pages.dev")
+    expect(RELAYER_UNREACHABLE_TEXT).toBe(
+      "The refund service can't be reached from this page or network. Open agent-bv.pages.dev.",
+    )
   })
 })
 

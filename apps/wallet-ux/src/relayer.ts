@@ -90,9 +90,17 @@ export const RELAYER_CHECK_WALLET_LABEL = "Check the refund service wallet on Ba
 export const RELAYER_PAUSED_NOTE = "The refund service is paused. Use your wallet to submit instead."
 export const RELAYER_CHECKING_NOTE = "Checking whether the refund service is available."
 export const RELAYER_DOWN_NOTE = "The refund service is unavailable. Use your wallet to submit instead."
-export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to two minutes."
+export const RELAYER_WAITING_SERVICE_LABEL = "Waiting for refund service…"
+export const RELAYER_WAKING_TEXT =
+  "Waiting for the refund service. This check runs for up to two minutes, then slows down."
 export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
 export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
+export const CANONICAL_WALLET_ORIGIN = "https://agent-bv.pages.dev"
+export const RELAYER_OPEN_CANONICAL_LABEL = "Open agent-bv.pages.dev"
+export const RELAYER_WRONG_ORIGIN_TEXT =
+  "This page isn't the official Agent-BV address; refunds only work at agent-bv.pages.dev"
+export const RELAYER_UNREACHABLE_TEXT =
+  "The refund service can't be reached from this page or network. Open agent-bv.pages.dev."
 export const RELAYER_PANEL_TEXT = "Submit the refund request through the refund service, or send it from your wallet."
 export const RELAYER_CONNECT_NOTE = "Connect a wallet on Base Sepolia to sign this refund request."
 export const RELAYER_SERVICE_DOWN_TEXT =
@@ -106,7 +114,7 @@ export const RELAYER_RECEIPT_REVERTED_TEXT =
 
 export type RelayerPhase = "idle" | "submitting" | "confirming"
 
-export type RelayerHealth = "unknown" | "ok" | "paused" | "down" | "waking" | "gave_up"
+export type RelayerHealth = "unknown" | "ok" | "paused" | "down" | "waking" | "gave_up" | "unreachable"
 
 export type RelayerHealthCause = "http_status" | "network_or_cors" | "timeout" | "bad_body" | "not_ok"
 
@@ -120,7 +128,7 @@ export type RelayerHealthReport = {
   bodySnippet?: string
 }
 
-export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up"
+export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up" | "unreachable"
 
 export type RelayerHealthUpdate = {
   phase: RelayerHealthPhase
@@ -240,9 +248,13 @@ export const RELAYER_USER_TEXT = [
   RELAYER_PAUSED_NOTE,
   RELAYER_CHECKING_NOTE,
   RELAYER_DOWN_NOTE,
+  RELAYER_WAITING_SERVICE_LABEL,
   RELAYER_WAKING_TEXT,
   RELAYER_NO_RESPONSE_TEXT,
   RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_OPEN_CANONICAL_LABEL,
+  RELAYER_WRONG_ORIGIN_TEXT,
+  RELAYER_UNREACHABLE_TEXT,
   RELAYER_PANEL_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_CONNECT_NOTE,
@@ -254,6 +266,27 @@ export const RELAYER_USER_TEXT = [
 export function relayerConfigFromEnv(env: { VITE_CLAIM_RELAYER_URL?: string }): RelayerConfig {
   const url = String(env.VITE_CLAIM_RELAYER_URL ?? "").trim().replace(/\/$/, "")
   return { url: url.length > 0 ? url : null }
+}
+
+export function pageOrigin(): string | null {
+  if (typeof window === "undefined") return null
+  const origin = window.location?.origin
+  return typeof origin === "string" && origin.length > 0 ? origin : null
+}
+
+/** Live site, plus local Vite. Preview hosts such as https://82132ae6.agent-bv.pages.dev are not allowed. */
+export function walletOriginAllowsRelayer(origin: string | null | undefined): boolean {
+  if (!origin || origin === "null") return false
+  if (origin === CANONICAL_WALLET_ORIGIN) return true
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+  if (parsed.origin !== origin) return false
+  return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"
 }
 
 /** The relayer spends gas only after the connected wallet signs. The wallet must be on Base Sepolia. */
@@ -311,11 +344,19 @@ export function relayerButtonModel(input: {
   if (input.health === "paused") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_PAUSED_NOTE }
   }
+  if (input.health === "unreachable") {
+    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_UNREACHABLE_TEXT }
+  }
   if (input.health === "waking") {
-    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_WAKING_TEXT }
+    return {
+      visible: true,
+      disabled: true,
+      label: RELAYER_WAITING_SERVICE_LABEL,
+      note: RELAYER_WAKING_TEXT,
+    }
   }
   if (input.health === "gave_up") {
-    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_NO_RESPONSE_TEXT }
+    return { visible: true, disabled: false, label: "Submit refund request", note: RELAYER_NO_RESPONSE_TEXT }
   }
   if (input.health === "down") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_DOWN_NOTE }
@@ -770,7 +811,10 @@ function isOpaqueHealthResponse(response: Response): boolean {
 
 export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   if (report.state !== "down") return false
-  if (report.cause === "timeout" || report.cause === "network_or_cors" || report.cause === "not_ok") return true
+  // On agent-bv.pages.dev a CORS failure is how a Render cold start looks, so keep starting.
+  // On any other origin, say the service can't be reached instead of waiting.
+  if (report.cause === "network_or_cors") return pageOrigin() === CANONICAL_WALLET_ORIGIN
+  if (report.cause === "timeout" || report.cause === "not_ok") return true
   if (report.cause === "bad_body") return report.status != null
   return report.cause === "http_status" && report.status != null && httpStatusWakes(report.status)
 }
@@ -802,9 +846,13 @@ async function readHealthBody(response: Response, limit = RELAYER_HEALTH_BODY_LI
   return new TextDecoder("utf-8", { fatal: false }).decode(merged)
 }
 
+function submitsAreDisabled(value: unknown): boolean {
+  return value === true || value === 1 || value === "true"
+}
+
 function healthBlocksSubmits(json: Record<string, unknown> | null): boolean {
   if (!json) return false
-  return json.killSwitch === true || json.submitsDisabled === true
+  return json.killSwitch === true || submitsAreDisabled(json.submitsDisabled)
 }
 
 async function healthPayload(response: Response): Promise<{ contentType: string; bodySnippet: string; json: Record<string, unknown> | null }> {
@@ -890,9 +938,13 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Re-check /health until it is usable, a hard failure, or the wake cap.
- * A wake (timeout, network or CORS, any 5xx, 404, 408, 429, a non-JSON body, or JSON without ok:true)
- * retries health only. This never signs or posts a refund. After the cap, a slower background
- * re-check continues until /health is ok, submits are disabled, the kill switch is on, or the watch is cancelled.
+ * The cap starts when this watch starts. A wake (timeout, any 5xx, 404, 408, 429,
+ * a non-JSON body, or JSON without ok:true) retries health only, about every 4s, for up to
+ * two minutes, then a slower background re-check continues. On the live site, a network or
+ * CORS failure keeps that same check, because a cold start fails that way. On any other
+ * origin it is not a wake: the watch reports unreachable immediately and keeps the slower
+ * re-check. A non-canonical page does not call the refund service at all.
+ * This never signs or posts a refund. Call it again to start a fresh two-minute clock.
  */
 export async function watchRelayerHealth(input: {
   url: string
@@ -906,6 +958,7 @@ export async function watchRelayerHealth(input: {
   initial?: { report: RelayerHealthReport; loopStart: number }
   onUpdate: (update: RelayerHealthUpdate) => void
 }): Promise<void> {
+  if (typeof window !== "undefined" && !walletOriginAllowsRelayer(pageOrigin())) return
   const now = input.now ?? Date.now
   const timeoutMs = input.timeoutMs ?? RELAYER_HEALTH_TIMEOUT_MS
   const retryMs = input.retryMs ?? RELAYER_HEALTH_RETRY_MS
@@ -990,6 +1043,11 @@ export async function watchRelayerHealth(input: {
     }
     if (report.state === "paused") {
       input.onUpdate({ phase: "paused", report })
+      return
+    }
+    if (report.cause === "network_or_cors" && !relayerHealthWakes(report)) {
+      input.onUpdate({ phase: "unreachable", report })
+      backgroundRecheck()
       return
     }
     if (!relayerHealthWakes(report)) {
