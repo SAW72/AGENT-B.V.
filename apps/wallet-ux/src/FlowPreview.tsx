@@ -55,13 +55,16 @@ import {
   type CallPreview,
 } from "./preview"
 import {
+  CANONICAL_WALLET_ORIGIN,
   formatHealthReply,
   isHealthCancelled,
+  pageOrigin,
   previewSupportsRelayer,
   readRelayerHealth,
   RELAYER_CONFIRMED_TEXT,
   RELAYER_CONNECT_NOTE,
   RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_OPEN_CANONICAL_LABEL,
   RELAYER_PANEL_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_SUBMITTED_TEXT,
@@ -74,6 +77,7 @@ import {
   relayerSubmitAllowed,
   relayerTxUrl,
   runRelayerSubmission,
+  walletOriginAllowsRelayer,
   warnTerminalHealth,
   watchRelayerHealth,
   type RelayerHealth,
@@ -206,9 +210,11 @@ function SepoliaSubmit({
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
+  const [giveUpArmed, setGiveUpArmed] = useState(false)
   const relayerFlight = useRef(false)
   const healthGen = useRef(0)
   const healthAbort = useRef<AbortController | null>(null)
+  const capStartRef = useRef<number | null>(null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
   const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
@@ -221,13 +227,18 @@ function SepoliaSubmit({
   const relayerGate = relayerSubmitAllowed({ walletConnected: account.isConnected, walletChainId })
   const relayerBusy = relayerPhase !== "idle"
   const control = submitControl(decision, isPending || relayerBusy)
-  const relayerButton = relayerButtonModel({
+  const originAllowed = walletOriginAllowsRelayer(pageOrigin())
+  const relayerModel = relayerButtonModel({
     url: relayer.url,
     health: relayerHealth,
     phase: relayerPhase,
     gate: relayerGate,
     action: preview.functionName,
+    giveUpArmed,
   })
+  const relayerButton = originAllowed || !relayerModel.visible
+    ? relayerModel
+    : { visible: true as const, disabled: true, label: "Submit refund request", note: null }
 
   const applyHealthUpdate = useCallback((gen: number, update: RelayerHealthUpdate) => {
     if (healthGen.current !== gen) return
@@ -254,6 +265,12 @@ function SepoliaSubmit({
       setHealthReply(null)
       return
     }
+    if (update.phase === "unreachable") {
+      setRelayerHealth("unreachable")
+      setRelayerNotice(null)
+      setHealthReply(null)
+      return
+    }
     if (update.phase === "down") {
       setRelayerHealth("down")
       setHealthReply(update.report ? formatHealthReply(update.report) : null)
@@ -273,21 +290,27 @@ function SepoliaSubmit({
     const controller = new AbortController()
     healthAbort.current = controller
     const gen = ++healthGen.current
+    capStartRef.current = null
+    setGiveUpArmed(false)
     setRelayerHealth("unknown")
     setRelayerNotice(null)
     setHealthReply(null)
+    if (!walletOriginAllowsRelayer(pageOrigin())) return
     if (!relayer.url || !previewSupportsRelayer(preview.functionName)) return
     const url = relayer.url
     void watchRelayerHealth({
       url,
       signal: controller.signal,
+      capOrigin: () => capStartRef.current,
       onUpdate: (update) => applyHealthUpdate(gen, update),
     })
   }, [applyHealthUpdate, preview.functionName, relayer.url])
 
   useEffect(() => {
-    if (!account.isConnected) {
+    if (!account.isConnected || !walletOriginAllowsRelayer(pageOrigin())) {
       stopHealthWatch()
+      capStartRef.current = null
+      setGiveUpArmed(false)
       return
     }
     beginHealthWatch()
@@ -358,6 +381,7 @@ function SepoliaSubmit({
 
   async function onRelayer() {
     if (relayerFlight.current) return
+    if (!walletOriginAllowsRelayer(pageOrigin())) return
     setSubmitError(null)
     setCancelled(false)
     setConfirmedHash(null)
@@ -386,7 +410,14 @@ function SepoliaSubmit({
     const signer = walletClient
     const sender = account.address
     const url = relayer.url
-    if (relayerHealth !== "ok") return
+    if (relayerHealth !== "ok") {
+      // The give-up clock starts at this click. Health only — never sign or post.
+      if (relayerHealth === "waking" && capStartRef.current == null) {
+        capStartRef.current = Date.now()
+        setGiveUpArmed(true)
+      }
+      return
+    }
     relayerFlight.current = true
     const gen = healthGen.current
     const signal = healthAbort.current?.signal
@@ -395,11 +426,19 @@ function SepoliaSubmit({
       const report = await readRelayerHealth({ url, signal })
       if (healthGen.current !== gen || signal?.aborted) return
       if (report.state !== "ok") {
-        if (relayerHealthWakes(report)) {
+        if (report.cause === "network_or_cors" || relayerHealthWakes(report)) {
+          if (report.cause === "network_or_cors") {
+            capStartRef.current = null
+            setGiveUpArmed(false)
+          } else {
+            capStartRef.current = Date.now() - report.elapsedMs
+            setGiveUpArmed(true)
+          }
           void watchRelayerHealth({
             url,
             signal,
-            initial: { report, loopStart: Date.now() - report.elapsedMs },
+            initial: { report, loopStart: capStartRef.current ?? Date.now() },
+            capOrigin: () => capStartRef.current,
             onUpdate: (update) => applyHealthUpdate(gen, update),
           })
         } else {
@@ -500,9 +539,11 @@ function SepoliaSubmit({
           ? { status: "pending", hash: pendingHash, label: progress.pending, startedAt: relayerStartedAt ?? undefined }
           : confirmedHash
             ? { status: "confirmed", hash: confirmedHash, label: progress.done, resultId, resultLabel, nextHref: progress.next?.href, nextLabel: progress.next?.label }
-            : relayerHealth === "unknown"
-              ? { status: "busy", label: CHECKING_LABEL }
-              : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
+      : !originAllowed
+        ? { status: "idle", label: "Submit refund request" }
+        : relayerHealth === "unknown"
+          ? { status: "busy", label: CHECKING_LABEL }
+          : { status: "idle", label: relayerButton.visible ? relayerButton.label : "Submit refund request" }
 
   return (
     <div>
@@ -549,6 +590,20 @@ function SepoliaSubmit({
           {relayerButton.note ? (
             <p className="relayer-pending" role="status" data-testid="relayer-note">
               {relayerButton.note}
+            </p>
+          ) : null}
+          {!originAllowed ? (
+            <p className="hint" role="status" data-testid="relayer-origin-notice">
+              <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+                {RELAYER_OPEN_CANONICAL_LABEL}
+              </a>
+            </p>
+          ) : null}
+          {originAllowed && relayerHealth === "unreachable" ? (
+            <p className="hint" role="status" data-testid="relayer-unreachable-link">
+              <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+                {RELAYER_OPEN_CANONICAL_LABEL}
+              </a>
             </p>
           ) : null}
           {relayerPhase === "submitting" ? (
@@ -600,7 +655,7 @@ function SepoliaSubmit({
               {healthReply}
             </p>
           ) : null}
-          {relayerHealth === "gave_up" || relayerHealth === "down" ? (
+          {originAllowed && (relayerHealth === "gave_up" || relayerHealth === "down" || relayerHealth === "unreachable") ? (
             <button type="button" className="link-button" data-testid="relayer-health-retry" onClick={() => beginHealthWatch()}>
               {RELAYER_HEALTH_RETRY_LABEL}
             </button>

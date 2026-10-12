@@ -93,6 +93,10 @@ export const RELAYER_DOWN_NOTE = "The refund service is unavailable. Use your wa
 export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to two minutes."
 export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
 export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
+export const CANONICAL_WALLET_ORIGIN = "https://agent-bv.pages.dev"
+export const RELAYER_OPEN_CANONICAL_LABEL = "Open agent-bv.pages.dev"
+export const RELAYER_UNREACHABLE_TEXT =
+  "The refund service can't be reached from this page or network. Open agent-bv.pages.dev."
 export const RELAYER_PANEL_TEXT = "Submit the refund request through the refund service, or send it from your wallet."
 export const RELAYER_CONNECT_NOTE = "Connect a wallet on Base Sepolia to sign this refund request."
 export const RELAYER_SERVICE_DOWN_TEXT =
@@ -106,7 +110,7 @@ export const RELAYER_RECEIPT_REVERTED_TEXT =
 
 export type RelayerPhase = "idle" | "submitting" | "confirming"
 
-export type RelayerHealth = "unknown" | "ok" | "paused" | "down" | "waking" | "gave_up"
+export type RelayerHealth = "unknown" | "ok" | "paused" | "down" | "waking" | "gave_up" | "unreachable"
 
 export type RelayerHealthCause = "http_status" | "network_or_cors" | "timeout" | "bad_body" | "not_ok"
 
@@ -120,7 +124,7 @@ export type RelayerHealthReport = {
   bodySnippet?: string
 }
 
-export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up"
+export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up" | "unreachable"
 
 export type RelayerHealthUpdate = {
   phase: RelayerHealthPhase
@@ -243,6 +247,8 @@ export const RELAYER_USER_TEXT = [
   RELAYER_WAKING_TEXT,
   RELAYER_NO_RESPONSE_TEXT,
   RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_OPEN_CANONICAL_LABEL,
+  RELAYER_UNREACHABLE_TEXT,
   RELAYER_PANEL_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_CONNECT_NOTE,
@@ -254,6 +260,27 @@ export const RELAYER_USER_TEXT = [
 export function relayerConfigFromEnv(env: { VITE_CLAIM_RELAYER_URL?: string }): RelayerConfig {
   const url = String(env.VITE_CLAIM_RELAYER_URL ?? "").trim().replace(/\/$/, "")
   return { url: url.length > 0 ? url : null }
+}
+
+export function pageOrigin(): string | null {
+  if (typeof window === "undefined") return null
+  const origin = window.location?.origin
+  return typeof origin === "string" && origin.length > 0 ? origin : null
+}
+
+/** Live site, plus local Vite. Preview hosts such as https://82132ae6.agent-bv.pages.dev are not allowed. */
+export function walletOriginAllowsRelayer(origin: string | null | undefined): boolean {
+  if (!origin || origin === "null") return false
+  if (origin === CANONICAL_WALLET_ORIGIN) return true
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+  if (parsed.origin !== origin) return false
+  return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"
 }
 
 /** The relayer spends gas only after the connected wallet signs. The wallet must be on Base Sepolia. */
@@ -299,6 +326,8 @@ export function relayerButtonModel(input: {
   phase: RelayerPhase
   gate: { ok: true } | { ok: false; reason: string }
   action: string
+  /** When false, a waking service stays clickable so the refund click can start the give-up clock. */
+  giveUpArmed?: boolean
 }): RelayerButtonModel {
   if (!input.url || !previewSupportsRelayer(input.action)) return { visible: false }
   if (!input.gate.ok) return { visible: true, disabled: true, label: input.gate.reason, note: null }
@@ -311,8 +340,16 @@ export function relayerButtonModel(input: {
   if (input.health === "paused") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_PAUSED_NOTE }
   }
+  if (input.health === "unreachable") {
+    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_UNREACHABLE_TEXT }
+  }
   if (input.health === "waking") {
-    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_WAKING_TEXT }
+    return {
+      visible: true,
+      disabled: input.giveUpArmed !== false,
+      label: "Submit refund request",
+      note: RELAYER_WAKING_TEXT,
+    }
   }
   if (input.health === "gave_up") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_NO_RESPONSE_TEXT }
@@ -770,7 +807,9 @@ function isOpaqueHealthResponse(response: Response): boolean {
 
 export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   if (report.state !== "down") return false
-  if (report.cause === "timeout" || report.cause === "network_or_cors" || report.cause === "not_ok") return true
+  // Network and CORS failures are not a cold start. The page says so immediately.
+  if (report.cause === "network_or_cors") return false
+  if (report.cause === "timeout" || report.cause === "not_ok") return true
   if (report.cause === "bad_body") return report.status != null
   return report.cause === "http_status" && report.status != null && httpStatusWakes(report.status)
 }
@@ -890,9 +929,12 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Re-check /health until it is usable, a hard failure, or the wake cap.
- * A wake (timeout, network or CORS, any 5xx, 404, 408, 429, a non-JSON body, or JSON without ok:true)
- * retries health only. This never signs or posts a refund. After the cap, a slower background
- * re-check continues until /health is ok, submits are disabled, the kill switch is on, or the watch is cancelled.
+ * A wake (timeout, any 5xx, 404, 408, 429, a non-JSON body, or JSON without ok:true)
+ * retries health only. A network or CORS failure is not a wake: the watch reports
+ * unreachable and keeps a slower background re-check. This never signs or posts a refund.
+ * Pass capOrigin to start the give-up clock later. Null means the clock is not running.
+ * After the cap, a slower background re-check continues until /health is ok, submits are
+ * disabled, the kill switch is on, or the watch is cancelled.
  */
 export async function watchRelayerHealth(input: {
   url: string
@@ -904,6 +946,8 @@ export async function watchRelayerHealth(input: {
   signal?: AbortSignal
   now?: () => number
   initial?: { report: RelayerHealthReport; loopStart: number }
+  /** Omit to start the give-up clock with the watch. Return null while the clock should stay off. */
+  capOrigin?: () => number | null
   onUpdate: (update: RelayerHealthUpdate) => void
 }): Promise<void> {
   const now = input.now ?? Date.now
@@ -915,6 +959,12 @@ export async function watchRelayerHealth(input: {
   const loopStart = input.initial?.loopStart ?? now()
   let pending = input.initial ?? null
   let firstAt = input.initial?.report.firstAt
+  const capBegan = (): number | null => (input.capOrigin ? input.capOrigin() : loopStart)
+  const capReached = (extraMs = 0): boolean => {
+    const began = capBegan()
+    if (began == null) return false
+    return now() + extraMs - began >= capMs
+  }
 
   const remember = (report: RelayerHealthReport) => {
     if (!firstAt && report.firstAt) firstAt = report.firstAt
@@ -959,7 +1009,7 @@ export async function watchRelayerHealth(input: {
 
   while (true) {
     if (signal?.aborted) return
-    if (now() - loopStart >= capMs) {
+    if (capReached()) {
       giveUp(pending?.report ?? null)
       return
     }
@@ -968,7 +1018,8 @@ export async function watchRelayerHealth(input: {
       report = pending.report
       pending = null
     } else {
-      const remaining = capMs - (now() - loopStart)
+      const began = capBegan()
+      const remaining = began == null ? timeoutMs : capMs - (now() - began)
       try {
         report = await readRelayerHealth({
           url: input.url,
@@ -992,6 +1043,11 @@ export async function watchRelayerHealth(input: {
       input.onUpdate({ phase: "paused", report })
       return
     }
+    if (report.cause === "network_or_cors") {
+      input.onUpdate({ phase: "unreachable", report })
+      backgroundRecheck()
+      return
+    }
     if (!relayerHealthWakes(report)) {
       warnTerminalHealth(report)
       input.onUpdate({ phase: "down", report })
@@ -999,8 +1055,9 @@ export async function watchRelayerHealth(input: {
     }
     input.onUpdate({ phase: "waking", report })
     const wait = Math.max(0, retryMs - report.elapsedMs)
-    if (now() + wait - loopStart >= capMs) {
-      const untilCap = capMs - (now() - loopStart)
+    if (capReached(wait)) {
+      const began = capBegan()
+      const untilCap = began == null ? 0 : capMs - (now() - began)
       if (untilCap > 0) await sleepForHealth(untilCap, signal)
       if (signal?.aborted) return
       giveUp(report)
