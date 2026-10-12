@@ -15,11 +15,8 @@ import { parseExactHttpsOrigin } from "./reputation/cors.mjs";
 
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
 
-/** Exact Pages origins. The previous project stays until a live refund passes on agent-bv. */
-export const DEFAULT_REPUTATION_CORS_ORIGINS = [
-  "https://agent-bv.pages.dev",
-  "https://agent-a-wallet-ux.pages.dev",
-];
+/** Exact Pages origin. Relayer defaults allow only https://agent-bv.pages.dev. */
+export const DEFAULT_REPUTATION_CORS_ORIGINS = ["https://agent-bv.pages.dev"];
 
 /** Claim-route allowlist. Local Vite origins stay. Reputation CORS does not use this list. */
 export const DEFAULT_CORS_ORIGINS = [
@@ -354,7 +351,7 @@ function configuredEnv(env, key) {
  * Exact `https://host` origins. One trailing slash is stripped and the
  * scheme and host are lowercased before the check. No `*`, no suffix match,
  * no http, no port, no any-port localhost.
- * A blank or unset REPUTATION_CORS_ORIGINS uses both Pages origins.
+ * A blank or unset REPUTATION_CORS_ORIGINS uses https://agent-bv.pages.dev.
  * A non-blank value replaces that default. Malformed entries are dropped
  * with a warning. If every entry is invalid, no origin is allowed and the
  * process still boots. The list never falls open to allow-all.

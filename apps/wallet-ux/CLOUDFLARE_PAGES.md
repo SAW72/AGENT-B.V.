@@ -2,7 +2,7 @@
 
 The current Pages project is `agent-bv` (https://agent-bv.pages.dev). It is a Direct Upload project. It has no git connection. Cloudflare does not build it, and environment variables set in the Cloudflare dashboard are not used at build time.
 
-The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) stays live. Retire it only after a live refund passes on https://agent-bv.pages.dev. Do not delete or disable `agent-a-wallet-ux` before that. Both origins stay on the claim-relayer allowlists until then.
+The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) stays live. Retire it only after a live refund passes on https://agent-bv.pages.dev. Do not delete or disable `agent-a-wallet-ux` before that. Relayer defaults now allow only https://agent-bv.pages.dev.
 
 Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. This workflow never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet unless `VITE_CLAIM_RELAYER_URL` is set, in which case a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
 
@@ -59,7 +59,7 @@ Do not put `PRIVATE_KEY`, `RELAYER_PRIVATE_KEY`, `SPENCER_RUN_AUTH`, `LIVE_SUBMI
 
 `BASE_SEPOLIA_RPC_URL` at the repo root is for Foundry and the claim relayer. This app does not read it.
 
-`x-claim-secret` is retired with the claim API secret. When `VITE_CLAIM_RELAYER_URL` is set, the Render service must allow both Pages origins in `CORS_ORIGINS` (`https://agent-bv.pages.dev` and `https://agent-a-wallet-ux.pages.dev`, or a custom domain). The claim-relayer Blueprint example includes both. `https://agent-a-wallet-ux.pages.dev` stays on that list until a live refund passes on the new site. Live claims are Base Sepolia (chain id 84532) only. Ethereum mainnet and Base mainnet are refused before the request is sent. The page does not embed a claim secret.
+`x-claim-secret` is retired with the claim API secret. When `VITE_CLAIM_RELAYER_URL` is set, the Render service must allow https://agent-bv.pages.dev in `CORS_ORIGINS`. Relayer defaults now allow only that origin. `https://agent-a-wallet-ux.pages.dev` is refused unless the relayer env adds it. Live claims are Base Sepolia (chain id 84532) only. Ethereum mainnet and Base mainnet are refused before the request is sent. The page does not embed a claim secret.
 
 ## Local command
 
