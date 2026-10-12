@@ -73,30 +73,52 @@ export type LiveClaimResult = {
 
 export const RELAYER_FETCH_TIMEOUT_MS = 30_000
 export const RELAYER_RECEIPT_TIMEOUT_MS = 60_000
-export const RELAYER_HEALTH_TIMEOUT_MS = 5_000
+export const RELAYER_HEALTH_TIMEOUT_MS = 10_000
+export const RELAYER_HEALTH_RETRY_MS = 4_000
+export const RELAYER_HEALTH_WAKE_CAP_MS = 60_000
 
 export const RELAYER_SUBMITTING_TEXT = "Submitting the refund request…"
 export const RELAYER_WAITING_TEXT = "Waiting for confirmation…"
-export const RELAYER_SUBMITTED_TEXT = "The refund relayer submitted this transaction."
+export const RELAYER_SUBMITTED_TEXT = "The refund service submitted this transaction."
 export const RELAYER_CONFIRMED_TEXT = "The transaction is confirmed."
 export const RELAYER_TX_LINK_LABEL = "View this transaction on Base Sepolia"
-export const RELAYER_CHECK_WALLET_LABEL = "Check the relayer wallet on Base Sepolia"
-export const RELAYER_PAUSED_NOTE = "The refund relayer is paused. Use your wallet to submit instead."
-export const RELAYER_CHECKING_NOTE = "Checking whether the refund relayer is available."
-export const RELAYER_DOWN_NOTE = "The refund relayer is unavailable. Use your wallet to submit instead."
+export const RELAYER_CHECK_WALLET_LABEL = "Check the refund service wallet on Base Sepolia"
+export const RELAYER_PAUSED_NOTE = "The refund service is paused. Use your wallet to submit instead."
+export const RELAYER_CHECKING_NOTE = "Checking whether the refund service is available."
+export const RELAYER_DOWN_NOTE = "The refund service is unavailable. Use your wallet to submit instead."
+export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to a minute."
+export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
+export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
+export const RELAYER_PANEL_TEXT = "Submit the refund request through the refund service, or send it from your wallet."
 export const RELAYER_CONNECT_NOTE = "Connect a wallet on Base Sepolia to sign this refund request."
 export const RELAYER_SERVICE_DOWN_TEXT =
   "The refund service is not available right now. Nothing was sent. You can refund from your own wallet instead."
 export const RELAYER_TIMEOUT_TEXT =
-  "The refund relayer didn't answer in time. It may still have submitted this transaction. Check the relayer wallet on Base Sepolia before you try again."
+  "The refund service didn't answer in time. It may still have submitted this transaction. Check the refund service wallet on Base Sepolia before you try again."
 export const RELAYER_RECEIPT_UNKNOWN_TEXT =
-  "The refund relayer submitted this transaction, but this page could not confirm it. Check the transaction before you try again."
+  "The refund service submitted this transaction, but this page could not confirm it. Check the transaction before you try again."
 export const RELAYER_RECEIPT_REVERTED_TEXT =
   "The transaction was sent but the contract rejected it. Network fees may have been charged; no escrow funds moved."
 
 export type RelayerPhase = "idle" | "submitting" | "confirming"
 
-export type RelayerHealth = "unknown" | "ok" | "paused" | "down"
+export type RelayerHealth = "unknown" | "ok" | "paused" | "down" | "waking" | "gave_up"
+
+export type RelayerHealthCause = "http_status" | "network_or_cors" | "timeout" | "bad_body" | "not_ok"
+
+export type RelayerHealthReport = {
+  state: "ok" | "paused" | "down"
+  cause?: RelayerHealthCause
+  status?: number
+  elapsedMs: number
+}
+
+export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up"
+
+export type RelayerHealthUpdate = {
+  phase: RelayerHealthPhase
+  report: RelayerHealthReport | null
+}
 
 export type RelayerButtonModel =
   | { visible: false }
@@ -129,23 +151,23 @@ export class RelayerRequestError extends Error {
 }
 
 export const RELAYER_COULD_NOT_SUBMIT =
-  "The refund relayer couldn't submit this transaction. Nothing was sent from your wallet."
+  "The refund service couldn't submit this transaction. Nothing was sent from your wallet."
 
-export const RELAYER_UNAVAILABLE_TEXT = "The refund relayer is unavailable. Nothing was sent."
+export const RELAYER_UNAVAILABLE_TEXT = "The refund service is unavailable. Nothing was sent."
 
-const RELAYER_VALIDATION_TEXT = "The refund relayer could not accept this submission. Nothing was sent."
-const RELAYER_NOT_LIVE_TEXT = "The refund relayer isn't accepting live submissions right now. Nothing was sent."
+const RELAYER_VALIDATION_TEXT = "The refund service could not accept this submission. Nothing was sent."
+const RELAYER_NOT_LIVE_TEXT = "The refund service isn't accepting live submissions right now. Nothing was sent."
 const RELAYER_RETIRED_TEXT =
-  "The refund relayer is pointed at a retired escrow, so this was not submitted. Use your wallet instead."
+  "The refund service is pointed at a retired escrow, so this was not submitted. Use your wallet instead."
 const RELAYER_RETIRED_SENT_TEXT =
-  "The refund relayer used a retired escrow. Check the transaction before you try again."
+  "The refund service used a retired escrow. Check the transaction before you try again."
 
 const RELAYER_PLAIN: Record<string, string> = {
-  unauthorized: "The refund relayer refused this request. Nothing was sent.",
-  forbidden: "The refund relayer refused this request. Nothing was sent.",
+  unauthorized: "The refund service refused this request. Nothing was sent.",
+  forbidden: "The refund service refused this request. Nothing was sent.",
   invalid_signature: "The wallet signature was not accepted. Nothing was sent.",
-  intent_required: "The refund relayer needs a signed approval from your wallet. Nothing was sent.",
-  not_a_party: "Only the payer or the payee on this escrow can ask the relayer to submit it. Nothing was sent.",
+  intent_required: "The refund service needs a signed approval from your wallet. Nothing was sent.",
+  not_a_party: "Only the payer or the payee on this escrow can ask the refund service to submit it. Nothing was sent.",
   escrow_not_found: "That escrow is not on the escrow yet, so nothing was sent.",
   deadline_expired: "This approval has expired. Sign it again. Nothing was sent.",
   deadline_too_far: "This approval lasts too long. Nothing was sent.",
@@ -153,23 +175,23 @@ const RELAYER_PLAIN: Record<string, string> = {
   calldata_mismatch: "The prepared transaction doesn't match this action. Nothing was sent.",
   trailing_bytes: "The prepared transaction has extra data, so it was not submitted.",
   high_s: "This approval signature is not in the required form. Nothing was sent.",
-  selector_not_allowed: "This step has to be sent from your wallet, not the refund relayer.",
-  domain_mismatch: "This approval is for a different escrow than the one this relayer uses. Nothing was sent.",
-  gas_budget_exhausted: "The refund relayer has reached its daily limit. Try again later. Nothing was sent.",
-  escrow_cap: "This escrow has reached the relayer limit for now. Nothing was sent.",
+  selector_not_allowed: "This step has to be sent from your wallet, not the refund service.",
+  domain_mismatch: "This approval is for a different escrow than the one this refund service uses. Nothing was sent.",
+  gas_budget_exhausted: "The refund service has reached its daily limit. Try again later. Nothing was sent.",
+  escrow_cap: "This escrow has reached the refund service limit for now. Nothing was sent.",
   nonce_in_flight: "This approval is already being submitted. Wait for it to finish.",
   nonce_replay: "This approval was already used. Nothing was sent.",
-  relayer_key_missing: "The refund relayer is not ready to submit refunds yet. Nothing was sent.",
-  kill_switch: "The refund relayer is paused. Nothing was sent.",
+  relayer_key_missing: "The refund service is not ready to submit refunds yet. Nothing was sent.",
+  kill_switch: "The refund service is paused. Nothing was sent.",
   cors_or_network:
     "Couldn't reach the refund service. Try again in a minute. If it keeps failing, check Pending transactions before trying again.",
-  mainnet_refused: "The refund relayer only submits on the Base Sepolia network. Nothing was sent.",
-  wrong_chain: "The refund relayer only submits on the Base Sepolia network. Nothing was sent.",
-  action_not_claim: "This step has to be sent from your wallet, not the refund relayer.",
+  mainnet_refused: "The refund service only submits on the Base Sepolia network. Nothing was sent.",
+  wrong_chain: "The refund service only submits on the Base Sepolia network. Nothing was sent.",
+  action_not_claim: "This step has to be sent from your wallet, not the refund service.",
   release_not_relayable: RELEASE_NOT_RELAYABLE_TEXT,
   ruling_pending:
     "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled. Nothing was sent.",
-  invalid_relayer_url: "The refund relayer address is not valid. Nothing was sent.",
+  invalid_relayer_url: "The refund service address is not valid. Nothing was sent.",
   invalid_bytes32: "A required identifier is missing or not the right length. Nothing was sent.",
   invalid_claim_id: "The Escrow ID was not accepted. Nothing was sent.",
   invalid_address: "A required wallet address is missing. Nothing was sent.",
@@ -179,21 +201,21 @@ const RELAYER_PLAIN: Record<string, string> = {
   invalid_parties: "The payer and payee must be different wallets. Nothing was sent.",
   invalid_json: RELAYER_VALIDATION_TEXT,
   value_not_allowed: "This action cannot include a payment amount. Nothing was sent.",
-  action_required: "This step is missing the action the refund relayer needs. Nothing was sent.",
-  payload_too_large: "This submission is too large for the refund relayer. Nothing was sent.",
+  action_required: "This step is missing the action the refund service needs. Nothing was sent.",
+  payload_too_large: "This submission is too large for the refund service. Nothing was sent.",
   validation: RELAYER_VALIDATION_TEXT,
   unprocessable: RELAYER_VALIDATION_TEXT,
-  live_required: "The refund relayer only accepts a live submission. Nothing was sent.",
-  missing_tx_hash: "The refund relayer did not confirm a transaction. Nothing was shown as sent.",
-  not_found: "The refund relayer could not find that submission path. Nothing was sent.",
+  live_required: "The refund service only accepts a live submission. Nothing was sent.",
+  missing_tx_hash: "The refund service did not confirm a transaction. Nothing was shown as sent.",
+  not_found: "The refund service could not find that submission path. Nothing was sent.",
   live_submit_blocked: RELAYER_NOT_LIVE_TEXT,
-  escrow_not_booked: "The refund relayer has no escrow configured, so it will not submit. Nothing was sent.",
-  escrow_not_booked_sepolia: "The refund relayer is not pointed at the booked escrow, so it will not submit. Nothing was sent.",
+  escrow_not_booked: "The refund service has no escrow configured, so it will not submit. Nothing was sent.",
+  escrow_not_booked_sepolia: "The refund service is not pointed at the booked escrow, so it will not submit. Nothing was sent.",
   escrow_booked_spencer_run_auth_required: RELAYER_NOT_LIVE_TEXT,
   live_submit_off: RELAYER_NOT_LIVE_TEXT,
   quote_does_not_broadcast: RELAYER_NOT_LIVE_TEXT,
-  rate_limited: "The refund relayer is limiting submissions. Wait a moment and try again. Nothing was sent.",
-  too_many_requests: "The refund relayer is limiting submissions. Wait a moment and try again. Nothing was sent.",
+  rate_limited: "The refund service is limiting submissions. Wait a moment and try again. Nothing was sent.",
+  too_many_requests: "The refund service is limiting submissions. Wait a moment and try again. Nothing was sent.",
   retired_or_superseded_address: RELAYER_RETIRED_TEXT,
   timeout_unknown: RELAYER_TIMEOUT_TEXT,
 }
@@ -211,6 +233,10 @@ export const RELAYER_USER_TEXT = [
   RELAYER_PAUSED_NOTE,
   RELAYER_CHECKING_NOTE,
   RELAYER_DOWN_NOTE,
+  RELAYER_WAKING_TEXT,
+  RELAYER_NO_RESPONSE_TEXT,
+  RELAYER_HEALTH_RETRY_LABEL,
+  RELAYER_PANEL_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_CONNECT_NOTE,
   RELAYER_RECEIPT_UNKNOWN_TEXT,
@@ -237,14 +263,14 @@ export function relayerSubmitAllowed(input: {
 export function assertRelayerChain(chainId: number): void {
   if (chainId === ETHEREUM_MAINNET_CHAIN_ID || chainId === BASE_MAINNET_CHAIN_ID) {
     throw new RelayerRequestError(
-      `Chain id ${chainId} is mainnet. The refund relayer accepts Base Sepolia (${BASE_SEPOLIA_CHAIN_ID}) only.`,
+      `Chain id ${chainId} is mainnet. The refund service accepts Base Sepolia (${BASE_SEPOLIA_CHAIN_ID}) only.`,
       null,
       "mainnet_refused",
     )
   }
   if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
     throw new RelayerRequestError(
-      `Chain id ${chainId} is refused. The refund relayer accepts Base Sepolia (${BASE_SEPOLIA_CHAIN_ID}) only.`,
+      `Chain id ${chainId} is refused. The refund service accepts Base Sepolia (${BASE_SEPOLIA_CHAIN_ID}) only.`,
       null,
       "wrong_chain",
     )
@@ -278,6 +304,12 @@ export function relayerButtonModel(input: {
   if (input.health === "paused") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_PAUSED_NOTE }
   }
+  if (input.health === "waking") {
+    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_WAKING_TEXT }
+  }
+  if (input.health === "gave_up") {
+    return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_NO_RESPONSE_TEXT }
+  }
   if (input.health === "down") {
     return { visible: true, disabled: true, label: "Submit refund request", note: RELAYER_DOWN_NOTE }
   }
@@ -289,7 +321,7 @@ export function relayerButtonModel(input: {
 
 function asHex32(value: unknown, field: string): Hex {
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
-    throw new RelayerRequestError(`Refund relayer needs a bytes32 ${field}.`, null, "invalid_bytes32")
+    throw new RelayerRequestError(`Refund service needs a bytes32 ${field}.`, null, "invalid_bytes32")
   }
   return value as Hex
 }
@@ -301,7 +333,7 @@ export function claimBodyFromPreview(preview: CallPreview): LiveClaimBody {
   }
   if (!isRelayerAction(preview.functionName)) {
     throw new RelayerRequestError(
-      "This step has to be sent from your wallet, not the refund relayer.",
+      "This step has to be sent from your wallet, not the refund service.",
       null,
       "action_not_claim",
     )
@@ -353,7 +385,7 @@ function errorFromResponse(status: number, body: Record<string, unknown> | null)
   const reason = typeof body?.reason === "string" ? body.reason : ""
   if (status === 401 || error === "unauthorized") {
     return new RelayerRequestError(
-      "Refund relayer refused the refund request (401 unauthorized).",
+      "Refund service refused the refund request (401 unauthorized).",
       401,
       error === "request_failed" ? "unauthorized" : error,
       body,
@@ -361,7 +393,7 @@ function errorFromResponse(status: number, body: Record<string, unknown> | null)
   }
   if (status === 503 && error === "kill_switch") {
     return new RelayerRequestError(
-      "Refund relayer kill switch is on (503). The refund request was not broadcast.",
+      "Refund service kill switch is on (503). The refund request was not broadcast.",
       503,
       "kill_switch",
       body,
@@ -369,7 +401,7 @@ function errorFromResponse(status: number, body: Record<string, unknown> | null)
   }
   if (status === 503) {
     return new RelayerRequestError(
-      `Refund relayer is unavailable (503 ${error}). The refund request was not broadcast.`,
+      `Refund service is unavailable (503 ${error}). The refund request was not broadcast.`,
       503,
       error,
       body,
@@ -377,7 +409,7 @@ function errorFromResponse(status: number, body: Record<string, unknown> | null)
   }
   const detail = reason ? `${error} (${reason})` : error
   return new RelayerRequestError(
-    `Refund relayer rejected the refund request (${status} ${detail}).`,
+    `Refund service rejected the refund request (${status} ${detail}).`,
     status,
     codeForStatus(status, error),
     body,
@@ -500,7 +532,7 @@ export function presentRelayerError(error: unknown): ErrorPresentation {
 export function relayerErrorText(error: unknown): string {
   if (error instanceof RelayerRequestError) return error.message
   if (error instanceof Error && error.message.length > 0) return error.message
-  return "Refund relayer request failed."
+  return "Refund service request failed."
 }
 
 /**
@@ -513,20 +545,47 @@ function isAbort(error: unknown): boolean {
   return name === "AbortError" || name === "TimeoutError"
 }
 
-function fetchWithTimeout(fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+export function isHealthCancelled(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "name" in error && (error as { name: unknown }).name === "HealthCancelled")
+}
+
+function healthCancelled(): Error {
+  return Object.assign(new Error("cancelled"), { name: "HealthCancelled" })
+}
+
+function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  outer?: AbortSignal,
+): Promise<Response> {
+  if (outer?.aborted) return Promise.reject(healthCancelled())
   const controller = new AbortController()
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       controller.abort()
       reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }))
     }, timeoutMs)
+    const onOuter = () => {
+      clearTimeout(timer)
+      controller.abort()
+      reject(healthCancelled())
+    }
+    outer?.addEventListener("abort", onOuter, { once: true })
     fetchImpl(url, { ...init, signal: controller.signal }).then(
       (response) => {
         clearTimeout(timer)
+        outer?.removeEventListener("abort", onOuter)
         resolve(response)
       },
       (cause: unknown) => {
         clearTimeout(timer)
+        outer?.removeEventListener("abort", onOuter)
+        if (outer?.aborted) {
+          reject(healthCancelled())
+          return
+        }
         if (isAbort(cause) || controller.signal.aborted) {
           reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }))
           return
@@ -571,7 +630,7 @@ export async function postLiveClaim(input: {
     if (cause instanceof RelayerRequestError) throw cause
     if (isAbort(cause)) {
       throw new RelayerRequestError(
-        "The refund relayer did not answer before the page stopped waiting. The submission may still have been accepted.",
+        "The refund service did not answer before the page stopped waiting. The submission may still have been accepted.",
         null,
         "timeout_unknown",
       )
@@ -593,12 +652,12 @@ export async function postLiveClaim(input: {
   if (!response.ok) throw errorFromResponse(response.status, json)
   const txHash = json?.txHash
   if (json?.ok !== true || json.mode !== "live" || typeof txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
-    throw new RelayerRequestError("Refund relayer did not return a live transaction hash.", response.status, "missing_tx_hash")
+    throw new RelayerRequestError("Refund service did not return a live transaction hash.", response.status, "missing_tx_hash")
   }
   const escrowAddress = addressOrNull(json.escrowAddress)
   if (escrowAddress && isRetiredEscrow(escrowAddress)) {
     throw new RelayerRequestError(
-      "Refund relayer targeted a retired escrow.",
+      "Refund service targeted a retired escrow.",
       response.status,
       "retired_or_superseded_address",
       json,
@@ -607,34 +666,72 @@ export async function postLiveClaim(input: {
   return { txHash: txHash as Hex, mode: "live", escrowAddress }
 }
 
+const WAKE_HTTP_STATUSES = new Set([502, 503, 504])
+
+function warnRefundHealth(report: RelayerHealthReport): void {
+  if (!report.cause) return
+  const status = report.status == null ? "none" : String(report.status)
+  console.warn(`refund health cause=${report.cause} status=${status} elapsedMs=${report.elapsedMs}`)
+}
+
+function downHealth(started: number, cause: RelayerHealthCause, status?: number): RelayerHealthReport {
+  const report: RelayerHealthReport = {
+    state: "down",
+    cause,
+    elapsedMs: Math.max(0, Date.now() - started),
+  }
+  if (status != null) report.status = status
+  warnRefundHealth(report)
+  return report
+}
+
+function isOpaqueHealthResponse(response: Response): boolean {
+  return response.type === "opaque" || response.type === "opaqueredirect" || response.status === 0
+}
+
+export function relayerHealthWakes(report: RelayerHealthReport): boolean {
+  if (report.state !== "down") return false
+  if (report.cause === "timeout" || report.cause === "network_or_cors") return true
+  return report.cause === "http_status" && report.status != null && WAKE_HTTP_STATUSES.has(report.status)
+}
+
 export async function readRelayerHealth(input: {
   url: string
   fetchImpl?: typeof fetch
   timeoutMs?: number
-}): Promise<RelayerHealth> {
+  signal?: AbortSignal
+}): Promise<RelayerHealthReport> {
+  const started = Date.now()
+  if (input.signal?.aborted) throw healthCancelled()
   let endpoint: string
   try {
     const parsed = new URL(input.url)
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "down"
-    if (parsed.username || parsed.password) return "down"
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return downHealth(started, "bad_body")
+    if (parsed.username || parsed.password) return downHealth(started, "bad_body")
     endpoint = `${parsed.origin}/health`
   } catch {
-    return "down"
+    return downHealth(started, "bad_body")
   }
+  let response: Response
   try {
-    const response = await fetchWithTimeout(
+    response = await fetchWithTimeout(
       input.fetchImpl ?? fetch,
       endpoint,
       { method: "GET" },
       input.timeoutMs ?? RELAYER_HEALTH_TIMEOUT_MS,
+      input.signal,
     )
-    if (!response.ok) return "down"
-    const json = await readJson(response)
-    if (!json || json.ok !== true || typeof json.killSwitch !== "boolean") return "down"
-    return json.killSwitch ? "paused" : "ok"
-  } catch {
-    return "down"
+  } catch (cause) {
+    if (isHealthCancelled(cause) || input.signal?.aborted) throw healthCancelled()
+    if (isAbort(cause)) return downHealth(started, "timeout")
+    return downHealth(started, "network_or_cors")
   }
+  if (isOpaqueHealthResponse(response)) return downHealth(started, "network_or_cors")
+  if (!response.ok) return downHealth(started, "http_status", response.status)
+  const json = await readJson(response)
+  if (!json || typeof json.killSwitch !== "boolean") return downHealth(started, "bad_body", response.status)
+  if (json.ok !== true) return downHealth(started, "not_ok", response.status)
+  return { state: json.killSwitch ? "paused" : "ok", elapsedMs: Math.max(0, Date.now() - started) }
 }
 
 export async function readRelayerPaused(input: {
@@ -643,9 +740,95 @@ export async function readRelayerPaused(input: {
   timeoutMs?: number
 }): Promise<boolean | null> {
   const health = await readRelayerHealth(input)
-  if (health === "down") return null
-  if (health === "unknown") return null
-  return health === "paused"
+  if (health.state === "down") return null
+  return health.state === "paused"
+}
+
+function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted || ms <= 0) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/**
+ * Re-check /health until it is usable, a hard failure, or the wake cap.
+ * A wake (timeout, any fetch failure (network, CORS or other non-abort error), or 502/503/504) retries health only. This never signs or posts a refund.
+ */
+export async function watchRelayerHealth(input: {
+  url: string
+  fetchImpl?: typeof fetch
+  timeoutMs?: number
+  retryMs?: number
+  capMs?: number
+  signal?: AbortSignal
+  now?: () => number
+  initial?: { report: RelayerHealthReport; loopStart: number }
+  onUpdate: (update: RelayerHealthUpdate) => void
+}): Promise<void> {
+  const now = input.now ?? Date.now
+  const timeoutMs = input.timeoutMs ?? RELAYER_HEALTH_TIMEOUT_MS
+  const retryMs = input.retryMs ?? RELAYER_HEALTH_RETRY_MS
+  const capMs = input.capMs ?? RELAYER_HEALTH_WAKE_CAP_MS
+  const signal = input.signal
+  const loopStart = input.initial?.loopStart ?? now()
+  let pending = input.initial ?? null
+  while (true) {
+    if (signal?.aborted) return
+    if (now() - loopStart >= capMs) {
+      input.onUpdate({ phase: "gave_up", report: pending?.report ?? null })
+      return
+    }
+    let report: RelayerHealthReport
+    if (pending) {
+      report = pending.report
+      pending = null
+    } else {
+      const remaining = capMs - (now() - loopStart)
+      try {
+        report = await readRelayerHealth({
+          url: input.url,
+          fetchImpl: input.fetchImpl,
+          timeoutMs: Math.min(timeoutMs, Math.max(1, remaining)),
+          signal,
+        })
+      } catch (cause) {
+        if (isHealthCancelled(cause) || signal?.aborted) return
+        throw cause
+      }
+      if (signal?.aborted) return
+    }
+    if (report.state === "ok") {
+      input.onUpdate({ phase: "ok", report })
+      return
+    }
+    if (report.state === "paused") {
+      input.onUpdate({ phase: "paused", report })
+      return
+    }
+    if (!relayerHealthWakes(report)) {
+      input.onUpdate({ phase: "down", report })
+      return
+    }
+    input.onUpdate({ phase: "waking", report })
+    const wait = Math.max(0, retryMs - report.elapsedMs)
+    if (now() + wait - loopStart >= capMs) {
+      const untilCap = capMs - (now() - loopStart)
+      if (untilCap > 0) await sleepForHealth(untilCap, signal)
+      if (signal?.aborted) return
+      input.onUpdate({ phase: "gave_up", report })
+      return
+    }
+    if (wait > 0) await sleepForHealth(wait, signal)
+  }
 }
 
 export type RelayerReceiptClient = {
@@ -748,7 +931,7 @@ function actionFromSignedIndex(index: number): RelayerAction {
   }
   if (index === CLAIM_INTENT_ACTION_VALUES.refund) return "refund"
   throw new RelayerRequestError(
-    "This step has to be sent from your wallet, not the refund relayer.",
+    "This step has to be sent from your wallet, not the refund service.",
     null,
     "action_not_claim",
   )

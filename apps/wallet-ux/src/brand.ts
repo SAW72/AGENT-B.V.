@@ -18,7 +18,7 @@ export const WALLET_SIGNED_TEST_LINE =
 export const OPERATOR_LINE = `${DISPLAY_NAME} is a product of Steward of the King LLC, an Ohio (USA) limited liability company.`
 
 const CLAIM_SIGNING_LINE =
-  "To send a refund through the relayer, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The relayer can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately."
+  "To send a refund through the refund service, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The refund service can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately."
 
 export const DISCLAIMER_LINE = `Experimental testnet tool. Not a certification, safety guarantee, or insurance product. Ethereum mainnet and Base mainnet are refused. ${CLAIM_SIGNING_LINE}`
 

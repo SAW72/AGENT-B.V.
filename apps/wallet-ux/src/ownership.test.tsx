@@ -191,7 +191,7 @@ describe("footer", () => {
       "Agent-BV (Agent Bot Verifier) is a product of Steward of the King LLC, an Ohio (USA) limited liability company.",
     )
     expect(PAGE_FOOTER).toBe(
-      "Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. To send a refund through the relayer, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The relayer can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately.",
+      "Experimental Base Sepolia view. Not a certification or an insurance product. Escrow and dispute calls can be submitted from a connected Base Sepolia wallet. Ethereum mainnet and Base mainnet are refused. To send a refund through the refund service, your wallet signs a typed (EIP-712) request for one escrow. The signature is not a transaction. The refund service can only submit the refund call that request names, sends it from its own wallet, and pays the gas. That refund settles the escrow and credits the escrowed amount to the payer, who withdraws it separately.",
     )
     expect(PAGE_FOOTER).not.toContain(OLD_FOOTER)
     expect(PAGE_FOOTER).not.toContain(MISLEADING_SIGNING)
