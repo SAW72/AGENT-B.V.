@@ -19,7 +19,7 @@ npm test
 npm run build
 ```
 
-`src/base-sepolia.json` is the address book this app bundles. `npm run dev` and `npm run build` refresh it from `deployments/base-sepolia.json` when that file is visible. Run `npm run sync-book` and commit `src/base-sepolia.json` after a book change. Publishing notes: [`CLOUDFLARE_PAGES.md`](CLOUDFLARE_PAGES.md). The current Pages project is `agent-bv` (https://agent-bv.pages.dev). https://agent-a-wallet-ux.pages.dev stays live until a live refund passes on the new site. Neither project is created from this repo.
+`src/base-sepolia.json` is the address book this app bundles. `npm run dev` and `npm run build` refresh it from `deployments/base-sepolia.json` when that file is visible. Run `npm run sync-book` and commit `src/base-sepolia.json` after a book change. Publishing notes: [`CLOUDFLARE_PAGES.md`](CLOUDFLARE_PAGES.md). The current Pages project is `agent-bv` (https://agent-bv.pages.dev). The old project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. `agent-bv` is not created from this repo.
 
 Optional live read (hits the public Base Sepolia RPC):
 

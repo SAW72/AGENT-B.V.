@@ -4,7 +4,7 @@ Spencer runs every step below, in the order printed. That order is 0 through 5, 
 
 PR #46 squash-merged as `a66ef6439dec6fd2e5ad49d53fa4ce98d373d787`, from `05fe6fa77f2b1380d148d289b4ba45ced68625e3`. That SHA is the relayer commit for this runbook. The tip of `main` moves, so read it with `git rev-parse origin/main`. `cfac34a` is the calldata-binding commit under that PR head (`fix(relayer): bind claim calldata and drop unsafe relay actions`). It is not a rebase marker, and it is not the tip of `main`. Step 0 stops the process that is running now. That process can still be the pre-merge build (`da47d9a12d64cd4bea4b6fce0b2166b4c55a0427`) until Render deploys `a66ef64`.
 
-The Render service is `bot-verifier-claim-relayer`. Copy the hostname from the dashboard. The example below is `https://bot-verifier-claim-relayer.onrender.com`. Wallet UX's current Cloudflare Pages project is `agent-bv` (`https://agent-bv.pages.dev`). `agent-a-wallet-ux` (`https://agent-a-wallet-ux.pages.dev`) stays live until a live refund passes on the new site. Do not delete or disable the old project before that. Both projects are Direct Upload. They have no git connection, and Cloudflare does not build them.
+The Render service is `bot-verifier-claim-relayer`. Copy the hostname from the dashboard. The example below is `https://bot-verifier-claim-relayer.onrender.com`. Wallet UX's current Cloudflare Pages project is `agent-bv` (`https://agent-bv.pages.dev`). The old project `agent-a-wallet-ux` (`https://agent-a-wallet-ux.pages.dev`) is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931. `agent-bv` is Direct Upload. It has no git connection, and Cloudflare does not build it.
 
 Set this once. Later commands use `$BASE`. Do not set it again.
 
@@ -86,7 +86,7 @@ gh variable delete VITE_CLAIM_API_SECRET --repo SAW72/AGENT-B.V.
 gh variable delete VITE_CLAIM_API_SECRET --repo SAW72/AGENT-B.V. --env production
 ```
 
-Cloudflare dashboard → Workers & Pages → `agent-bv` and `agent-a-wallet-ux` → Settings → Environment variables. Delete `VITE_CLAIM_API_SECRET` under Production and under Preview on each project, whether the row is plain or encrypted. Those rows are not read at build time. They still have to be gone. Leave the `agent-a-wallet-ux` project itself in place until a live refund passes on https://agent-bv.pages.dev.
+Cloudflare dashboard → Workers & Pages → `agent-bv` → Settings → Environment variables. Delete `VITE_CLAIM_API_SECRET` under Production and under Preview, whether the row is plain or encrypted. Those rows are not read at build time. They still have to be gone. The old project `agent-a-wallet-ux` is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931.
 
 If you use Wrangler for an encrypted secret, from a machine that is already logged in:
 
@@ -101,7 +101,7 @@ Then look at both Production and Preview in the dashboard again.
 
 ## 2. Merge #46 first, then publish Pages from that same commit
 
-`agent-bv` and `agent-a-wallet-ux` are Direct Upload. Cloudflare does not build either from git. Do not look for a Pages git production branch or a Pages build command. New publishes go to `agent-bv`. The old project stays up until a live refund passes on https://agent-bv.pages.dev.
+`agent-bv` is Direct Upload. Cloudflare does not build it from git. Do not look for a Pages git production branch or a Pages build command. New publishes go to `agent-bv`. The old project `agent-a-wallet-ux` is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931.
 
 `claim-relayer/render.yaml` does not set `autoDeploy`. The file is a reference Blueprint under `claim-relayer/`, not `render.yaml` at the repo root, so merging does not change the running service's auto-deploy setting. Render's Blueprint default, if this file were applied, is auto-deploy on when the key is omitted. That default is not what controls the service that already exists. Check the dashboard: `bot-verifier-claim-relayer` → Settings → Build & Deploy → Auto-Deploy.
 
@@ -233,7 +233,7 @@ ENDJS
 
 `grep -REc` and `grep -REic` print one line per file, `path:N`. `N` is how many lines in that file matched. It is not a line number. `dist/assets/index-xxxx.js:0` means no matching line in that file. The dist check is one `( ... )` subshell and it ends with `) && :`. `exit` stays inside the subshell. A failure prints `MISSING DIST`, `NO JS`, `EMPTY JS`, or `LEAK`, leaves `$?` at 1, and does not close a shell with `set -e`. The next command still runs. `:` runs only when the subshell exits 0. Do not add `&& :` to the step 2.4 gate. That gate keeps the subshell's bare exit 1 on `SKIP`, so `gate && publish` stays blocked. `set +e` is the first command inside the dist subshell, so the message is printed before that status is returned. The subshell pipes each result through `grep -v ':0$'`, so only nonzero hits print. Any printed hit is a failure: the subshell prints that `path:N` line and then `LEAK`, and it exits nonzero. A clean tree that contains at least one `.js` file with a real payload prints nothing and that subshell exits 0. A leading UTF-8 BOM is not a payload. A missing `dist` prints `MISSING DIST` and exits nonzero. It does not print `LEAK`. An empty `dist`, or a `dist` with no `.js` files, prints `NO JS` and exits nonzero. A `dist` whose every `.js` file is 0 bytes, only whitespace, or only a UTF-8 BOM prints `EMPTY JS` and exits nonzero. It does not print `LEAK`. That BOM rule matches `apps/wallet-ux/scripts/verify-served-bundle.mjs` on #53: strip one leading UTF-8 BOM, then a body with no remaining payload is empty. A grep error (exit status 2) is `MISSING DIST`, not `LEAK`. Do not drop `-c`. Do not add `-o` or `-n`. Do not deploy if anything prints. #41 merged into `main` as `10d021323bd9faa75481a9692625c9ba43ba9aad`. `node scripts/guard-claim-secret.mjs dist` replaces these greps. Run it from `apps/wallet-ux`. The publish commit is still the `HEAD` the gate above accepted, not `10d021323bd9faa75481a9692625c9ba43ba9aad`.
 
-Publish to `agent-bv`. Do not point this command at `agent-a-wallet-ux`, and do not delete that project. It stays live until a live refund passes on https://agent-bv.pages.dev.
+Publish to `agent-bv`. Do not point this command at `agent-a-wallet-ux`. The old project is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931.
 
 ```bash
 npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<pages-main-sha> --commit-dirty=false
@@ -396,7 +396,7 @@ Do not send a live claim in this step, and do not set `KILL_SWITCH` to `0` here.
 
 The CORS check does not depend on the gate. On #46, `access-control-allow-headers` is `content-type,x-admin-secret,authorization`. It does not list `x-claim-secret`.
 
-Run this preflight for the current site. Relayer defaults now allow only https://agent-bv.pages.dev. A repeat with `origin: https://agent-a-wallet-ux.pages.dev` gets no `Access-Control-Allow-Origin` unless the relayer env adds that origin. The old Pages project stays live until a live refund passes on the new site.
+Run this preflight for the current site. Relayer defaults now allow only https://agent-bv.pages.dev. A repeat with `origin: https://agent-a-wallet-ux.pages.dev` gets no `Access-Control-Allow-Origin` unless the relayer env adds that origin. The old Pages project is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931.
 
 ```bash
 curl -sS -D - -o /dev/null -X OPTIONS "$BASE/v1/claims" \
@@ -409,7 +409,7 @@ Do not send `access-control-request-headers` that include a secret value. The he
 
 ## 3. Purge deployments that still serve index-CkV_YTRw.js
 
-This purge ran against `agent-a-wallet-ux`, which is the project that served that bundle. The project stays live. Do not reuse these deletes to remove `agent-a-wallet-ux` or to touch `agent-bv`. Retire the old project only after a live refund passes on https://agent-bv.pages.dev.
+This purge ran against `agent-a-wallet-ux`, which is the project that served that bundle. The old project is retired. Spencer approved that on Oct 12 at 6:49 PM ET, and the Pages project is being deleted. Do not reuse these deletes to touch `agent-bv`. The retire condition was met: a live refund passed on https://agent-bv.pages.dev at 4:49 PM ET on Oct 12, tx `0x794a3b2258a3a0ff044bfaf2373d8ec8ed24408f7edfcdd5d861dc1368bd5e7d`, Base Sepolia block 48034931.
 
 Dashboard → Workers & Pages → `agent-a-wallet-ux` → Deployments. Each row has a branch and a URL of the form `https://<deployment-id>.agent-a-wallet-ux.pages.dev`. Production also answers at `https://agent-a-wallet-ux.pages.dev`.
 
