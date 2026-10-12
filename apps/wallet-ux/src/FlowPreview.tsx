@@ -66,6 +66,7 @@ import {
   RELAYER_HEALTH_RETRY_LABEL,
   RELAYER_OPEN_CANONICAL_LABEL,
   RELAYER_PANEL_TEXT,
+  RELAYER_WRONG_ORIGIN_TEXT,
   RELAYER_SERVICE_DOWN_TEXT,
   RELAYER_SUBMITTED_TEXT,
   RELAYER_SUBMITTING_TEXT,
@@ -210,11 +211,9 @@ function SepoliaSubmit({
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
-  const [giveUpArmed, setGiveUpArmed] = useState(false)
   const relayerFlight = useRef(false)
   const healthGen = useRef(0)
   const healthAbort = useRef<AbortController | null>(null)
-  const capStartRef = useRef<number | null>(null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
   const waiting = signing || (isPending && !receipt.holdLock && receipt.phase !== "confirmed")
@@ -234,7 +233,6 @@ function SepoliaSubmit({
     phase: relayerPhase,
     gate: relayerGate,
     action: preview.functionName,
-    giveUpArmed,
   })
   const relayerButton = originAllowed || !relayerModel.visible
     ? relayerModel
@@ -290,8 +288,6 @@ function SepoliaSubmit({
     const controller = new AbortController()
     healthAbort.current = controller
     const gen = ++healthGen.current
-    capStartRef.current = null
-    setGiveUpArmed(false)
     setRelayerHealth("unknown")
     setRelayerNotice(null)
     setHealthReply(null)
@@ -301,7 +297,6 @@ function SepoliaSubmit({
     void watchRelayerHealth({
       url,
       signal: controller.signal,
-      capOrigin: () => capStartRef.current,
       onUpdate: (update) => applyHealthUpdate(gen, update),
     })
   }, [applyHealthUpdate, preview.functionName, relayer.url])
@@ -309,8 +304,6 @@ function SepoliaSubmit({
   useEffect(() => {
     if (!account.isConnected || !walletOriginAllowsRelayer(pageOrigin())) {
       stopHealthWatch()
-      capStartRef.current = null
-      setGiveUpArmed(false)
       return
     }
     beginHealthWatch()
@@ -411,11 +404,9 @@ function SepoliaSubmit({
     const sender = account.address
     const url = relayer.url
     if (relayerHealth !== "ok") {
-      // The give-up clock starts at this click. Health only — never sign or post.
-      if (relayerHealth === "waking" && capStartRef.current == null) {
-        capStartRef.current = Date.now()
-        setGiveUpArmed(true)
-      }
+      // Health only. After the two-minute cap, this click starts a fresh one.
+      // A click while the check is already running does not restart it or send anything.
+      if (relayerHealth === "gave_up") beginHealthWatch()
       return
     }
     relayerFlight.current = true
@@ -427,18 +418,10 @@ function SepoliaSubmit({
       if (healthGen.current !== gen || signal?.aborted) return
       if (report.state !== "ok") {
         if (report.cause === "network_or_cors" || relayerHealthWakes(report)) {
-          if (report.cause === "network_or_cors") {
-            capStartRef.current = null
-            setGiveUpArmed(false)
-          } else {
-            capStartRef.current = Date.now() - report.elapsedMs
-            setGiveUpArmed(true)
-          }
           void watchRelayerHealth({
             url,
             signal,
-            initial: { report, loopStart: capStartRef.current ?? Date.now() },
-            capOrigin: () => capStartRef.current,
+            initial: { report, loopStart: Date.now() - report.elapsedMs },
             onUpdate: (update) => applyHealthUpdate(gen, update),
           })
         } else {
@@ -590,13 +573,6 @@ function SepoliaSubmit({
           {relayerButton.note ? (
             <p className="relayer-pending" role="status" data-testid="relayer-note">
               {relayerButton.note}
-            </p>
-          ) : null}
-          {!originAllowed ? (
-            <p className="hint" role="status" data-testid="relayer-origin-notice">
-              <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
-                {RELAYER_OPEN_CANONICAL_LABEL}
-              </a>
             </p>
           ) : null}
           {originAllowed && relayerHealth === "unreachable" ? (
@@ -857,8 +833,18 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
     VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL,
   }).url != null
 
+  const originAllowed = walletOriginAllowsRelayer(pageOrigin())
+
   return (
     <div>
+      {originAllowed ? null : (
+        <p className="banner" role="status" data-testid="relayer-origin-notice">
+          {RELAYER_WRONG_ORIGIN_TEXT}{" "}
+          <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+            {RELAYER_OPEN_CANONICAL_LABEL}
+          </a>
+        </p>
+      )}
       {escrowUrl.notice ? (
         <p className="banner" role="status" data-testid="url-escrow-notice">
           {escrowUrl.notice}

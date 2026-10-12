@@ -19,7 +19,9 @@ import {
   RELAYER_OPEN_CANONICAL_LABEL,
   RELAYER_PAUSED_NOTE,
   RELAYER_UNREACHABLE_TEXT,
+  RELAYER_WAITING_SERVICE_LABEL,
   RELAYER_WAKING_TEXT,
+  RELAYER_WRONG_ORIGIN_TEXT,
 } from "./relayer"
 import { resetSubmitLock } from "./submitLock"
 
@@ -189,8 +191,14 @@ async function clickRefund(scope = refundSection()) {
 }
 
 describe("refund service health", () => {
-  it("pins the starting sentence, the no-response sentence, and the unchanged unavailable note", () => {
-    expect(RELAYER_WAKING_TEXT).toBe("Starting the refund service… This can take up to two minutes.")
+  it("pins the waiting sentence, the no-response sentence, and the unchanged unavailable note", () => {
+    expect(RELAYER_WAITING_SERVICE_LABEL).toBe("Waiting for refund service…")
+    expect(RELAYER_WAKING_TEXT).toBe(
+      "Waiting for the refund service. This check runs for up to two minutes, then slows down.",
+    )
+    expect(RELAYER_WRONG_ORIGIN_TEXT).toBe(
+      "This page isn't the official Agent-BV address; refunds only work at agent-bv.pages.dev",
+    )
     expect(RELAYER_NO_RESPONSE_TEXT).toBe(
       "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet.",
     )
@@ -258,7 +266,7 @@ describe("refund service health", () => {
     expect((refund.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it("shows Starting through a cold start longer than 8s, then enables with no post", async () => {
+  it("shows Waiting for refund service through a cold start longer than 8s, then enables with no post", async () => {
     steps = ["hang", "hold"]
     render(<FlowPreview escrow={escrow} panel={panel} />)
     const refund = refundSection()
@@ -269,7 +277,9 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
     await flush(RELAYER_HEALTH_TIMEOUT_MS - 8_000)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    const waking = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    expect(waking.disabled).toBe(true)
+    expect(waking.textContent).toBe(RELAYER_WAITING_SERVICE_LABEL)
     expect((refund.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
     await clickRefund(refund)
     expect(counts.post).toBe(0)
@@ -345,10 +355,13 @@ describe("refund service health", () => {
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    const waking = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    expect(waking.disabled).toBe(true)
+    expect(waking.textContent).toBe(RELAYER_WAITING_SERVICE_LABEL)
     await clickRefund(refund)
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
+    expect(counts.health).toBe(1)
     const afterFirst = counts.health
     await flush(RELAYER_HEALTH_RETRY_MS - 1)
     expect(counts.health).toBe(afterFirst)
@@ -456,14 +469,10 @@ describe("refund service health", () => {
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
-    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    expect(counts.post).toBe(0)
-    await clickRefund(refund)
-    expect(counts.post).toBe(0)
-    expect(signCalls.n).toBe(0)
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).textContent).toBe(RELAYER_WAITING_SERVICE_LABEL)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(counts.health).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
   })
@@ -500,11 +509,10 @@ describe("refund service health", () => {
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    await clickRefund(refund)
     expect(counts.post).toBe(0)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
-    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
     const atCap = counts.health
     expect(atCap).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
     await flush(RELAYER_HEALTH_BACKGROUND_MS)
@@ -526,7 +534,6 @@ describe("refund service health", () => {
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    await clickRefund(refund)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     const atCap = counts.health
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
@@ -545,7 +552,6 @@ describe("refund service health", () => {
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    await clickRefund(refund)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     const atCap = counts.health
     harness.connected = false
@@ -561,7 +567,6 @@ describe("refund service health", () => {
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    await clickRefund(refund)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     const atCap = counts.health
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
@@ -576,17 +581,21 @@ describe("refund service health", () => {
     expect(signCalls.n).toBe(0)
   })
 
-  it("shows Open agent-bv.pages.dev immediately on a preview origin", async () => {
+  it("explains a preview origin on load, before Prepare, and does not start the health wait", async () => {
     setPageOrigin("https://82132ae6.agent-bv.pages.dev")
     steps = Array.from({ length: 40 }, () => "502" as const)
     render(<FlowPreview escrow={escrow} panel={panel} />)
+    const notice = document.querySelector("[data-testid='relayer-origin-notice']")
+    expect(notice?.textContent).toContain(RELAYER_WRONG_ORIGIN_TEXT)
+    const link = notice?.querySelector("a")
+    expect(link?.textContent).toBe(RELAYER_OPEN_CANONICAL_LABEL)
+    expect(link?.getAttribute("href")).toBe(CANONICAL_WALLET_ORIGIN)
+    expect(counts.health).toBe(0)
     const refund = refundSection()
+    expect(refund.queryByTestId("relayer-submit")).toBeNull()
+    expect(refund.queryByTestId("relayer-origin-notice")).toBeNull()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    const link = refund.getByTestId("relayer-canonical-link")
-    expect(refund.getByTestId("relayer-origin-notice").textContent).toBe(RELAYER_OPEN_CANONICAL_LABEL)
-    expect(link.textContent).toBe("Open agent-bv.pages.dev")
-    expect(link.getAttribute("href")).toBe("https://agent-bv.pages.dev")
     expect(refund.queryByText(RELAYER_WAKING_TEXT)).toBeNull()
     expect(refund.queryByText(RELAYER_CHECKING_NOTE)).toBeNull()
     expect(refund.queryByText(RELAYER_NO_RESPONSE_TEXT)).toBeNull()
@@ -595,7 +604,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
-    expect(refund.getByTestId("relayer-origin-notice").textContent).toBe(RELAYER_OPEN_CANONICAL_LABEL)
+    expect(document.querySelector("[data-testid='relayer-origin-notice']")?.textContent).toContain(RELAYER_WRONG_ORIGIN_TEXT)
     expect(counts.health).toBe(0)
     expect(counts.post).toBe(0)
     await clickRefund(refund)
@@ -604,39 +613,64 @@ describe("refund service health", () => {
     expect(signCalls.n).toBe(0)
   })
 
-  it("starts the 120s clock at the refund click after a long idle since connect", async () => {
+  it("caps health checks from Prepare when nobody clicks, and Try again stays capped", async () => {
+    const tenMinutes = 10 * 60 * 1000
+    const fast = Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS)
+    const cappedGets = (windowMs: number) =>
+      fast + Math.floor((windowMs - RELAYER_HEALTH_WAKE_CAP_MS) / RELAYER_HEALTH_BACKGROUND_MS)
     steps = Array.from({ length: 400 }, () => "502" as const)
     render(<FlowPreview escrow={escrow} panel={panel} />)
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
+    const waiting = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    expect(waiting.disabled).toBe(true)
+    expect(waiting.textContent).toBe(RELAYER_WAITING_SERVICE_LABEL)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    await flush(10 * 60 * 1000)
-    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    expect(refund.queryByText(RELAYER_NO_RESPONSE_TEXT)).toBeNull()
+    expect(counts.post).toBe(0)
+
+    await flush(tenMinutes)
+    expect(counts.health).toBe(cappedGets(tenMinutes))
+    expect(counts.health).toBeLessThan(1 + Math.floor(tenMinutes / RELAYER_HEALTH_RETRY_MS))
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
+
     const beforeClick = counts.health
     await clickRefund(refund)
-    expect(counts.health).toBe(beforeClick)
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
+    expect(counts.health).toBe(beforeClick + 1)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS - 1_000)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
     expect(counts.post).toBe(0)
     await flush(1_000)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(counts.health - beforeClick).toBe(fast)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+
+    const beforeRetry = counts.health
+    fireEvent.click(refund.getByTestId("relayer-health-retry"))
+    await flush(0)
+    expect(counts.health).toBe(beforeRetry + 1)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    await flush(tenMinutes)
+    expect(counts.health - beforeRetry).toBe(cappedGets(tenMinutes))
+    expect(counts.health - beforeRetry).toBeLessThan(1 + Math.floor(tenMinutes / RELAYER_HEALTH_RETRY_MS))
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
   })
 
-  it("Try again after give-up rechecks health and never posts on its own", async () => {
+  it("Try again after give-up rechecks health, caps again, and never posts on its own", async () => {
     steps = Array.from({ length: 80 }, () => "502" as const)
     render(<FlowPreview escrow={escrow} panel={panel} />)
     const refund = refundSection()
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
-    await clickRefund(refund)
     expect(counts.post).toBe(0)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
@@ -650,10 +684,9 @@ describe("refund service health", () => {
     expect(signCalls.n).toBe(0)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
-    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
-    expect(refund.queryByText(RELAYER_NO_RESPONSE_TEXT)).toBeNull()
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
-    expect(refund.queryByTestId("relayer-health-retry")).toBeNull()
+    expect(refund.getByTestId("relayer-health-retry").textContent).toBe(RELAYER_HEALTH_RETRY_LABEL)
   })
 })

@@ -52,6 +52,7 @@ import {
   RELAYER_RECEIPT_REVERTED_TEXT,
   RELAYER_RECEIPT_UNKNOWN_TEXT,
   RELAYER_TIMEOUT_TEXT,
+  RELAYER_WAITING_SERVICE_LABEL,
   RELAYER_WAKING_TEXT,
   CANONICAL_WALLET_ORIGIN,
   RELAYER_OPEN_CANONICAL_LABEL,
@@ -1627,38 +1628,6 @@ describe("relayer health", () => {
     expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
   })
 
-  it("keeps the give-up clock off until capOrigin is set, then stops 120s later, with no post", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
-    let capStart: number | null = null
-    const calls: string[] = []
-    const fetchImpl: typeof fetch = async (url, init) => {
-      calls.push(`${init?.method ?? "GET"} ${String(url)}`)
-      return jsonResponse(502, {})
-    }
-    const phases: string[] = []
-    const done = watchRelayerHealth({
-      url: relayerUrl,
-      fetchImpl,
-      capOrigin: () => capStart,
-      onUpdate: (update) => phases.push(update.phase),
-    })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(phases.at(-1)).toBe("waking")
-    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_WAKE_CAP_MS + 60_000)
-    expect(phases.every((phase) => phase === "waking")).toBe(true)
-    expect(phases).not.toContain("gave_up")
-    capStart = Date.now()
-    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_WAKE_CAP_MS - 1)
-    expect(phases).not.toContain("gave_up")
-    await vi.advanceTimersByTimeAsync(1)
-    await done
-    expect(phases.at(-1)).toBe("gave_up")
-    expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
-    expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
-    expect(RELAYER_HEALTH_WAKE_CAP_MS).toBe(120_000)
-  })
-
   it("allows the live site and local dev, and refuses preview hosts", () => {
     expect(walletOriginAllowsRelayer(CANONICAL_WALLET_ORIGIN)).toBe(true)
     expect(walletOriginAllowsRelayer("http://localhost:5173")).toBe(true)
@@ -1686,9 +1655,22 @@ describe("relayer health", () => {
         phase: "idle",
         gate: { ok: true },
         action: "refund",
-        giveUpArmed: false,
       }),
-    ).toMatchObject({ visible: true, disabled: false, note: RELAYER_WAKING_TEXT })
+    ).toMatchObject({
+      visible: true,
+      disabled: true,
+      label: RELAYER_WAITING_SERVICE_LABEL,
+      note: RELAYER_WAKING_TEXT,
+    })
+    expect(
+      relayerButtonModel({
+        url: relayerUrl,
+        health: "gave_up",
+        phase: "idle",
+        gate: { ok: true },
+        action: "refund",
+      }),
+    ).toMatchObject({ visible: true, disabled: false, label: "Submit refund request" })
     expect(RELAYER_OPEN_CANONICAL_LABEL).toBe("Open agent-bv.pages.dev")
     expect(RELAYER_UNREACHABLE_TEXT).toBe(
       "The refund service can't be reached from this page or network. Open agent-bv.pages.dev.",
