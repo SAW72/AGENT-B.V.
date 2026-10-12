@@ -811,8 +811,9 @@ function isOpaqueHealthResponse(response: Response): boolean {
 
 export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   if (report.state !== "down") return false
-  // Network and CORS failures are not a cold start. The page says so immediately.
-  if (report.cause === "network_or_cors") return false
+  // On agent-bv.pages.dev a CORS failure is how a Render cold start looks, so keep starting.
+  // On any other origin, say the service can't be reached instead of waiting.
+  if (report.cause === "network_or_cors") return pageOrigin() === CANONICAL_WALLET_ORIGIN
   if (report.cause === "timeout" || report.cause === "not_ok") return true
   if (report.cause === "bad_body") return report.status != null
   return report.cause === "http_status" && report.status != null && httpStatusWakes(report.status)
@@ -845,9 +846,13 @@ async function readHealthBody(response: Response, limit = RELAYER_HEALTH_BODY_LI
   return new TextDecoder("utf-8", { fatal: false }).decode(merged)
 }
 
+function submitsAreDisabled(value: unknown): boolean {
+  return value === true || value === 1 || value === "true"
+}
+
 function healthBlocksSubmits(json: Record<string, unknown> | null): boolean {
   if (!json) return false
-  return json.killSwitch === true || json.submitsDisabled === true
+  return json.killSwitch === true || submitsAreDisabled(json.submitsDisabled)
 }
 
 async function healthPayload(response: Response): Promise<{ contentType: string; bodySnippet: string; json: Record<string, unknown> | null }> {
@@ -935,8 +940,10 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
  * Re-check /health until it is usable, a hard failure, or the wake cap.
  * The cap starts when this watch starts. A wake (timeout, any 5xx, 404, 408, 429,
  * a non-JSON body, or JSON without ok:true) retries health only, about every 4s, for up to
- * two minutes, then a slower background re-check continues. A network or CORS failure is
- * not a wake: the watch reports unreachable immediately and keeps that slower re-check.
+ * two minutes, then a slower background re-check continues. On the live site, a network or
+ * CORS failure keeps that same check, because a cold start fails that way. On any other
+ * origin it is not a wake: the watch reports unreachable immediately and keeps the slower
+ * re-check. A non-canonical page does not call the refund service at all.
  * This never signs or posts a refund. Call it again to start a fresh two-minute clock.
  */
 export async function watchRelayerHealth(input: {
@@ -951,6 +958,7 @@ export async function watchRelayerHealth(input: {
   initial?: { report: RelayerHealthReport; loopStart: number }
   onUpdate: (update: RelayerHealthUpdate) => void
 }): Promise<void> {
+  if (typeof window !== "undefined" && !walletOriginAllowsRelayer(pageOrigin())) return
   const now = input.now ?? Date.now
   const timeoutMs = input.timeoutMs ?? RELAYER_HEALTH_TIMEOUT_MS
   const retryMs = input.retryMs ?? RELAYER_HEALTH_RETRY_MS
@@ -1037,7 +1045,7 @@ export async function watchRelayerHealth(input: {
       input.onUpdate({ phase: "paused", report })
       return
     }
-    if (report.cause === "network_or_cors") {
+    if (report.cause === "network_or_cors" && !relayerHealthWakes(report)) {
       input.onUpdate({ phase: "unreachable", report })
       backgroundRecheck()
       return

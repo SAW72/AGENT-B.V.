@@ -1288,6 +1288,42 @@ describe("relayer health", () => {
         },
       },
       {
+        label: "submits disabled string true",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: "true" }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled number 1",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: 1 }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled string 1 stays open",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: "1" }),
+          })
+          expect(report.state).toBe("ok")
+          return report
+        },
+      },
+      {
         label: "submits disabled without ok",
         wakes: false,
         run: async () => {
@@ -1626,6 +1662,58 @@ describe("relayer health", () => {
     expect(calls).toHaveLength(3)
     expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
     expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+  })
+
+  it("keeps starting on the live site when a cold start fails CORS, and never posts", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
+    vi.stubGlobal("window", { location: { origin: CANONICAL_WALLET_ORIGIN } })
+    try {
+      let attempt = 0
+      const calls: string[] = []
+      const fetchImpl: typeof fetch = async (url, init) => {
+        attempt += 1
+        calls.push(`${init?.method ?? "GET"} ${String(url)}`)
+        if (attempt < 3) throw new TypeError("Failed to fetch")
+        return jsonResponse(200, { ok: true, killSwitch: false })
+      }
+      const phases: string[] = []
+      const done = watchRelayerHealth({
+        url: relayerUrl,
+        fetchImpl,
+        onUpdate: (update) => phases.push(update.phase),
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(phases).toEqual(["waking"])
+      expect(phases).not.toContain("unreachable")
+      await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+      expect(calls).toHaveLength(2)
+      expect(phases.at(-1)).toBe("waking")
+      await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+      await done
+      expect(phases).toEqual(["waking", "waking", "ok"])
+      expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
+      expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("does not call the refund service from the health watch on a non-canonical origin", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://82132ae6.agent-bv.pages.dev" } })
+    try {
+      const fetchImpl = vi.fn(async () => jsonResponse(502, {}))
+      const phases: string[] = []
+      await watchRelayerHealth({
+        url: relayerUrl,
+        fetchImpl: fetchImpl as typeof fetch,
+        onUpdate: (update) => phases.push(update.phase),
+      })
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expect(phases).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("allows the live site and local dev, and refuses preview hosts", () => {

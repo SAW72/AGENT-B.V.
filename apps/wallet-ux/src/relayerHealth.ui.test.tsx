@@ -22,6 +22,7 @@ import {
   RELAYER_WAITING_SERVICE_LABEL,
   RELAYER_WAKING_TEXT,
   RELAYER_WRONG_ORIGIN_TEXT,
+  watchRelayerHealth,
 } from "./relayer"
 import { resetSubmitLock } from "./submitLock"
 
@@ -294,7 +295,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
   })
 
-  it("says the refund service can't be reached on a network or CORS failure, without a 120s wait", async () => {
+  it("says the refund service can't be reached from a non-canonical page, without a 120s wait", async () => {
     steps = ["typeerror", "typeerror", "ok"]
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     render(<FlowPreview escrow={escrow} panel={panel} />)
@@ -326,6 +327,64 @@ describe("refund service health", () => {
     await clickRefund(refund)
     expect(counts.post).toBe(1)
     expect(signCalls.n).toBe(1)
+  })
+
+  it("keeps starting on agent-bv.pages.dev when a cold start fails CORS, with no open link", async () => {
+    setPageOrigin(CANONICAL_WALLET_ORIGIN)
+    steps = ["typeerror", "typeerror", "ok"]
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    expect(document.querySelector("[data-testid='relayer-origin-notice']")).toBeNull()
+    expect(document.querySelector("[data-testid='relayer-canonical-link']")).toBeNull()
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    const waiting = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    expect(waiting.disabled).toBe(true)
+    expect(waiting.textContent).toBe(RELAYER_WAITING_SERVICE_LABEL)
+    expect(refund.queryByText(RELAYER_UNREACHABLE_TEXT)).toBeNull()
+    expect(document.querySelector("[data-testid='relayer-canonical-link']")).toBeNull()
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    const afterFirst = counts.health
+    await flush(RELAYER_HEALTH_RETRY_MS)
+    expect(counts.health).toBe(afterFirst + 1)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    expect(document.querySelector("[data-testid='relayer-canonical-link']")).toBeNull()
+    await flush(RELAYER_HEALTH_RETRY_MS)
+    expect(refund.queryByTestId("relayer-note")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    expect(document.querySelector("[data-testid='relayer-canonical-link']")).toBeNull()
+  })
+
+  it("blocks health checks and the refund click on a non-canonical origin", async () => {
+    setPageOrigin("https://82132ae6.agent-bv.pages.dev")
+    steps = Array.from({ length: 20 }, () => "502" as const)
+    const fetchImpl = vi.fn(async () => jsonResponse(502, {}))
+    const watched: string[] = []
+    await watchRelayerHealth({
+      url: "https://relayer.example.test",
+      fetchImpl: fetchImpl as typeof fetch,
+      onUpdate: (update) => watched.push(update.phase),
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(watched).toEqual([])
+
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(counts.health).toBe(0)
+    expect(counts.post).toBe(0)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    expect(counts.health).toBe(0)
+    await clickRefund(refund)
+    expect(counts.health).toBe(0)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(0)
   })
 
   it("Try again after a network failure checks health only and never posts", async () => {

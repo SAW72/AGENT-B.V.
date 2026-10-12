@@ -575,7 +575,7 @@ function SepoliaSubmit({
               {relayerButton.note}
             </p>
           ) : null}
-          {originAllowed && relayerHealth === "unreachable" ? (
+          {pageOrigin() !== CANONICAL_WALLET_ORIGIN && relayerHealth === "unreachable" ? (
             <p className="hint" role="status" data-testid="relayer-unreachable-link">
               <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
                 {RELAYER_OPEN_CANONICAL_LABEL}
