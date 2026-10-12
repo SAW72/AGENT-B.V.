@@ -15,6 +15,7 @@ import {
   RELAYER_HEALTH_TIMEOUT_MS,
   RELAYER_HEALTH_WAKE_CAP_MS,
   RELAYER_NO_RESPONSE_TEXT,
+  RELAYER_PAUSED_NOTE,
   RELAYER_WAKING_TEXT,
 } from "./relayer"
 import { resetSubmitLock } from "./submitLock"
@@ -77,7 +78,7 @@ vi.mock("wagmi", () => ({
   useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
-type Step = "hang" | "hold" | "ok" | "502" | "400" | "typeerror" | "404html" | "200html" | "522" | "notok"
+type Step = "hang" | "hold" | "ok" | "502" | "400" | "typeerror" | "404html" | "200html" | "522" | "notok" | "disabled"
 type Held = {
   url: string
   init: RequestInit
@@ -132,6 +133,9 @@ function installFetch() {
       }
       if (step === "522") return Promise.resolve(new Response("error code: 522", { status: 522, headers: { "content-type": "text/plain" } }))
       if (step === "notok") return Promise.resolve(jsonResponse(200, { ok: false, killSwitch: false }))
+      if (step === "disabled") {
+        return Promise.resolve(jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true }))
+      }
       if (step === "ok") return Promise.resolve(okHealth())
       return new Promise<Response>((resolve, reject) => {
         const entry: Held = { url: String(url), init, resolve }
@@ -166,7 +170,7 @@ async function prepareRefund(scope = refundSection()) {
 
 describe("refund service health", () => {
   it("pins the starting sentence, the no-response sentence, and the unchanged unavailable note", () => {
-    expect(RELAYER_WAKING_TEXT).toBe("Starting the refund service… This can take up to a minute.")
+    expect(RELAYER_WAKING_TEXT).toBe("Starting the refund service… This can take up to two minutes.")
     expect(RELAYER_NO_RESPONSE_TEXT).toBe(
       "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet.",
     )
@@ -370,6 +374,28 @@ describe("refund service health", () => {
     await prepareRefund(refund)
     expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
     expect(counts.post).toBe(0)
+  })
+
+  it("treats submitsDisabled as paused, with no further health checks and no post", async () => {
+    steps = ["disabled"]
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_PAUSED_NOTE)
+    const button = refund.getByTestId("relayer-submit") as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(counts.health).toBe(1)
+    expect(counts.post).toBe(0)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS + RELAYER_HEALTH_BACKGROUND_MS * 2)
+    expect(counts.health).toBe(1)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    fireEvent.click(button)
+    await flush(0)
+    expect(counts.health).toBe(1)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
   })
 
   it("shows Starting through 404 HTML, 200 HTML, and 522, then enables with no post", async () => {

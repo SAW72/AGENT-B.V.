@@ -77,6 +77,7 @@ export const RELAYER_HEALTH_TIMEOUT_MS = 10_000
 export const RELAYER_HEALTH_RETRY_MS = 4_000
 export const RELAYER_HEALTH_WAKE_CAP_MS = 120_000
 export const RELAYER_HEALTH_BACKGROUND_MS = 15_000
+export const RELAYER_HEALTH_BODY_LIMIT_BYTES = 4_096
 const RELAYER_HEALTH_SNIPPET_CHARS = 80
 
 export const RELAYER_SUBMITTING_TEXT = "Submitting the refund request…"
@@ -88,7 +89,7 @@ export const RELAYER_CHECK_WALLET_LABEL = "Check the refund service wallet on Ba
 export const RELAYER_PAUSED_NOTE = "The refund service is paused. Use your wallet to submit instead."
 export const RELAYER_CHECKING_NOTE = "Checking whether the refund service is available."
 export const RELAYER_DOWN_NOTE = "The refund service is unavailable. Use your wallet to submit instead."
-export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to a minute."
+export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to two minutes."
 export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
 export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
 export const RELAYER_PANEL_TEXT = "Submit the refund request through the refund service, or send it from your wallet."
@@ -388,15 +389,26 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   return parseJsonRecord(await response.text())
 }
 
+const HEALTH_SECRET_KEY =
+  "authorization|cookie|set-cookie|x-claim-secret|api[_-]?key|private[_-]?key|claim[_-]?secret|secret|token|password"
+
 export function sanitiseHealthSnippet(text: string): string {
+  const quotedKey = new RegExp(`"(${HEALTH_SECRET_KEY})"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"`, "gi")
+  const assignedKey = new RegExp(
+    `\\b(${HEALTH_SECRET_KEY})\\b\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|bearer\\s+\\S+|\\S+)`,
+    "gi",
+  )
   const redacted = text
-    .replace(/"(authorization|cookie|set-cookie|api[_-]?key|secret|token|password)"\s*:\s*"(?:[^"\\]|\\.)*"/gi, '"$1":"[redacted]"')
-    .replace(
-      /\b(authorization|cookie|set-cookie|api[_-]?key|secret|token|password)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|bearer\s+\S+|\S+)/gi,
-      "$1=[redacted]",
-    )
+    .replace(/[\u007f\u0085\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(quotedKey, '"$1":"[redacted]"')
+    .replace(assignedKey, "$1=[redacted]")
     .replace(/\bbearer\s+\S+/gi, "bearer [redacted]")
+    .replace(new RegExp(`\\b${["sk", "live"].join("_")}_[A-Za-z0-9]+\\b`, "g"), "[redacted]")
+    .replace(new RegExp("\\bgh" + "p_[A-Za-z0-9]+\\b", "g"), "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g, "[redacted]")
     .replace(/0x[0-9a-fA-F]{4,}/gi, "[redacted]")
+    .replace(/(?<![A-Za-z0-9])[0-9a-fA-F]{32,}(?![A-Za-z0-9])/g, "[redacted]")
+    .replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/])/g, "[redacted]")
     .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
     .replace(/[\u0000-\u001f]+/g, " ")
     .replace(/\s{2,}/g, " ")
@@ -746,12 +758,44 @@ export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   return report.cause === "http_status" && report.status != null && httpStatusWakes(report.status)
 }
 
+async function readHealthBody(response: Response, limit = RELAYER_HEALTH_BODY_LIMIT_BYTES): Promise<string> {
+  const body = response.body
+  if (!body) return ""
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    while (received < limit) {
+      const { done, value } = await reader.read()
+      if (done || !value) break
+      const room = limit - received
+      const slice = value.byteLength > room ? value.subarray(0, room) : value
+      chunks.push(slice)
+      received += slice.byteLength
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  const merged = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(merged)
+}
+
+function healthBlocksSubmits(json: Record<string, unknown> | null): boolean {
+  if (!json) return false
+  return json.killSwitch === true || json.submitsDisabled === true
+}
+
 async function healthPayload(response: Response): Promise<{ contentType: string; bodySnippet: string; json: Record<string, unknown> | null }> {
   const header = response.headers.get("content-type") ?? ""
   const contentType = header.split(";")[0]?.trim() || "none"
   let text = ""
   try {
-    text = await response.text()
+    text = await readHealthBody(response)
   } catch {
     text = ""
   }
@@ -796,8 +840,8 @@ export async function readRelayerHealth(input: {
   const reply = { contentType: payload.contentType, bodySnippet: payload.bodySnippet }
   if (!response.ok) return downHealth(started, "http_status", firstAt, response.status, reply)
   const json = payload.json
+  if (healthBlocksSubmits(json)) return { state: "paused", elapsedMs: Math.max(0, Date.now() - started) }
   if (!json || typeof json.killSwitch !== "boolean") return downHealth(started, "bad_body", firstAt, response.status, reply)
-  if (json.killSwitch) return { state: "paused", elapsedMs: Math.max(0, Date.now() - started) }
   if (json.ok !== true) return downHealth(started, "not_ok", firstAt, response.status, reply)
   return { state: "ok", elapsedMs: Math.max(0, Date.now() - started) }
 }
@@ -831,7 +875,7 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
  * Re-check /health until it is usable, a hard failure, or the wake cap.
  * A wake (timeout, network or CORS, any 5xx, 404, 408, 429, a non-JSON body, or JSON without ok:true)
  * retries health only. This never signs or posts a refund. After the cap, a slower background
- * re-check continues until /health is ok, the kill switch is on, or the watch is cancelled.
+ * re-check continues until /health is ok, submits are disabled, the kill switch is on, or the watch is cancelled.
  */
 export async function watchRelayerHealth(input: {
   url: string

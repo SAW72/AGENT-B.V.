@@ -34,8 +34,10 @@ import {
   readRelayerHealth,
   readRelayerPaused,
   relayerHealthWakes,
+  sanitiseHealthSnippet,
   watchRelayerHealth,
   RELAYER_HEALTH_BACKGROUND_MS,
+  RELAYER_HEALTH_BODY_LIMIT_BYTES,
   RELAYER_HEALTH_RETRY_MS,
   RELAYER_HEALTH_TIMEOUT_MS,
   RELAYER_HEALTH_WAKE_CAP_MS,
@@ -1210,6 +1212,8 @@ describe("relayer health", () => {
       { label: "401", wakes: false, cause: "http_status", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(401, { ok: false }) }) },
       { label: "403", wakes: false, cause: "http_status", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(403, { ok: false }) }) },
       { label: "html 200", wakes: true, cause: "bad_body", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => htmlResponse(200, "<html>Application is starting</html>") }) },
+      { label: "html 200 mentioning submitsDisabled", wakes: true, cause: "bad_body", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => htmlResponse(200, "<html>submitsDisabled:true</html>") }) },
+      { label: "404 with submitsDisabled", wakes: true, cause: "http_status", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(404, { ok: false, killSwitch: false, submitsDisabled: true }) }) },
       { label: "not ok", wakes: true, cause: "not_ok", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => jsonResponse(200, { ok: false, killSwitch: false }) }) },
       { label: "network", wakes: true, cause: "network_or_cors", run: () => readRelayerHealth({ url: relayerUrl, fetchImpl: async () => { throw new TypeError("Failed to fetch") } }) },
       {
@@ -1258,6 +1262,30 @@ describe("relayer health", () => {
           const report = await readRelayerHealth({
             url: relayerUrl,
             fetchImpl: async () => jsonResponse(200, { ok: false, killSwitch: true }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true }),
+          })
+          expect(report.state).toBe("paused")
+          return report
+        },
+      },
+      {
+        label: "submits disabled without ok",
+        wakes: false,
+        run: async () => {
+          const report = await readRelayerHealth({
+            url: relayerUrl,
+            fetchImpl: async () => jsonResponse(200, { ok: false, killSwitch: false, submitsDisabled: true }),
           })
           expect(report.state).toBe("paused")
           return report
@@ -1475,6 +1503,199 @@ describe("relayer health", () => {
     await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS * 3)
     expect(calls).toHaveLength(atCap)
     expect(calls.every((call) => call.endsWith("/health"))).toBe(true)
+  })
+
+  it("stops wake polling when submits are disabled and does not post", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
+    const calls: string[] = []
+    const responses = [
+      htmlResponse(404, "<html>no-server</html>"),
+      jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true }),
+    ]
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${String(url)}`)
+      const next = responses.shift()
+      if (!next) throw new Error("unexpected health fetch")
+      return next
+    }
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_RETRY_MS)
+    await done
+    expect(phases).toEqual(["waking", "paused"])
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_WAKE_CAP_MS + RELAYER_HEALTH_BACKGROUND_MS * 3)
+    expect(calls).toEqual([`GET ${relayerUrl}/health`, `GET ${relayerUrl}/health`])
+    expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+    expect(
+      relayerButtonModel({
+        url: relayerUrl,
+        health: "paused",
+        phase: "idle",
+        gate: { ok: true },
+        action: "refund",
+      }),
+    ).toMatchObject({ visible: true, disabled: true, note: RELAYER_PAUSED_NOTE })
+    const paused = await readRelayerPaused({
+      url: relayerUrl,
+      fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true }),
+    })
+    expect(paused).toBe(true)
+    const open = await readRelayerHealth({
+      url: relayerUrl,
+      fetchImpl: async () => jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: false }),
+    })
+    expect(open.state).toBe("ok")
+  })
+
+  it("stops the background recheck when submits are disabled", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T15:46:45.000Z"))
+    let attempt = 0
+    const calls: string[] = []
+    const capChecks = Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS)
+    const fetchImpl: typeof fetch = async (url, init) => {
+      attempt += 1
+      calls.push(`${init?.method ?? "GET"} ${String(url)}`)
+      if (attempt <= capChecks) return jsonResponse(502, {})
+      return jsonResponse(200, { ok: true, killSwitch: false, submitsDisabled: true })
+    }
+    const phases: string[] = []
+    const done = watchRelayerHealth({
+      url: relayerUrl,
+      fetchImpl,
+      onUpdate: (update) => phases.push(update.phase),
+    })
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_WAKE_CAP_MS)
+    await done
+    expect(phases.at(-1)).toBe("gave_up")
+    const atCap = calls.length
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS)
+    expect(phases.at(-1)).toBe("paused")
+    expect(calls).toHaveLength(atCap + 1)
+    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS * 3)
+    expect(calls).toHaveLength(atCap + 1)
+    expect(calls.every((call) => call.startsWith("GET ") && call.endsWith("/health"))).toBe(true)
+    expect(calls.some((call) => call.includes("/v1/claims"))).toBe(false)
+  })
+})
+
+describe("health snippet redaction", () => {
+  const secret = "super-secret-value"
+
+  it.each([
+    ["private_key", `private_key="${secret}"`],
+    ["private-key", `private-key="${secret}"`],
+    ["claim_secret", `claim_secret="${secret}"`],
+    ["claim-secret", `claim-secret="${secret}"`],
+    ["x-claim-secret", `x-claim-secret="${secret}"`],
+    ["json private_key", `{"private_key":"${secret}"}`],
+    ["json claim_secret", `{"claim_secret":"${secret}"}`],
+    ["json x-claim-secret", `{"x-claim-secret":"${secret}"}`],
+  ])("redacts %s", (_label, input) => {
+    const snippet = sanitiseHealthSnippet(input)
+    expect(snippet).not.toContain(secret)
+    expect(snippet).toContain("[redacted]")
+  })
+
+  it("redacts a long bare hex run", () => {
+    const hex = "ab".repeat(32)
+    expect(hex).toHaveLength(64)
+    const snippet = sanitiseHealthSnippet(`warm ${hex} up`)
+    expect(snippet).not.toContain(hex)
+    expect(snippet).toContain("[redacted]")
+    expect(sanitiseHealthSnippet("warm deadbeef up")).toContain("deadbeef")
+  })
+
+  it("redacts a 40-hex address without 0x", () => {
+    const address = "0123456789abcdef".repeat(2) + "01234567"
+    expect(address).toHaveLength(40)
+    expect(address.startsWith("0x")).toBe(false)
+    const snippet = sanitiseHealthSnippet(`escrow ${address} ready`)
+    expect(snippet).not.toContain(address)
+    expect(snippet).toContain("[redacted]")
+  })
+
+  it("redacts a long base64 run", () => {
+    const token = `QWxhZGRpbjpvcGVuc2VzYW1l${"A".repeat(16)}+/==`
+    expect(token.length).toBeGreaterThanOrEqual(40)
+    expect(/[g-z+/]/i.test(token)).toBe(true)
+    const snippet = sanitiseHealthSnippet(`blob ${token} end`)
+    expect(snippet).not.toContain(token)
+    expect(snippet).not.toContain("QWxhZGRpbj")
+    expect(snippet).toContain("[redacted]")
+  })
+
+  it("redacts a live secret-key token", () => {
+    const prefix = ["sk", "live"].join("_")
+    const token = `${prefix}_51AbCdEfGhIjKlMnOpQrStUv`
+    const snippet = sanitiseHealthSnippet(`key ${token} leaked`)
+    expect(snippet).not.toContain(token)
+    expect(snippet).not.toContain(`${prefix}_`)
+  })
+
+  it("redacts a personal access token", () => {
+    const prefix = "gh" + "p"
+    const token = `${prefix}_1234567890abcdefghijklmnopqrstuvwxyz`
+    const snippet = sanitiseHealthSnippet(`key ${token} leaked`)
+    expect(snippet).not.toContain(token)
+    expect(snippet).not.toContain(`${prefix}_`)
+  })
+
+  it("redacts an eyJ JWT", () => {
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0d7Z"
+    const snippet = sanitiseHealthSnippet(`auth ${token} end`)
+    expect(snippet).not.toContain("eyJ")
+    expect(snippet).not.toContain(token.slice(0, 20))
+    expect(snippet).toContain("[redacted]")
+  })
+
+  it.each([
+    ["DEL", "\u007f"],
+    ["NEL", "\u0085"],
+    ["LRE", "\u202a"],
+    ["RLE", "\u202b"],
+    ["PDF", "\u202c"],
+    ["LRO", "\u202d"],
+    ["RLO", "\u202e"],
+    ["LRI", "\u2066"],
+    ["RLI", "\u2067"],
+    ["FSI", "\u2068"],
+    ["PDI", "\u2069"],
+  ])("strips %s from the snippet", (_label, char) => {
+    const snippet = sanitiseHealthSnippet(`safe${char}text`)
+    expect(snippet).toBe("safetext")
+    expect(snippet.includes(char)).toBe(false)
+  })
+
+  it("reads at most 4KB of the health body and does not call text()", async () => {
+    const okJson = JSON.stringify({ ok: true, killSwitch: false })
+    const filler = " ".repeat(RELAYER_HEALTH_BODY_LIMIT_BYTES - okJson.length)
+    const leaked = "S".repeat(64)
+    const extra = `,"leaked":"${leaked}"}`
+    const encoded = new TextEncoder().encode(okJson + filler + extra)
+    expect(encoded.byteLength).toBeGreaterThan(RELAYER_HEALTH_BODY_LIMIT_BYTES)
+    expect(JSON.parse(new TextDecoder().decode(encoded.subarray(0, RELAYER_HEALTH_BODY_LIMIT_BYTES))).ok).toBe(true)
+    expect(() => JSON.parse(new TextDecoder().decode(encoded))).toThrow()
+    const response = new Response(encoded, { status: 200, headers: { "content-type": "application/json" } })
+    let textCalled = false
+    response.text = () => {
+      textCalled = true
+      return Promise.reject(new Error("full body read"))
+    }
+    const report = await readRelayerHealth({
+      url: relayerUrl,
+      fetchImpl: async () => response,
+    })
+    expect(textCalled).toBe(false)
+    expect(report.state).toBe("ok")
+    expect(report.bodySnippet ?? "").not.toContain(leaked)
+    expect(RELAYER_HEALTH_BODY_LIMIT_BYTES).toBe(4_096)
   })
 })
 
