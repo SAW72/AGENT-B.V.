@@ -9,6 +9,7 @@ import { resetPendingRuntime } from "./usePendingReceipt"
 import {
   RELAYER_CHECKING_NOTE,
   RELAYER_DOWN_NOTE,
+  RELAYER_HEALTH_BACKGROUND_MS,
   RELAYER_HEALTH_RETRY_LABEL,
   RELAYER_HEALTH_RETRY_MS,
   RELAYER_HEALTH_TIMEOUT_MS,
@@ -18,7 +19,13 @@ import {
 } from "./relayer"
 import { resetSubmitLock } from "./submitLock"
 
-const { signCalls } = vi.hoisted(() => ({ signCalls: { n: 0 } }))
+const { signCalls, harness } = vi.hoisted(() => ({
+  signCalls: { n: 0 },
+  harness: {
+    connected: true,
+    sendTransactionAsync: vi.fn(async () => `0x${"22".repeat(32)}`),
+  },
+}))
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
 const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as Address
@@ -51,13 +58,13 @@ const publicClient = {
 
 vi.mock("wagmi", () => ({
   useAccount: () => ({
-    isConnected: true,
-    address: ACCOUNT,
-    chainId: 84532,
+    isConnected: harness.connected,
+    address: harness.connected ? ACCOUNT : undefined,
+    chainId: harness.connected ? 84532 : undefined,
     connector: undefined,
   }),
   usePublicClient: () => publicClient,
-  useSendTransaction: () => ({ sendTransactionAsync: vi.fn(), isPending: false }),
+  useSendTransaction: () => ({ sendTransactionAsync: harness.sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({
     data: {
       signTypedData: async () => {
@@ -70,7 +77,7 @@ vi.mock("wagmi", () => ({
   useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
-type Step = "hang" | "hold" | "ok" | "502" | "400" | "typeerror"
+type Step = "hang" | "hold" | "ok" | "502" | "400" | "typeerror" | "404html" | "200html" | "522" | "notok"
 type Held = {
   url: string
   init: RequestInit
@@ -115,6 +122,16 @@ function installFetch() {
       if (step === "typeerror") return Promise.reject(new TypeError("Failed to fetch"))
       if (step === "502") return Promise.resolve(jsonResponse(502, {}))
       if (step === "400") return Promise.resolve(jsonResponse(400, { ok: false }))
+      if (step === "404html") {
+        return Promise.resolve(new Response("<html><body>no-server</body></html>", { status: 404, headers: { "content-type": "text/html" } }))
+      }
+      if (step === "200html") {
+        return Promise.resolve(
+          new Response("<html><body>Application is starting</body></html>", { status: 200, headers: { "content-type": "text/html" } }),
+        )
+      }
+      if (step === "522") return Promise.resolve(new Response("error code: 522", { status: 522, headers: { "content-type": "text/plain" } }))
+      if (step === "notok") return Promise.resolve(jsonResponse(200, { ok: false, killSwitch: false }))
       if (step === "ok") return Promise.resolve(okHealth())
       return new Promise<Response>((resolve, reject) => {
         const entry: Held = { url: String(url), init, resolve }
@@ -162,6 +179,9 @@ describe("refund service health", () => {
     escrowFixture.state = 0
     steps = []
     signCalls.n = 0
+    harness.connected = true
+    harness.sendTransactionAsync.mockReset()
+    harness.sendTransactionAsync.mockImplementation(async () => `0x${"22".repeat(32)}`)
     resetCarriedIds()
     resetSubmitLock()
     resetPendingRuntime()
@@ -251,7 +271,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
     const line = String(warn.mock.calls[0]?.[0])
-    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+$/)
+    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+ firstAt=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     await act(async () => {
       fireEvent.click(refund.getByTestId("relayer-submit"))
       await vi.advanceTimersByTimeAsync(0)
@@ -275,7 +295,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
     expect(signCalls.n).toBe(0)
     const line = String(warn.mock.calls[0]?.[0])
-    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+$/)
+    expect(line).toMatch(/^refund health cause=network_or_cors status=none elapsedMs=\d+ firstAt=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     const beforeRetry = counts.health
     steps = ["ok"]
     fireEvent.click(refund.getByTestId("relayer-health-retry"))
@@ -287,7 +307,7 @@ describe("refund service health", () => {
     expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it("stops starting at 60s, and Try again restarts only the health check", async () => {
+  it("stops starting at 120s, and Try again restarts only the health check", async () => {
     steps = Array.from({ length: 40 }, () => "502" as const)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     render(<FlowPreview escrow={escrow} panel={panel} />)
@@ -306,7 +326,7 @@ describe("refund service health", () => {
     expect(counts.post).toBe(0)
     expect((refund.getByTestId("sepolia-submit") as HTMLButtonElement).disabled).toBe(false)
     const line = String(warn.mock.calls[0]?.[0])
-    expect(line).toMatch(/^refund health cause=http_status status=502 elapsedMs=\d+$/)
+    expect(line).toMatch(/^refund health cause=http_status status=502 elapsedMs=\d+ firstAt=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     expect(line).not.toContain(claim)
     expect(line).not.toContain(ACCOUNT)
     expect(line).not.toContain("relayer.example.test")
@@ -350,5 +370,140 @@ describe("refund service health", () => {
     await prepareRefund(refund)
     expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
     expect(counts.post).toBe(0)
+  })
+
+  it("shows Starting through 404 HTML, 200 HTML, and 522, then enables with no post", async () => {
+    steps = ["404html", "200html", "522", "ok"]
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    expect(counts.post).toBe(0)
+    await flush(RELAYER_HEALTH_RETRY_MS)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    await flush(RELAYER_HEALTH_RETRY_MS)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    await flush(RELAYER_HEALTH_RETRY_MS)
+    expect(refund.queryByTestId("relayer-note")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(counts.health).toBe(4)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+  })
+
+  it("keeps waking on bad replies until the cap, then says the service didn't respond", async () => {
+    const cycle = ["404html", "200html", "522", "notok"] as const
+    steps = Array.from({ length: 40 }, (_, index) => cycle[index % cycle.length]!)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_WAKING_TEXT)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    expect(counts.health).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
+  })
+
+  it("shows the last down reply, and Try again only rechecks health", async () => {
+    steps = ["400", "ok"]
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_DOWN_NOTE)
+    expect(refund.getByTestId("relayer-health-reply").textContent).toBe(
+      'status 400, content-type application/json, body {"ok":false}',
+    )
+    expect(refund.getByTestId("relayer-health-retry").textContent).toBe(RELAYER_HEALTH_RETRY_LABEL)
+    const lines = warn.mock.calls.map((call) => String(call[0]))
+    expect(lines.some((line) => /^refund health cause=http_status status=400 elapsedMs=\d+ firstAt=/.test(line))).toBe(true)
+    expect(lines).toContain('refund health reply status 400, content-type application/json, body {"ok":false}')
+    const beforeRetry = counts.health
+    fireEvent.click(refund.getByTestId("relayer-health-retry"))
+    await flush(0)
+    expect(counts.health).toBe(beforeRetry + 1)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+    expect(refund.queryByTestId("relayer-health-retry")).toBeNull()
+    expect(refund.queryByTestId("relayer-health-reply")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it("rechecks health after the cap and enables submit without posting", async () => {
+    steps = Array.from({ length: 31 }, () => "502" as const)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
+    const atCap = counts.health
+    expect(atCap).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
+    await flush(RELAYER_HEALTH_BACKGROUND_MS)
+    expect(counts.health).toBe(atCap + 1)
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(counts.post).toBe(0)
+    await flush(RELAYER_HEALTH_BACKGROUND_MS)
+    expect(counts.health).toBe(atCap + 2)
+    expect(refund.queryByTestId("relayer-note")).toBeNull()
+    expect(refund.queryByTestId("relayer-health-retry")).toBeNull()
+    expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(false)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
+  })
+
+  it("stops background health checks on unmount", async () => {
+    steps = Array.from({ length: 80 }, () => "502" as const)
+    const view = render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    const atCap = counts.health
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    view.unmount()
+    await flush(RELAYER_HEALTH_BACKGROUND_MS * 3)
+    expect(counts.health).toBe(atCap)
+    expect(counts.post).toBe(0)
+  })
+
+  it("stops background health checks when the wallet disconnects", async () => {
+    steps = Array.from({ length: 80 }, () => "502" as const)
+    const view = render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    const atCap = counts.health
+    harness.connected = false
+    view.rerender(<FlowPreview escrow={escrow} panel={panel} />)
+    await flush(RELAYER_HEALTH_BACKGROUND_MS * 3)
+    expect(counts.health).toBe(atCap)
+    expect(counts.post).toBe(0)
+  })
+
+  it("stops background health checks after a wallet refund and does not post", async () => {
+    steps = Array.from({ length: 80 }, () => "502" as const)
+    render(<FlowPreview escrow={escrow} panel={panel} />)
+    const refund = refundSection()
+    fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
+    await prepareRefund(refund)
+    await flush(RELAYER_HEALTH_WAKE_CAP_MS)
+    const atCap = counts.health
+    expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    await act(async () => {
+      fireEvent.click(refund.getByTestId("sepolia-submit"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(harness.sendTransactionAsync).toHaveBeenCalledTimes(1)
+    await flush(RELAYER_HEALTH_BACKGROUND_MS * 3)
+    expect(counts.health).toBe(atCap)
+    expect(counts.post).toBe(0)
+    expect(signCalls.n).toBe(0)
   })
 })
