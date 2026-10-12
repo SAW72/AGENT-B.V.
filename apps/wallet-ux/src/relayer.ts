@@ -78,6 +78,7 @@ export const RELAYER_HEALTH_RETRY_MS = 4_000
 export const RELAYER_HEALTH_WAKE_CAP_MS = 120_000
 export const RELAYER_HEALTH_BACKGROUND_MS = 15_000
 export const RELAYER_HEALTH_BODY_LIMIT_BYTES = 4_096
+export const RELAYER_HEALTH_CONTENT_TYPE_CHARS = 60
 const RELAYER_HEALTH_SNIPPET_CHARS = 80
 
 export const RELAYER_SUBMITTING_TEXT = "Submitting the refund request…"
@@ -389,33 +390,24 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   return parseJsonRecord(await response.text())
 }
 
-// Joined at runtime so the retired header name is not a literal in the built bundle.
-function runtimeJoin(parts: readonly string[], separatorCode: number): string {
-  const nudge = (globalThis as { __healthMarker?: number }).__healthMarker ?? 0
-  return parts.join(String.fromCharCode(separatorCode + nudge))
+const NAMED_HEALTH_KEY = "authorization|cookie|set-cookie|api[_-]?key|private[_-]?key|token|password"
+const SECRET_HEALTH_KEY = "(?:[A-Za-z0-9]+[_-])*secret(?:[_-][A-Za-z0-9]+)*"
+const HEALTH_KEY = `(?:${NAMED_HEALTH_KEY}|${SECRET_HEALTH_KEY})`
+
+function capByCodePoint(text: string, maxChars: number): string {
+  const points = Array.from(text)
+  if (points.length <= maxChars) return text
+  return points.slice(0, maxChars).join("")
 }
 
-const HEALTH_SECRET_KEY = [
-  "authorization",
-  "cookie",
-  "set-cookie",
-  runtimeJoin(["x", "claim", "secret"], 45),
-  "api[_-]?key",
-  "private[_-]?key",
-  "claim[_-]?secret",
-  "secret",
-  "token",
-  "password",
-].join("|")
-
-export function sanitiseHealthSnippet(text: string): string {
-  const quotedKey = new RegExp(`"(${HEALTH_SECRET_KEY})"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"`, "gi")
+function redactHealthText(text: string): string {
+  const quotedKey = new RegExp(`"(${HEALTH_KEY})"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"`, "gi")
   const assignedKey = new RegExp(
-    `\\b(${HEALTH_SECRET_KEY})\\b\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|bearer\\s+\\S+|\\S+)`,
+    `(?<![A-Za-z0-9])(${HEALTH_KEY})(?![A-Za-z0-9])\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|bearer\\s+\\S+|\\S+)`,
     "gi",
   )
-  const redacted = text
-    .replace(/[\u007f\u0085\u202a-\u202e\u2066-\u2069]/g, "")
+  return text
+    .replace(/[\u007f\u0085\u200b-\u200d\u2028\u2029\ufeff\u202a-\u202e\u2066-\u2069]/g, "")
     .replace(quotedKey, '"$1":"[redacted]"')
     .replace(assignedKey, "$1=[redacted]")
     .replace(/\bbearer\s+\S+/gi, "bearer [redacted]")
@@ -429,7 +421,16 @@ export function sanitiseHealthSnippet(text: string): string {
     .replace(/[\u0000-\u001f]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim()
-  return redacted.slice(0, RELAYER_HEALTH_SNIPPET_CHARS)
+}
+
+export function sanitiseHealthSnippet(text: string, maxChars = RELAYER_HEALTH_SNIPPET_CHARS): string {
+  return capByCodePoint(redactHealthText(text), maxChars)
+}
+
+export function sanitiseHealthContentType(header: string): string {
+  const mime = redactHealthText(header).split(";")[0]?.trim() ?? ""
+  const capped = capByCodePoint(mime, RELAYER_HEALTH_CONTENT_TYPE_CHARS)
+  return capped || "none"
 }
 
 function errorFromResponse(status: number, body: Record<string, unknown> | null): RelayerRequestError {
@@ -808,7 +809,7 @@ function healthBlocksSubmits(json: Record<string, unknown> | null): boolean {
 
 async function healthPayload(response: Response): Promise<{ contentType: string; bodySnippet: string; json: Record<string, unknown> | null }> {
   const header = response.headers.get("content-type") ?? ""
-  const contentType = header.split(";")[0]?.trim() || "none"
+  const contentType = sanitiseHealthContentType(header)
   let text = ""
   try {
     text = await readHealthBody(response)

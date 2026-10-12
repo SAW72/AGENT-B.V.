@@ -492,7 +492,10 @@ describe("refund service health", () => {
     await flush(RELAYER_HEALTH_WAKE_CAP_MS)
     const atCap = counts.health
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_NO_RESPONSE_TEXT)
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
     view.unmount()
+    await flush(0)
+    expect(vi.getTimerCount()).toBe(0)
     await flush(RELAYER_HEALTH_BACKGROUND_MS * 3)
     expect(counts.health).toBe(atCap)
     expect(counts.post).toBe(0)

@@ -34,10 +34,12 @@ import {
   readRelayerHealth,
   readRelayerPaused,
   relayerHealthWakes,
+  sanitiseHealthContentType,
   sanitiseHealthSnippet,
   watchRelayerHealth,
   RELAYER_HEALTH_BACKGROUND_MS,
   RELAYER_HEALTH_BODY_LIMIT_BYTES,
+  RELAYER_HEALTH_CONTENT_TYPE_CHARS,
   RELAYER_HEALTH_RETRY_MS,
   RELAYER_HEALTH_TIMEOUT_MS,
   RELAYER_HEALTH_WAKE_CAP_MS,
@@ -1467,7 +1469,8 @@ describe("relayer health", () => {
     expect(phases.at(-1)).toBe("gave_up")
     const atCap = calls.length
     expect(atCap).toBe(Math.ceil(RELAYER_HEALTH_WAKE_CAP_MS / RELAYER_HEALTH_RETRY_MS))
-    await vi.advanceTimersByTimeAsync(RELAYER_HEALTH_BACKGROUND_MS - 1)
+    expect(RELAYER_HEALTH_BACKGROUND_MS).toBe(15_000)
+    await vi.advanceTimersByTimeAsync(14_999)
     expect(calls).toHaveLength(atCap)
     await vi.advanceTimersByTimeAsync(1)
     expect(calls).toHaveLength(atCap + 1)
@@ -1594,6 +1597,7 @@ describe("health snippet redaction", () => {
     ["claim_secret", `claim_secret="${secret}"`],
     ["claim-secret", `claim-secret="${secret}"`],
     ["x-claim-secret", `x-claim-secret="${secret}"`],
+    ["X-Claim-Secret", `X-Claim-Secret="${secret}"`],
     ["json private_key", `{"private_key":"${secret}"}`],
     ["json claim_secret", `{"claim_secret":"${secret}"}`],
     ["json x-claim-secret", `{"x-claim-secret":"${secret}"}`],
@@ -1629,6 +1633,19 @@ describe("health snippet redaction", () => {
     expect(snippet).not.toContain(token)
     expect(snippet).not.toContain("QWxhZGRpbj")
     expect(snippet).toContain("[redacted]")
+  })
+
+  it("redacts a Bearer token", () => {
+    const token = "abcdef123456"
+    const standalone = sanitiseHealthSnippet(`prefix Bearer ${token} suffix`)
+    expect(standalone).not.toContain(token)
+    expect(standalone.toLowerCase()).toContain("bearer [redacted]")
+    const header = sanitiseHealthSnippet(`authorization: Bearer ${token}`)
+    expect(header).not.toContain(token)
+  })
+
+  it("does not treat secretary as a secret key", () => {
+    expect(sanitiseHealthSnippet("secretary=keep-me")).toContain("keep-me")
   })
 
   it("redacts a live secret-key token", () => {
@@ -1667,10 +1684,47 @@ describe("health snippet redaction", () => {
     ["RLI", "\u2067"],
     ["FSI", "\u2068"],
     ["PDI", "\u2069"],
+    ["ZWSP", "\u200b"],
+    ["ZWNJ", "\u200c"],
+    ["ZWJ", "\u200d"],
+    ["BOM", "\ufeff"],
+    ["LINE SEPARATOR", "\u2028"],
+    ["PARAGRAPH SEPARATOR", "\u2029"],
   ])("strips %s from the snippet", (_label, char) => {
     const snippet = sanitiseHealthSnippet(`safe${char}text`)
     expect(snippet).toBe("safetext")
     expect(snippet.includes(char)).toBe(false)
+  })
+
+  it("caps the snippet on code points so an emoji is not split", () => {
+    const emoji = "😀"
+    expect(emoji).toHaveLength(2)
+    const snippet = sanitiseHealthSnippet(`${"!".repeat(79)}${emoji}tail`)
+    expect(Array.from(snippet)).toHaveLength(80)
+    expect(snippet.endsWith(emoji)).toBe(true)
+    expect(snippet).not.toContain("tail")
+    expect(snippet).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)
+  })
+
+  it("sanitises and caps the content type at 60 code points", async () => {
+    const emoji = "😀"
+    const mime = `text/${emoji.repeat(70)}`
+    const header = `${mime}\u200b; secret="super-secret-value"`
+    expect(sanitiseHealthContentType(header)).toBe(`text/${emoji.repeat(55)}`)
+    expect(Array.from(sanitiseHealthContentType(header))).toHaveLength(RELAYER_HEALTH_CONTENT_TYPE_CHARS)
+    expect(sanitiseHealthContentType(header)).not.toContain("\u200b")
+    expect(sanitiseHealthContentType(header)).not.toContain("super-secret-value")
+    expect(RELAYER_HEALTH_CONTENT_TYPE_CHARS).toBe(60)
+    const report = await readRelayerHealth({
+      url: relayerUrl,
+      fetchImpl: async () => {
+        const response = new Response("nope", { status: 400, headers: { "content-type": "text/plain" } })
+        vi.spyOn(response.headers, "get").mockImplementation((name) => (name.toLowerCase() === "content-type" ? header : null))
+        return response
+      },
+    })
+    expect(report.contentType).toBe(`text/${emoji.repeat(55)}`)
+    expect(Array.from(report.contentType ?? "")).toHaveLength(60)
   })
 
   it("reads at most 4KB of the health body and does not call text()", async () => {
