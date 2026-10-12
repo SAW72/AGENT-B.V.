@@ -24,6 +24,32 @@ const SECRET = "0x" + "cd".repeat(32);
 const CLAIM_SECRET = "claim-api-test-secret";
 
 describe("claim relayer HTTP", () => {
+  it("redirects the root URL to /health with the usual CORS headers", async () => {
+    const ctx = await boot();
+    try {
+      const origin = "https://agent-bv.pages.dev";
+      for (const method of ["GET", "HEAD"]) {
+        for (const path of ["/", "/?x=1"]) {
+          const res = await request(ctx.port, method, path, undefined, { origin });
+          assert.equal(res.status, 302);
+          assert.equal(res.headers.location, "/health");
+          assert.equal(res.headers["cache-control"], "no-store");
+          assert.equal(res.headers["access-control-allow-origin"], origin);
+          assert.equal(res.headers.vary, "Origin");
+          assert.equal(res.raw, "");
+        }
+      }
+      const other = await request(ctx.port, "GET", "/", undefined, { origin: "https://evil.example" });
+      assert.equal(other.status, 302);
+      assert.equal(other.headers["access-control-allow-origin"], undefined);
+      const post = await request(ctx.port, "POST", "/", {});
+      assert.equal(post.status, 404);
+      assert.equal(post.json.error, "not_found");
+    } finally {
+      await ctx.close();
+    }
+  });
+
   it("serves fixture health, quote, and claim without leaking a key", async () => {
     const ctx = await boot();
     try {
