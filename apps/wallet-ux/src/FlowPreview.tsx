@@ -55,6 +55,7 @@ import {
   type CallPreview,
 } from "./preview"
 import {
+  formatHealthReply,
   isHealthCancelled,
   previewSupportsRelayer,
   readRelayerHealth,
@@ -73,6 +74,7 @@ import {
   relayerSubmitAllowed,
   relayerTxUrl,
   runRelayerSubmission,
+  warnTerminalHealth,
   watchRelayerHealth,
   type RelayerHealth,
   type RelayerHealthUpdate,
@@ -200,6 +202,7 @@ function SepoliaSubmit({
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
   const [relayerPhase, setRelayerPhase] = useState<RelayerPhase>("idle")
   const [relayerHealth, setRelayerHealth] = useState<RelayerHealth>("unknown")
+  const [healthReply, setHealthReply] = useState<string | null>(null)
   const [pendingHash, setPendingHash] = useState<Hex | null>(null)
   const [confirmedHash, setConfirmedHash] = useState<Hex | null>(null)
   const [relayerNotice, setRelayerNotice] = useState<string | null>(null)
@@ -231,27 +234,38 @@ function SepoliaSubmit({
     if (update.phase === "ok") {
       setRelayerHealth("ok")
       setRelayerNotice(null)
+      setHealthReply(null)
       return
     }
     if (update.phase === "paused") {
       setRelayerHealth("paused")
+      setHealthReply(null)
       return
     }
     if (update.phase === "waking") {
       setRelayerHealth("waking")
       setRelayerNotice(null)
+      setHealthReply(null)
       return
     }
     if (update.phase === "gave_up") {
       setRelayerHealth("gave_up")
       setRelayerNotice(null)
+      setHealthReply(null)
       return
     }
     if (update.phase === "down") {
       setRelayerHealth("down")
+      setHealthReply(update.report ? formatHealthReply(update.report) : null)
       return
     }
     setRelayerHealth("unknown")
+    setHealthReply(null)
+  }, [])
+
+  const stopHealthWatch = useCallback(() => {
+    healthAbort.current?.abort()
+    healthGen.current += 1
   }, [])
 
   const beginHealthWatch = useCallback(() => {
@@ -261,6 +275,7 @@ function SepoliaSubmit({
     const gen = ++healthGen.current
     setRelayerHealth("unknown")
     setRelayerNotice(null)
+    setHealthReply(null)
     if (!relayer.url || !previewSupportsRelayer(preview.functionName)) return
     const url = relayer.url
     void watchRelayerHealth({
@@ -271,12 +286,15 @@ function SepoliaSubmit({
   }, [applyHealthUpdate, preview.functionName, relayer.url])
 
   useEffect(() => {
+    if (!account.isConnected) {
+      stopHealthWatch()
+      return
+    }
     beginHealthWatch()
     return () => {
-      healthAbort.current?.abort()
-      healthGen.current += 1
+      stopHealthWatch()
     }
-  }, [beginHealthWatch, prepareEpoch, escrow])
+  }, [account.isConnected, beginHealthWatch, prepareEpoch, escrow, stopHealthWatch])
 
   async function onClick() {
     if (receipt.phase === "pending" || receipt.phase === "unconfirmed") return
@@ -324,6 +342,7 @@ function SepoliaSubmit({
       })
       releaseSubmit(submitSlot)
       keepLock = true
+      stopHealthWatch()
     } catch (cause) {
       keepLock = false
       if (isWalletCancel(cause)) {
@@ -384,7 +403,13 @@ function SepoliaSubmit({
             onUpdate: (update) => applyHealthUpdate(gen, update),
           })
         } else {
-          setRelayerHealth(report.state === "paused" ? "paused" : "down")
+          const paused = report.state === "paused"
+          if (paused) setHealthReply(null)
+          else {
+            warnTerminalHealth(report)
+            setHealthReply(formatHealthReply(report))
+          }
+          setRelayerHealth(paused ? "paused" : "down")
           setRelayerNotice(RELAYER_SERVICE_DOWN_TEXT)
         }
         return
@@ -570,7 +595,12 @@ function SepoliaSubmit({
               {relayerNotice ?? RELAYER_SERVICE_DOWN_TEXT}
             </p>
           ) : null}
-          {relayerHealth === "gave_up" ? (
+          {healthReply && relayerHealth === "down" ? (
+            <p className="hint" role="status" data-testid="relayer-health-reply">
+              {healthReply}
+            </p>
+          ) : null}
+          {relayerHealth === "gave_up" || relayerHealth === "down" ? (
             <button type="button" className="link-button" data-testid="relayer-health-retry" onClick={() => beginHealthWatch()}>
               {RELAYER_HEALTH_RETRY_LABEL}
             </button>

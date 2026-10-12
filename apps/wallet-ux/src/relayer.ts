@@ -75,7 +75,11 @@ export const RELAYER_FETCH_TIMEOUT_MS = 30_000
 export const RELAYER_RECEIPT_TIMEOUT_MS = 60_000
 export const RELAYER_HEALTH_TIMEOUT_MS = 10_000
 export const RELAYER_HEALTH_RETRY_MS = 4_000
-export const RELAYER_HEALTH_WAKE_CAP_MS = 60_000
+export const RELAYER_HEALTH_WAKE_CAP_MS = 120_000
+export const RELAYER_HEALTH_BACKGROUND_MS = 15_000
+export const RELAYER_HEALTH_BODY_LIMIT_BYTES = 4_096
+export const RELAYER_HEALTH_CONTENT_TYPE_CHARS = 60
+const RELAYER_HEALTH_SNIPPET_CHARS = 80
 
 export const RELAYER_SUBMITTING_TEXT = "Submitting the refund request…"
 export const RELAYER_WAITING_TEXT = "Waiting for confirmation…"
@@ -86,7 +90,7 @@ export const RELAYER_CHECK_WALLET_LABEL = "Check the refund service wallet on Ba
 export const RELAYER_PAUSED_NOTE = "The refund service is paused. Use your wallet to submit instead."
 export const RELAYER_CHECKING_NOTE = "Checking whether the refund service is available."
 export const RELAYER_DOWN_NOTE = "The refund service is unavailable. Use your wallet to submit instead."
-export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to a minute."
+export const RELAYER_WAKING_TEXT = "Starting the refund service… This can take up to two minutes."
 export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
 export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
 export const RELAYER_PANEL_TEXT = "Submit the refund request through the refund service, or send it from your wallet."
@@ -111,6 +115,9 @@ export type RelayerHealthReport = {
   cause?: RelayerHealthCause
   status?: number
   elapsedMs: number
+  firstAt?: string
+  contentType?: string
+  bodySnippet?: string
 }
 
 export type RelayerHealthPhase = "checking" | "waking" | "ok" | "paused" | "down" | "gave_up"
@@ -368,8 +375,7 @@ function claimsEndpoint(url: string): string {
   return base.endsWith("/v1/claims") ? base : `${base}/v1/claims`
 }
 
-async function readJson(response: Response): Promise<Record<string, unknown> | null> {
-  const text = await response.text()
+function parseJsonRecord(text: string): Record<string, unknown> | null {
   if (!text) return null
   try {
     const parsed: unknown = JSON.parse(text)
@@ -378,6 +384,53 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   } catch {
     return null
   }
+}
+
+async function readJson(response: Response): Promise<Record<string, unknown> | null> {
+  return parseJsonRecord(await response.text())
+}
+
+const NAMED_HEALTH_KEY = "authorization|cookie|set-cookie|api[_-]?key|private[_-]?key|token|password"
+const SECRET_HEALTH_KEY = "(?:[A-Za-z0-9]+[_-])*secret(?:[_-][A-Za-z0-9]+)*"
+const HEALTH_KEY = `(?:${NAMED_HEALTH_KEY}|${SECRET_HEALTH_KEY})`
+
+function capByCodePoint(text: string, maxChars: number): string {
+  const points = Array.from(text)
+  if (points.length <= maxChars) return text
+  return points.slice(0, maxChars).join("")
+}
+
+function redactHealthText(text: string): string {
+  const quotedKey = new RegExp(`"(${HEALTH_KEY})"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"`, "gi")
+  const assignedKey = new RegExp(
+    `(?<![A-Za-z0-9])(${HEALTH_KEY})(?![A-Za-z0-9])\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|bearer\\s+\\S+|\\S+)`,
+    "gi",
+  )
+  return text
+    .replace(/[\u007f\u0085\u200b-\u200d\u2028\u2029\ufeff\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(quotedKey, '"$1":"[redacted]"')
+    .replace(assignedKey, "$1=[redacted]")
+    .replace(/\bbearer\s+\S+/gi, "bearer [redacted]")
+    .replace(new RegExp(`\\b${["sk", "live"].join("_")}_[A-Za-z0-9]+\\b`, "g"), "[redacted]")
+    .replace(new RegExp("\\bgh" + "p_[A-Za-z0-9]+\\b", "g"), "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g, "[redacted]")
+    .replace(/0x[0-9a-fA-F]{4,}/gi, "[redacted]")
+    .replace(/(?<![A-Za-z0-9])[0-9a-fA-F]{32,}(?![A-Za-z0-9])/g, "[redacted]")
+    .replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/])/g, "[redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
+    .replace(/[\u0000-\u001f]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+}
+
+export function sanitiseHealthSnippet(text: string, maxChars = RELAYER_HEALTH_SNIPPET_CHARS): string {
+  return capByCodePoint(redactHealthText(text), maxChars)
+}
+
+export function sanitiseHealthContentType(header: string): string {
+  const mime = redactHealthText(header).split(";")[0]?.trim() ?? ""
+  const capped = capByCodePoint(mime, RELAYER_HEALTH_CONTENT_TYPE_CHARS)
+  return capped || "none"
 }
 
 function errorFromResponse(status: number, body: Record<string, unknown> | null): RelayerRequestError {
@@ -666,21 +719,47 @@ export async function postLiveClaim(input: {
   return { txHash: txHash as Hex, mode: "live", escrowAddress }
 }
 
-const WAKE_HTTP_STATUSES = new Set([502, 503, 504])
+function httpStatusWakes(status: number): boolean {
+  if (status >= 500 && status <= 599) return true
+  return status === 404 || status === 408 || status === 429
+}
 
 function warnRefundHealth(report: RelayerHealthReport): void {
   if (!report.cause) return
   const status = report.status == null ? "none" : String(report.status)
-  console.warn(`refund health cause=${report.cause} status=${status} elapsedMs=${report.elapsedMs}`)
+  const firstAt = report.firstAt ?? "none"
+  console.warn(`refund health cause=${report.cause} status=${status} elapsedMs=${report.elapsedMs} firstAt=${firstAt}`)
 }
 
-function downHealth(started: number, cause: RelayerHealthCause, status?: number): RelayerHealthReport {
+export function formatHealthReply(report: RelayerHealthReport): string {
+  const status = report.status == null ? "none" : String(report.status)
+  const contentType = report.contentType || "none"
+  const body = report.bodySnippet ?? ""
+  return `status ${status}, content-type ${contentType}, body ${body}`
+}
+
+export function warnTerminalHealth(report: RelayerHealthReport): void {
+  console.warn(`refund health reply ${formatHealthReply(report)}`)
+}
+
+function downHealth(
+  started: number,
+  cause: RelayerHealthCause,
+  firstAt: string,
+  status?: number,
+  reply?: { contentType: string; bodySnippet: string },
+): RelayerHealthReport {
   const report: RelayerHealthReport = {
     state: "down",
     cause,
     elapsedMs: Math.max(0, Date.now() - started),
+    firstAt,
   }
   if (status != null) report.status = status
+  if (reply) {
+    report.contentType = reply.contentType
+    report.bodySnippet = reply.bodySnippet
+  }
   warnRefundHealth(report)
   return report
 }
@@ -691,8 +770,53 @@ function isOpaqueHealthResponse(response: Response): boolean {
 
 export function relayerHealthWakes(report: RelayerHealthReport): boolean {
   if (report.state !== "down") return false
-  if (report.cause === "timeout" || report.cause === "network_or_cors") return true
-  return report.cause === "http_status" && report.status != null && WAKE_HTTP_STATUSES.has(report.status)
+  if (report.cause === "timeout" || report.cause === "network_or_cors" || report.cause === "not_ok") return true
+  if (report.cause === "bad_body") return report.status != null
+  return report.cause === "http_status" && report.status != null && httpStatusWakes(report.status)
+}
+
+async function readHealthBody(response: Response, limit = RELAYER_HEALTH_BODY_LIMIT_BYTES): Promise<string> {
+  const body = response.body
+  if (!body) return ""
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    while (received < limit) {
+      const { done, value } = await reader.read()
+      if (done || !value) break
+      const room = limit - received
+      const slice = value.byteLength > room ? value.subarray(0, room) : value
+      chunks.push(slice)
+      received += slice.byteLength
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  const merged = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(merged)
+}
+
+function healthBlocksSubmits(json: Record<string, unknown> | null): boolean {
+  if (!json) return false
+  return json.killSwitch === true || json.submitsDisabled === true
+}
+
+async function healthPayload(response: Response): Promise<{ contentType: string; bodySnippet: string; json: Record<string, unknown> | null }> {
+  const header = response.headers.get("content-type") ?? ""
+  const contentType = sanitiseHealthContentType(header)
+  let text = ""
+  try {
+    text = await readHealthBody(response)
+  } catch {
+    text = ""
+  }
+  return { contentType, bodySnippet: sanitiseHealthSnippet(text), json: parseJsonRecord(text) }
 }
 
 export async function readRelayerHealth(input: {
@@ -700,17 +824,19 @@ export async function readRelayerHealth(input: {
   fetchImpl?: typeof fetch
   timeoutMs?: number
   signal?: AbortSignal
+  firstAt?: string
 }): Promise<RelayerHealthReport> {
   const started = Date.now()
+  const firstAt = input.firstAt ?? new Date(started).toISOString()
   if (input.signal?.aborted) throw healthCancelled()
   let endpoint: string
   try {
     const parsed = new URL(input.url)
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return downHealth(started, "bad_body")
-    if (parsed.username || parsed.password) return downHealth(started, "bad_body")
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return downHealth(started, "bad_body", firstAt)
+    if (parsed.username || parsed.password) return downHealth(started, "bad_body", firstAt)
     endpoint = `${parsed.origin}/health`
   } catch {
-    return downHealth(started, "bad_body")
+    return downHealth(started, "bad_body", firstAt)
   }
   let response: Response
   try {
@@ -723,15 +849,18 @@ export async function readRelayerHealth(input: {
     )
   } catch (cause) {
     if (isHealthCancelled(cause) || input.signal?.aborted) throw healthCancelled()
-    if (isAbort(cause)) return downHealth(started, "timeout")
-    return downHealth(started, "network_or_cors")
+    if (isAbort(cause)) return downHealth(started, "timeout", firstAt)
+    return downHealth(started, "network_or_cors", firstAt)
   }
-  if (isOpaqueHealthResponse(response)) return downHealth(started, "network_or_cors")
-  if (!response.ok) return downHealth(started, "http_status", response.status)
-  const json = await readJson(response)
-  if (!json || typeof json.killSwitch !== "boolean") return downHealth(started, "bad_body", response.status)
-  if (json.ok !== true) return downHealth(started, "not_ok", response.status)
-  return { state: json.killSwitch ? "paused" : "ok", elapsedMs: Math.max(0, Date.now() - started) }
+  if (isOpaqueHealthResponse(response)) return downHealth(started, "network_or_cors", firstAt)
+  const payload = await healthPayload(response)
+  const reply = { contentType: payload.contentType, bodySnippet: payload.bodySnippet }
+  if (!response.ok) return downHealth(started, "http_status", firstAt, response.status, reply)
+  const json = payload.json
+  if (healthBlocksSubmits(json)) return { state: "paused", elapsedMs: Math.max(0, Date.now() - started) }
+  if (!json || typeof json.killSwitch !== "boolean") return downHealth(started, "bad_body", firstAt, response.status, reply)
+  if (json.ok !== true) return downHealth(started, "not_ok", firstAt, response.status, reply)
+  return { state: "ok", elapsedMs: Math.max(0, Date.now() - started) }
 }
 
 export async function readRelayerPaused(input: {
@@ -761,7 +890,9 @@ function sleepForHealth(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Re-check /health until it is usable, a hard failure, or the wake cap.
- * A wake (timeout, any fetch failure (network, CORS or other non-abort error), or 502/503/504) retries health only. This never signs or posts a refund.
+ * A wake (timeout, network or CORS, any 5xx, 404, 408, 429, a non-JSON body, or JSON without ok:true)
+ * retries health only. This never signs or posts a refund. After the cap, a slower background
+ * re-check continues until /health is ok, submits are disabled, the kill switch is on, or the watch is cancelled.
  */
 export async function watchRelayerHealth(input: {
   url: string
@@ -769,6 +900,7 @@ export async function watchRelayerHealth(input: {
   timeoutMs?: number
   retryMs?: number
   capMs?: number
+  backgroundMs?: number
   signal?: AbortSignal
   now?: () => number
   initial?: { report: RelayerHealthReport; loopStart: number }
@@ -778,13 +910,57 @@ export async function watchRelayerHealth(input: {
   const timeoutMs = input.timeoutMs ?? RELAYER_HEALTH_TIMEOUT_MS
   const retryMs = input.retryMs ?? RELAYER_HEALTH_RETRY_MS
   const capMs = input.capMs ?? RELAYER_HEALTH_WAKE_CAP_MS
+  const backgroundMs = input.backgroundMs ?? RELAYER_HEALTH_BACKGROUND_MS
   const signal = input.signal
   const loopStart = input.initial?.loopStart ?? now()
   let pending = input.initial ?? null
+  let firstAt = input.initial?.report.firstAt
+
+  const remember = (report: RelayerHealthReport) => {
+    if (!firstAt && report.firstAt) firstAt = report.firstAt
+  }
+
+  const backgroundRecheck = () => {
+    void (async () => {
+      while (!signal?.aborted) {
+        await sleepForHealth(backgroundMs, signal)
+        if (signal?.aborted) return
+        let report: RelayerHealthReport
+        try {
+          report = await readRelayerHealth({
+            url: input.url,
+            fetchImpl: input.fetchImpl,
+            timeoutMs,
+            signal,
+            firstAt,
+          })
+        } catch (cause) {
+          if (isHealthCancelled(cause) || signal?.aborted) return
+          return
+        }
+        if (signal?.aborted) return
+        remember(report)
+        if (report.state === "ok") {
+          input.onUpdate({ phase: "ok", report })
+          return
+        }
+        if (report.state === "paused") {
+          input.onUpdate({ phase: "paused", report })
+          return
+        }
+      }
+    })()
+  }
+
+  const giveUp = (report: RelayerHealthReport | null) => {
+    input.onUpdate({ phase: "gave_up", report })
+    backgroundRecheck()
+  }
+
   while (true) {
     if (signal?.aborted) return
     if (now() - loopStart >= capMs) {
-      input.onUpdate({ phase: "gave_up", report: pending?.report ?? null })
+      giveUp(pending?.report ?? null)
       return
     }
     let report: RelayerHealthReport
@@ -799,6 +975,7 @@ export async function watchRelayerHealth(input: {
           fetchImpl: input.fetchImpl,
           timeoutMs: Math.min(timeoutMs, Math.max(1, remaining)),
           signal,
+          firstAt,
         })
       } catch (cause) {
         if (isHealthCancelled(cause) || signal?.aborted) return
@@ -806,6 +983,7 @@ export async function watchRelayerHealth(input: {
       }
       if (signal?.aborted) return
     }
+    remember(report)
     if (report.state === "ok") {
       input.onUpdate({ phase: "ok", report })
       return
@@ -815,6 +993,7 @@ export async function watchRelayerHealth(input: {
       return
     }
     if (!relayerHealthWakes(report)) {
+      warnTerminalHealth(report)
       input.onUpdate({ phase: "down", report })
       return
     }
@@ -824,7 +1003,7 @@ export async function watchRelayerHealth(input: {
       const untilCap = capMs - (now() - loopStart)
       if (untilCap > 0) await sleepForHealth(untilCap, signal)
       if (signal?.aborted) return
-      input.onUpdate({ phase: "gave_up", report })
+      giveUp(report)
       return
     }
     if (wait > 0) await sleepForHealth(wait, signal)
