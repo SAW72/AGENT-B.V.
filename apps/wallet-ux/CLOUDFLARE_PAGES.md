@@ -2,7 +2,7 @@
 
 The current Pages project is `agent-bv` (https://agent-bv.pages.dev). It is a Direct Upload project. It has no git connection. Cloudflare does not build it, and environment variables set in the Cloudflare dashboard are not used at build time.
 
-The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) stays live. Retire it only after a live refund passes on https://agent-bv.pages.dev. Do not delete or disable `agent-a-wallet-ux` before that. Relayer defaults now allow only https://agent-bv.pages.dev.
+The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) is retired. The live site is https://agent-bv.pages.dev. Relayer defaults now allow only https://agent-bv.pages.dev.
 
 Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. This workflow never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet unless `VITE_CLAIM_RELAYER_URL` is set, in which case a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
 
@@ -39,7 +39,7 @@ The workflow does nothing until the `production` environment has `CLOUDFLARE_API
 | Name | Where | Role |
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | `production` environment secret only. Never a repository secret. | API token with **Pages:Edit** scope only. Wrangler uses it to upload `dist`. Spencer: delete any repository-level copy. |
-| `CLOUDFLARE_ACCOUNT_ID` | `production` environment secret only. Never a repository secret. | Cloudflare account that owns `agent-bv` and the still-live `agent-a-wallet-ux` project. Spencer: delete any repository-level copy. |
+| `CLOUDFLARE_ACCOUNT_ID` | `production` environment secret only. Never a repository secret. | Cloudflare account that owns `agent-bv`. The previous project `agent-a-wallet-ux` is retired; the live site is https://agent-bv.pages.dev. Spencer: delete any repository-level copy. |
 | `VITE_CLAIM_RELAYER_URL` | `production` environment variable. Never a repository variable. | Must be a non-empty `https://` URL. The Require step fails before `npm ci` when it is empty or does not start with `https://`. Passed into every `npm run build`. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. Spencer: delete any repository-level copy. |
 | `VITE_CLAIM_API_SECRET` | Retired. Must not exist anywhere. | Do not set a claim secret on Pages. Not a repository secret, not a `production` environment secret or variable, and not a Cloudflare Pages environment variable. Spencer: delete any existing copy. |
 
@@ -107,7 +107,7 @@ After each upload, the job reads the `deployment-url` output and fetches `/`. Se
 
 If **Verify the production bundle** goes red on a later deploy, the production upload has already replaced the live deployment. Roll back to the previous production deployment, then investigate the failed check.
 
-In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. Do not roll back or delete `agent-a-wallet-ux` from this step. That project stays live until a live refund passes on https://agent-bv.pages.dev. In **All deployments**, open the actions menu on the previous production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including this workflow's `preview-<run id>` deployment. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
+In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. The previous project `agent-a-wallet-ux` is retired; the live site is https://agent-bv.pages.dev. In **All deployments**, open the actions menu on the previous production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including this workflow's `preview-<run id>` deployment. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
 
 The same rollback is the Pages API call documented at [Rollback deployment](https://developers.cloudflare.com/api/resources/pages/subresources/projects/subresources/deployments/methods/rollback/). It accepts only a successful production deployment. `{deployment_id}` is the previous production deployment, not a preview deployment:
 
@@ -125,7 +125,7 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 | --- | --- |
 | Project name | `agent-bv` |
 | Production URL | `https://agent-bv.pages.dev` |
-| Previous project | `agent-a-wallet-ux` at `https://agent-a-wallet-ux.pages.dev`, live until a live refund passes on the new site |
+| Previous project | `agent-a-wallet-ux` (`https://agent-a-wallet-ux.pages.dev`) is retired. The live site is `https://agent-bv.pages.dev` |
 | Git connection | None. Direct Upload. |
 | Who builds | GitHub Actions, or the local command above. Cloudflare does not build. |
 | Dashboard env vars at build time | Unused. |
@@ -144,7 +144,7 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 
 Vite copies that file to `dist/_redirects`. The app is one page today. Keep this rule if client routes are added later so those paths serve `index.html`.
 
-[`public/_headers`](public/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. There is no `Content-Security-Policy`. `scripts/guard-pages-headers.mjs` fails when that file's bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
+[`public/_headers`](public/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers the live Pages host already sends. There is no `Content-Security-Policy`. `scripts/guard-pages-headers.mjs` fails when that file's bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`.
 
 ## Address book
 
