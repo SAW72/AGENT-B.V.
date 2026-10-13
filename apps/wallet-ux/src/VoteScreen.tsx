@@ -13,6 +13,7 @@ import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFe
 import { previewVote, type CallPreview } from "./preview"
 import { preparedMatches } from "./pendingTx"
 import { usePreparedRouteGuard } from "./prepareFeedback"
+import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FLOW_STEP_LABELS } from "./walkthrough"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
@@ -134,6 +135,7 @@ function caseBlockMessage(read: CaseRead): string | null {
 
 export function VoteScreen({ panel, route = null }: { panel: Address; route?: WalletRoute | null }) {
   const guided = route?.flow === "vote" ? route : null
+  const readiness = useFlowReadiness()
   const account = useAccount()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const carried = useCarriedIds()
@@ -387,6 +389,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
   }
 
   async function onNext() {
+    if (!flowMayAdvance(readiness)) return
     const ok = await onSubmit()
     if (ok) {
       const id = parseBytes32(disputeIdRef.current)
@@ -442,6 +445,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
             id="vote-form"
             onSubmit={(event) => {
               event.preventDefault()
+              if (!flowMayAdvance(readiness)) return
               void onNext()
             }}
           >
@@ -510,19 +514,13 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
                 {UNDO_DEAL_LABEL}
               </label>
             </fieldset>
-            <StepFooter onBack={back}>
-              <ActionButton
-                type="button"
-                disabled={session.preparing || nextBlocked}
-                reason={
-                  canPrepare || seatReason
-                    ? null
-                    : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")
-                }
-                onClick={() => void onNext()}
-                state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
-              />
-            </StepFooter>
+            <GuidedStepFooter
+              onBack={back}
+              onNext={() => void onNext()}
+              busy={session.preparing}
+              nextDisabled={session.preparing || nextBlocked}
+              reason={canPrepare || seatReason ? null : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")}
+            />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </form>
         ) : voteReady && session.preview ? (

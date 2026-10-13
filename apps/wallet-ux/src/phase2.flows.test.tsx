@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { encodeFunctionResult, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
@@ -734,6 +734,75 @@ describe("phase 2 guided flows", () => {
     fireEvent.submit(document.getElementById("create-claim")!)
     expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
   })
+
+  function formFor(flow: (typeof FLOWS)[number]): HTMLFormElement {
+    if (flow === "fund") return document.getElementById("create-claim") as HTMLFormElement
+    if (flow === "dispute") return document.getElementById("open-dispute") as HTMLFormElement
+    if (flow === "vote") return document.getElementById("vote-form") as HTMLFormElement
+    if (flow === "withdraw") return document.getElementById("withdraw-form") as HTMLFormElement
+    const form = document.getElementById(`${flow}-form`)?.querySelector("form")
+    if (!(form instanceof HTMLFormElement)) throw new Error(`missing form for ${flow}`)
+    return form
+  }
+
+  async function expectWalletBlocksFlow(flow: (typeof FLOWS)[number], mode: "disconnected" | "mainnet") {
+    world.connected = mode === "mainnet"
+    world.chainId = 8453
+    if (flow === "refund") world.expiresAt = 1n
+    render(<Host />)
+    const href =
+      flow === "release" || flow === "refund" || flow === "dispute"
+        ? `/app/${flow}?escrow=${id}`
+        : flow === "vote"
+          ? `/app/vote?dispute=${disputeId}`
+          : `/app/${flow}`
+    navigate(href)
+    if (flow === "fund") {
+      fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
+    }
+    if (flow === "dispute") {
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
+      await waitFor(() => expect(screen.getByTestId("dispute-subject").textContent).toMatch(/0x/i))
+    }
+    if (flow === "vote") {
+      await waitFor(() => expect(screen.getByTestId("vote-tally")).toBeTruthy())
+      fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+    }
+    if ((flow === "release" || flow === "refund") && mode === "mainnet") {
+      await waitFor(() => expect(screen.getByTestId("other-action")).toBeTruthy())
+    }
+    if (flow === "withdraw" && mode === "mainnet") {
+      await waitFor(() => expect(screen.getByTestId("withdraw-available").textContent).toMatch(/Available to withdraw/))
+    }
+
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    if (mode === "disconnected") {
+      expect(screen.getByTestId("journey-connect").textContent).toBe("Connect wallet")
+      expect(screen.queryByRole("button", { name: "Switch to Base Sepolia" })).toBeNull()
+    } else {
+      const switches = screen.getAllByRole("button", { name: "Switch to Base Sepolia" })
+      expect(switches).toHaveLength(1)
+      expect(switches[0]?.getAttribute("data-testid")).toBe("journey-switch")
+      expect(screen.queryByTestId("journey-connect")).toBeNull()
+    }
+    await act(async () => {
+      fireEvent.submit(formFor(flow))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  }
+
+  for (const flow of FLOWS) {
+    it(`replaces Next on ${flow} when the wallet is disconnected`, async () => {
+      await expectWalletBlocksFlow(flow, "disconnected")
+    })
+
+    it(`replaces Next on ${flow} when the wallet is on Base mainnet`, async () => {
+      await expectWalletBlocksFlow(flow, "mainnet")
+    })
+  }
 
   it("serves client routes from the Pages SPA fallback", () => {
     const file = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../landing/_redirects"), "utf8")

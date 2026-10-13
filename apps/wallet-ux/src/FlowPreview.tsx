@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
-import { ConnectWalletButton, SwitchToSepoliaButton, TestEthNote } from "./firstRun"
+import { TestEthNote } from "./firstRun"
+import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
 import {
   ActionButton,
   ActionStatus,
@@ -116,7 +117,7 @@ import {
   type WalletRoute,
 } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
-import { CONNECT_NOTE, WRONG_NETWORK_NOTE, walletReadiness } from "./walkthrough"
+import { CONNECT_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -1146,11 +1147,7 @@ function CreateForm({
   guided?: GuidedStep | null
 }) {
   const account = useAccount()
-  const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
-  const readiness = walletReadiness(
-    account.isConnected,
-    account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
-  )
+  const readiness = useFlowReadiness()
   const balance = useBalance({
     address: account.address,
     chainId: BASE_SEPOLIA_CHAIN_ID,
@@ -1337,7 +1334,7 @@ function CreateForm({
   }
 
   async function onNext() {
-    if (!guided || readiness !== "ready") return
+    if (!guided || !flowMayAdvance(readiness)) return
     if (step === 1) {
       if (!parseBytes32(escrowId)) {
         session.publish(FORM_ERRORS.createIds, null)
@@ -1409,7 +1406,8 @@ function CreateForm({
             return
           }
           event.preventDefault()
-          if (step < 4 && readiness === "ready") void onNext()
+          if (!flowMayAdvance(readiness) || step >= 4) return
+          void onNext()
         }}
       >
         {guided && readiness === "wrong-network" && step < 4 ? (
@@ -1525,19 +1523,7 @@ function CreateForm({
           </>
         ) : null}
         {guided && step < 4 ? (
-          <StepFooter onBack={backFund}>
-            {readiness === "wrong-network" ? (
-              <SwitchToSepoliaButton />
-            ) : readiness === "disconnected" ? (
-              <ConnectWalletButton />
-            ) : (
-              <ActionButton
-                type="button"
-                onClick={() => void onNext()}
-                state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
-              />
-            )}
-          </StepFooter>
+          <GuidedStepFooter onBack={backFund} onNext={() => void onNext()} busy={session.preparing} />
         ) : null}
         {guided && session.error && step < 4 ? (
           <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />
@@ -1649,6 +1635,7 @@ function IdForm({
   guided?: GuidedStep | null
   build: (escrowId: Hex) => CallPreview
 }) {
+  const readiness = useFlowReadiness()
   const carried = useCarriedIds()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [urlEscrow] = useState(() => readUrlBytes32("escrow"))
@@ -1723,7 +1710,7 @@ function IdForm({
   }
 
   async function onNext() {
-    if (!guided || gated) return
+    if (!guided || !flowMayAdvance(readiness) || gated) return
     const ok = await onSubmit()
     if (ok) {
       flowStep.arm(`${slot}|${parseBytes32(escrowId) ?? ""}|2`)
@@ -1740,7 +1727,8 @@ function IdForm({
             return
           }
           event.preventDefault()
-          if (step === 1) void onNext()
+          if (!flowMayAdvance(readiness) || step !== 1) return
+          void onNext()
         }}
       >
         {guided ? (
@@ -1847,14 +1835,12 @@ function IdForm({
         ) : null}
         {guided && step === 1 ? (
           <>
-            <StepFooter onBack={() => guided.back()}>
-              <ActionButton
-                type="button"
-                disabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
-                onClick={() => void onNext()}
-                state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
-              />
-            </StepFooter>
+            <GuidedStepFooter
+              onBack={() => guided.back()}
+              onNext={() => void onNext()}
+              busy={session.preparing}
+              nextDisabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
+            />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </>
         ) : null}
@@ -1911,6 +1897,7 @@ function OpenDisputeForm({
   onActivate: (slot: PrepareSlot) => void
   guided?: GuidedStep | null
 }) {
+  const readiness = useFlowReadiness()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const carried = useCarriedIds()
   const [urlEscrow] = useState(() => readUrlBytes32("escrow"))
@@ -2098,7 +2085,7 @@ function OpenDisputeForm({
   }
 
   async function onNext() {
-    if (!guided) return
+    if (!guided || !flowMayAdvance(readiness)) return
     const ok = await onSubmit()
     if (ok) {
       const claim = parseBytes32(claimIdRef.current)
@@ -2118,7 +2105,8 @@ function OpenDisputeForm({
           return
         }
         event.preventDefault()
-        if (step === 1) void onNext()
+        if (!flowMayAdvance(readiness) || step !== 1) return
+        void onNext()
       }}
     >
       {guided ? <Stepper step={step} total={2} labels={FLOW_STEP_LABELS.dispute} /> : null}
@@ -2229,13 +2217,7 @@ function OpenDisputeForm({
       ) : null}
       {guided && step === 1 ? (
         <>
-          <StepFooter onBack={() => guided.back()}>
-            <ActionButton
-              type="button"
-              onClick={() => void onNext()}
-              state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
-            />
-          </StepFooter>
+          <GuidedStepFooter onBack={() => guided.back()} onNext={() => void onNext()} busy={session.preparing} />
           {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
         </>
       ) : null}

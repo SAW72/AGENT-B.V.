@@ -10,6 +10,7 @@ import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
 import { preparedMatches } from "./pendingTx"
 import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
+import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FLOW_STEP_LABELS } from "./walkthrough"
 import { previewCardCopy } from "./submit"
@@ -91,6 +92,7 @@ function WithdrawForm({
   step: number
 }) {
   const account = useAccount()
+  const readiness = useFlowReadiness()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [credit, setCredit] = useState<bigint | null>(null)
   const [creditState, setCreditState] = useState<"idle" | "loading" | "ready" | "unreadable" | "hidden" | "disconnected">(
@@ -176,6 +178,7 @@ function WithdrawForm({
   }
 
   async function onNext() {
+    if (!flowMayAdvance(readiness)) return
     const ok = await onWithdraw()
     if (ok) {
       guard.arm("withdraw|2")
@@ -246,22 +249,17 @@ function WithdrawForm({
           id="withdraw-form"
           onSubmit={(event) => {
             event.preventDefault()
+            if (!flowMayAdvance(readiness)) return
             void onNext()
           }}
         >
-          <StepFooter onBack={() => navigate(walletHome())}>
-            <ActionButton
-              type="button"
-              disabled={session.preparing || !canPrepare}
-              reason={canPrepare || creditState === "loading" ? null : blockedLabel}
-              onClick={() => void onNext()}
-              state={
-                session.preparing
-                  ? { status: "busy", label: "Preparing…" }
-                  : { status: "idle", label: "Next" }
-              }
-            />
-          </StepFooter>
+          <GuidedStepFooter
+            onBack={() => navigate(walletHome())}
+            onNext={() => void onNext()}
+            busy={session.preparing}
+            nextDisabled={session.preparing || !canPrepare}
+            reason={canPrepare || creditState === "loading" ? null : blockedLabel}
+          />
           {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
         </form>
       ) : (
