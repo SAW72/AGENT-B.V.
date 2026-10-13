@@ -15,9 +15,6 @@ const { implementation: LocationImpl } = require("jsdom/lib/jsdom/living/window/
 const originalReplace = LocationImpl.prototype.replace
 const wranglerBin = join(appRoot, "node_modules/wrangler/bin/wrangler.js")
 
-const LANDING_TITLE = "Agent-BV (Agent Bot Verifier): check the bot before you sign"
-const APP_TITLE = "Agent-BV (Agent Bot Verifier) — Base Sepolia"
-
 let siteDir = ""
 let server
 let base = ""
@@ -118,14 +115,16 @@ describe("built site", () => {
   it("serves the landing page at / and the app at /app/", async () => {
     const root = await get("/")
     const app = await get("/app/")
+    const landingFile = readFileSync(join(siteDir, "index.html"), "utf8")
+    const appFile = readFileSync(join(siteDir, "app/index.html"), "utf8")
     expect(root.status).toBe(200)
-    expect(root.text).toContain(`<title>${LANDING_TITLE}</title>`)
+    expect(root.text).toBe(landingFile)
     expect(root.text).toContain('href="/styles.css"')
     expect(root.text).not.toContain('href="styles.css"')
     expect(app.status).toBe(200)
-    expect(app.text).toContain(`<title>${APP_TITLE}</title>`)
+    expect(app.text).toBe(appFile)
     expect(app.text).toContain('src="/app/assets/')
-    expect(app.text).not.toContain(LANDING_TITLE)
+    expect(app.text).not.toBe(root.text)
   })
 
   it("redirects /points, /claim, and /release to /app/ and keeps the query string", async () => {
@@ -173,8 +172,9 @@ describe("built site", () => {
 
   it("styles nested landing fallbacks from root-relative assets", async () => {
     const nested = await get("/foo/bar")
+    const root = await get("/")
     expect(nested.status).toBe(200)
-    expect(nested.text).toContain(`<title>${LANDING_TITLE}</title>`)
+    expect(nested.text).toBe(root.text)
     expect(nested.text).toContain('href="/styles.css"')
     expect(nested.text).toContain('src="/assets/mascot-sm.png"')
     const css = await get("/styles.css")
