@@ -14,6 +14,7 @@ import { previewVote, type CallPreview } from "./preview"
 import { preparedMatches } from "./pendingTx"
 import { usePreparedRouteGuard } from "./prepareFeedback"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
+import { FLOW_STEP_LABELS } from "./walkthrough"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
 import { FilledFromLink, IdRow, StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
@@ -418,7 +419,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
     const nextBlocked = !canPrepare || (caseRead.status === "loading" && parsedId != null)
     return (
       <section className="card guided-flow" aria-labelledby="vote-heading" data-testid="vote-screen">
-        <Stepper step={step} total={2} />
+        <Stepper step={step} total={2} labels={FLOW_STEP_LABELS.vote} />
         <h2 id="vote-heading">{VOTE_HEADING}</h2>
         <p data-testid="vote-test-only">{WALLET_SIGNED_TEST_LINE}</p>
         {guided.stepNotice ? (

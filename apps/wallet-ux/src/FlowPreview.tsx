@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
+import { ConnectWalletButton, SwitchToSepoliaButton } from "./firstRun"
 import {
   ActionButton,
   ActionStatus,
@@ -103,6 +104,7 @@ import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
+import { CONNECT_NOTE, FLOW_STEP_LABELS, TEST_ETH_NOTE, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -1136,6 +1138,11 @@ function CreateForm({
   guided?: GuidedStep | null
 }) {
   const account = useAccount()
+  const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
+  const readiness = walletReadiness(
+    account.isConnected,
+    account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null,
+  )
   const balance = useBalance({
     address: account.address,
     chainId: BASE_SEPOLIA_CHAIN_ID,
@@ -1322,7 +1329,7 @@ function CreateForm({
   }
 
   async function onNext() {
-    if (!guided) return
+    if (!guided || readiness !== "ready") return
     if (step === 1) {
       if (!parseBytes32(escrowId)) {
         session.publish(FORM_ERRORS.createIds, null)
@@ -1394,10 +1401,21 @@ function CreateForm({
             return
           }
           event.preventDefault()
-          if (step < 4) void onNext()
+          if (step < 4 && readiness === "ready") void onNext()
         }}
       >
-        {guided ? <Stepper step={step} total={4} /> : null}
+        {guided ? <p data-testid="journey-now">{journeyNow(readiness, step < 4 ? "funding" : "review")}</p> : null}
+        {guided && readiness === "wrong-network" && step < 4 ? (
+          <p className="banner" role="status" data-testid="wrong-network-note">
+            {WRONG_NETWORK_NOTE}
+          </p>
+        ) : null}
+        {guided && readiness === "disconnected" && step < 4 ? (
+          <p className="hint" data-testid="connect-note">
+            {CONNECT_NOTE}
+          </p>
+        ) : null}
+        {guided ? <Stepper step={step} total={4} labels={FLOW_STEP_LABELS.fund} /> : null}
         <ActionTestnet title="Fund an escrow" />
         {heldError ? (
           <p className="warn-note" role="status" data-testid="step-error">
@@ -1491,6 +1509,9 @@ function CreateForm({
             ) : null
           }
         />
+        <p className="hint" data-testid="test-eth-note">
+          {TEST_ETH_NOTE}
+        </p>
         {overBalance ? (
           <p className="warn-note" role="status" data-testid="balance-warning">
             {BALANCE_WARN_TEXT}
@@ -1500,11 +1521,17 @@ function CreateForm({
         ) : null}
         {guided && step < 4 ? (
           <StepFooter onBack={backFund}>
-            <ActionButton
-              type="button"
-              onClick={() => void onNext()}
-              state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
-            />
+            {readiness === "wrong-network" ? (
+              <SwitchToSepoliaButton />
+            ) : readiness === "disconnected" ? (
+              <ConnectWalletButton />
+            ) : (
+              <ActionButton
+                type="button"
+                onClick={() => void onNext()}
+                state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
+              />
+            )}
           </StepFooter>
         ) : null}
         {guided && session.error && step < 4 ? (
@@ -1713,7 +1740,9 @@ function IdForm({
           if (step === 1) void onNext()
         }}
       >
-        {guided ? <Stepper step={step} total={2} /> : null}
+        {guided ? (
+          <Stepper step={step} total={2} labels={FLOW_STEP_LABELS[slot === "refund" ? "refund" : "release"]} />
+        ) : null}
         <ActionTestnet title={title} />
         {(!guided || step === 1) && intro}
         {!guided || step === 1 ? (
@@ -2086,7 +2115,7 @@ function OpenDisputeForm({
         if (step === 1) void onNext()
       }}
     >
-      {guided ? <Stepper step={step} total={2} /> : null}
+      {guided ? <Stepper step={step} total={2} labels={FLOW_STEP_LABELS.dispute} /> : null}
       <ActionTestnet title="Open a dispute" />
       {!guided || step === 1 ? (
         <>

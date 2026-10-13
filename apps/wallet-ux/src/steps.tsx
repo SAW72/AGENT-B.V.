@@ -3,7 +3,15 @@ import { chunkHex } from "./format"
 import { FILLED_FROM_LINK } from "./routes"
 import { ChunkedHex, CopyButton } from "./ui"
 
-export function Stepper({ step, total }: { step: number; total: number }) {
+export function Stepper({
+  step,
+  total,
+  labels,
+}: {
+  step: number
+  total: number
+  labels?: readonly string[]
+}) {
   return (
     <div className="stepper" data-testid="stepper">
       <p data-testid="step-count">
@@ -15,14 +23,18 @@ export function Stepper({ step, total }: { step: number; total: number }) {
           const state = n < step ? "done" : n === step ? "current" : "upcoming"
           const mark = state === "done" ? "✓" : state === "current" ? "●" : "○"
           const word = state === "done" ? "Done" : state === "current" ? "Now" : "Later"
+          const name = labels?.[index]
           return (
-            <li key={n} className={`step-dot ${state}`} aria-current={state === "current" ? "step" : undefined}>
+            <li
+              key={n}
+              className={`step-dot ${state}`}
+              data-step-state={state}
+              aria-current={state === "current" ? "step" : undefined}
+            >
               <span className="step-dot-mark" aria-hidden="true">
                 {mark}
               </span>
-              <span className="step-dot-word">
-                {word} {n}
-              </span>
+              <span className="step-dot-word">{name ? `${word} · ${name}` : `${word} ${n}`}</span>
             </li>
           )
         })}

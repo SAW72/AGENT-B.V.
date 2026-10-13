@@ -564,6 +564,8 @@ a.task-link {
   background: #f6f3ec;
 }
 
+.first-run { margin-bottom: 16px; }
+.first-run .task-link { margin-top: 8px; }
 .stepper { margin: 4px 0 12px; }
 .step-count { margin: 0 0 8px; font-weight: 700; }
 .step-dots {

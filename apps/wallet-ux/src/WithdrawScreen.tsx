@@ -11,6 +11,7 @@ import { preparedMatches } from "./pendingTx"
 import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
+import { FLOW_STEP_LABELS } from "./walkthrough"
 import { previewCardCopy } from "./submit"
 import { StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
@@ -211,7 +212,7 @@ function WithdrawForm({
         : "You are withdrawing the credited test ETH to this connected wallet."
     return (
       <div data-testid="review-step">
-        <Stepper step={2} total={2} />
+        <Stepper step={2} total={2} labels={FLOW_STEP_LABELS.withdraw} />
         <div className="preview" data-testid="withdraw-preview" tabIndex={-1} aria-label="Prepared withdrawal" ref={session.setNode}>
           <p data-testid="review-plain">{lead}</p>
           <p data-testid="review-contract">{CONTRACT_LABELS.escrow}</p>
@@ -237,7 +238,7 @@ function WithdrawForm({
 
   return (
     <>
-      {guided ? <Stepper step={1} total={2} /> : null}
+      {guided ? <Stepper step={1} total={2} labels={FLOW_STEP_LABELS.withdraw} /> : null}
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
       <p data-testid="withdraw-available">{availableText}</p>
       {guided ? (

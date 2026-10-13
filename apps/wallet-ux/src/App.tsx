@@ -6,6 +6,7 @@ import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { visibleConnectors } from "./connectors"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
+import { FirstRun } from "./firstRun"
 import { PendingStrip, FlowPreview } from "./FlowPreview"
 import { TASKS, flowHref, navigate, useWalletRoute, type FlowId } from "./routes"
 import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
@@ -383,7 +384,14 @@ export function App() {
       ) : null}
 
       <PendingStrip />
-      {route.flow == null ? <TaskPicker voteReason={voteReason} /> : <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />}
+      {route.flow == null ? (
+        <>
+          <FirstRun />
+          <TaskPicker voteReason={voteReason} />
+        </>
+      ) : (
+        <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />
+      )}
 
       <details
         className="system-status"

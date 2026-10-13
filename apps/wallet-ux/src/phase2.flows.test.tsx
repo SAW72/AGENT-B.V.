@@ -18,6 +18,7 @@ import { resetPendingRuntime } from "./usePendingReceipt"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { DEAL_STANDS_LABEL } from "./walletCopy"
+import { CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
 const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as Address
@@ -41,7 +42,15 @@ const PINNED = {
 
 const { sendTransactionAsync, world } = vi.hoisted(() => ({
   sendTransactionAsync: vi.fn(async () => `0x${"11".repeat(32)}` as Hex),
-  world: { arbitrator: true, state: 0, expiresAt: 4_000_000_000n, credit: 10n ** 15n },
+  world: {
+    arbitrator: true,
+    state: 0,
+    expiresAt: 4_000_000_000n,
+    credit: 10n ** 15n,
+    chainId: 84532,
+    connected: true,
+    switchChain: vi.fn(),
+  },
 }))
 
 const publicClient = {
@@ -73,15 +82,21 @@ const publicClient = {
 
 vi.mock("wagmi", () => ({
   useAccount: () => ({
-    isConnected: true,
-    address: ACCOUNT,
-    chainId: 84532,
+    isConnected: world.connected,
+    address: world.connected ? ACCOUNT : undefined,
+    chainId: world.connected ? world.chainId : undefined,
     connector: undefined,
+  }),
+  useConnect: () => ({
+    connect: vi.fn(),
+    connectors: [{ id: "injected", name: "Injected", type: "injected", uid: "injected" }],
+    isPending: false,
+    error: null,
   }),
   usePublicClient: () => publicClient,
   useSendTransaction: () => ({ sendTransactionAsync, isPending: false }),
   useWalletClient: () => ({ data: undefined }),
-  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
+  useSwitchChain: () => ({ switchChain: world.switchChain, isPending: false, error: null }),
   useBalance: () => ({ data: { value: 10n ** 18n }, isSuccess: true }),
 }))
 
@@ -114,6 +129,9 @@ beforeEach(() => {
   localStorage.clear()
   sessionStorage.removeItem(FUND_ESCROW_STORAGE_KEY)
   sendTransactionAsync.mockClear()
+  world.chainId = 84532
+  world.connected = true
+  world.switchChain.mockClear()
   window.history.replaceState(null, "", walletHome())
   navigate(walletHome())
 })
@@ -177,12 +195,20 @@ describe("phase 2 guided flows", () => {
   it("counts steps and walks back and forward without leaving the flow", async () => {
     render(<Host />)
     navigate("/app/fund")
+    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Fund an escrow")
     expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(within(screen.getByTestId("stepper")).getAllByRole("listitem")[0]?.querySelector(".step-dot-word")?.textContent).toBe("Now · Who is paid")
     fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
     fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: id } })
     fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByTestId("step-count").textContent).toBe("Step 2 of 4")
+    const dots = within(screen.getByTestId("stepper")).getAllByRole("listitem")
+    expect(dots.map((dot) => dot.getAttribute("data-step-state"))).toEqual(["done", "current", "upcoming", "upcoming"])
+    expect(dots[0]?.querySelector(".step-dot-word")?.textContent).toBe("Done · Who is paid")
+    expect(dots[0]?.getAttribute("aria-current")).toBeNull()
+    expect(dots[1]?.querySelector(".step-dot-word")?.textContent).toBe("Now · Which bots")
+    expect(dots[1]?.getAttribute("aria-current")).toBe("step")
     expect(window.location.pathname).toBe("/app/fund")
     expect(window.location.search).toContain("step=2")
     expect(window.location.search).toContain(`escrow=${id}`)
@@ -206,8 +232,11 @@ describe("phase 2 guided flows", () => {
     fireEvent.change(screen.getByLabelText("Payee bot identifier"), { target: { value: disputeId } })
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     fireEvent.change(screen.getByLabelText("Amount in ETH"), { target: { value: "0.001" } })
+    expect(screen.getByTestId("test-eth-note").textContent).toBe(TEST_ETH_NOTE)
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const review = await waitFor(() => screen.getByTestId("review-step"))
+    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Send the first transaction")
+    expect(screen.queryByTestId("test-eth-note")).toBeNull()
     expect(screen.getByTestId("step-count").textContent).toBe("Step 4 of 4")
     expect(within(review).getByTestId("review-plain").textContent).toContain("0.001 test ETH")
     expect(within(review).getByTestId("review-amount").textContent).toContain("0.001 test ETH")
@@ -525,6 +554,37 @@ describe("phase 2 guided flows", () => {
     await waitFor(() => expect(relayerCalls().some((call) => String(call[0]).includes("/health"))).toBe(true))
     fetchSpy.mockRestore()
     vi.unstubAllEnvs()
+  })
+
+  it("replaces Next with a Base Sepolia switch when the wallet is on another network", () => {
+    world.chainId = 1
+    render(<Host />)
+    navigate("/app/fund")
+    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Connect your wallet")
+    expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    expect(screen.queryByTestId("journey-connect")).toBeNull()
+    const dots = within(screen.getByTestId("stepper")).getAllByRole("listitem")
+    expect(dots.map((dot) => dot.getAttribute("data-step-state"))).toEqual(["current", "upcoming", "upcoming", "upcoming"])
+    fireEvent.click(screen.getByTestId("journey-switch"))
+    expect(world.switchChain).toHaveBeenCalledWith({ chainId: 84532 })
+    fireEvent.submit(document.getElementById("create-claim")!)
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.queryByTestId("review-step")).toBeNull()
+  })
+
+  it("replaces Next with connect when the fund flow has no wallet", () => {
+    world.connected = false
+    render(<Host />)
+    navigate("/app/fund")
+    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Connect your wallet")
+    expect(screen.getByTestId("connect-note").textContent).toBe(CONNECT_NOTE)
+    expect(screen.getByTestId("journey-connect").textContent).toBe("Connect wallet")
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    expect(screen.queryByTestId("journey-switch")).toBeNull()
+    expect(screen.queryByTestId("wrong-network-note")).toBeNull()
+    fireEvent.submit(document.getElementById("create-claim")!)
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
   })
 
   it("serves client routes from the Pages SPA fallback", () => {
