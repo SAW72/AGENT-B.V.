@@ -151,7 +151,7 @@ event VoteCast(bytes32 indexed disputeId, address voter, bool support);
 
 Topic0 `0x8b40665146691327ee30f5bf56e9b2d6f445d2830d3b09b56385cd30f630ecfb`, the hash in `docs/reputation/EVENT_MAP.md`. Contract `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. `disputeId` is indexed. `voter` and `support` are not. `vote` allows only a seated arbitrator, once per dispute, while the case is unresolved.
 
-Count a `VoteCast` log only when its `disputeId` equals `EscrowDisputed.disputeId` on a log from escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` whose `block_number` is greater than or equal to `47715415`. The start block applies to those escrow logs. Panel logs are not admitted by the panel deploy block `47253020`. A panel log enters only through the `disputeId` match. A `VoteCast` whose `disputeId` matches no such escrow log is not counted.
+Count a `VoteCast` log only when its `disputeId` equals `EscrowDisputed.disputeId` on a log from escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` whose `block_number` is greater than or equal to `47715415`. The start block applies to those escrow logs. Panel logs are not admitted by the panel deploy block `47253020`. A panel log enters only through the `disputeId` match. A `VoteCast` whose `disputeId` matches no such escrow log is not counted. A `VoteCast` seen before that `EscrowDisputed` is stored is deferred, not dropped. It can commit only after the escrow log is stored, and only when the vote log's own block is `finalized` and the log is not `removed: true`.
 
 | Argument | Indexed | Points use |
 |---|---|---|
@@ -161,7 +161,11 @@ Count a `VoteCast` log only when its `disputeId` equals `EscrowDisputed.disputeI
 
 The escrow id on that vote row is `EscrowDisputed.escrowId` from the matching log. `VoteCast` does not carry `escrowId`. `DisputeOpened.challenger` is not `voter` and is not `party`. On a case opened by `dispute`, the challenger is the escrow contract.
 
-Vote credit stays **TBD** until a register exists of which arbitrators are human and which are AI. No such register is in the sources. The three seated addresses and `arbitratorCount` of 3 in `deployments/base-sepolia.json` are not that register. `docs/reputation/INDEXER_SPEC.md` says humans stay in Gate B. That sentence is not a per-arbitrator classification. Until the register exists, a matched `VoteCast` may be stored under the rules in this spec, and no numeric vote credit is assigned.
+Vote credit stays **TBD** until a register exists of which arbitrators are human and which are AI. No such register is in the sources. The three seated addresses and `arbitratorCount` of 3 in `deployments/base-sepolia.json` are not that register. `docs/reputation/INDEXER_SPEC.md` says humans stay in Gate B. That sentence is not a per-arbitrator classification. Until the register exists, a matched vote that is not the payer or the payee is stored with points 0. That is not a numeric credit.
+
+No vote credit when `VoteCast.voter` is that escrow's payer or payee. Those addresses are `EscrowCreated.payer` and `EscrowCreated.payee` for the `escrowId` on the matching `EscrowDisputed`. `docs/reputation/INDEXER_SPEC.md` already gives that arbitrator 0 on A1 and 0 on A2. This ledger writes no points row for that vote.
+
+Negative test for retired escrows. The panel address is shared with the retired escrows `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` and `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`. A `VoteCast` whose `disputeId` matches an `EscrowDisputed` only on one of those retired addresses is not counted. `DisputePanel.openDispute` reverts when `createdAt != 0` (`"exists"`), so a `disputeId` is unique on that panel. The points check does not rely on that revert. The check is the live-escrow log. A two-argument `EscrowDisputed` topic0 on the live address is ignored.
 
 ## Actions
 
@@ -171,84 +175,76 @@ The `action` value stored in the ledger is one of the strings in this table. Tha
 
 | Action | What satisfies it | Wallet | Weight |
 |---|---|---|---|
-| `first_connect` | Derived from the wallet's first countable escrow event. Links to that source row | The wallet on the source row | **TBD** |
+| `first_activity` | Derived one-per-wallet row. Links to the wallet's first stored escrow-log row | The wallet on the source row | **TBD** |
 | `fund` | `EscrowCreated` | `payer` | **TBD** |
 | `release_or_refund` | `EscrowReleased` or `EscrowRefunded` | Create-time `payee` on release. Create-time `payer` on refund | **TBD** |
-| `dispute_open_or_vote` | `EscrowDisputed`, or a matched `VoteCast` | `party` for an open. `voter` for a matched vote | **TBD**. Vote credit stays **TBD** until the human/AI arbitrator register exists |
-| `return_day` | Derived. Not an event | The wallet whose activity was counted | **TBD** |
+| `dispute_open_or_vote` | `EscrowDisputed`, or a matched `VoteCast` that is not the payer or the payee | `party` for an open. `voter` for a matched vote | **TBD**. Vote credit stays **TBD** until the human/AI arbitrator register exists |
+| `return_day` | Derived. One later UTC day of stored activity | The wallet whose activity was counted | **TBD** |
+
+### Gates set before weights
+
+These rules are named here. Their numbers are **TBD**. No point weight is assigned until the numbers are set. They are not the GUESS floors or pair caps in `config/reputation/sepolia.json`.
+
+| Rule | What it compares | Value |
+|---|---|---|
+| `same_pair` | How many credited escrow logs share `EscrowCreated.payer` and `EscrowCreated.payee`. One cap per UTC day and one cap for the life of the ledger. A same-controller identity beyond that pair is not defined in the sources, so this is the named rule. | **TBD** |
+| `min_escrow_amount` | `EscrowCreated.amount` for that `escrowId`. A log whose create amount is below the minimum is not credited. This is the gate against 1-wei farming. | **TBD** |
+| `min_escrow_duration` | `EscrowCreated.expiresAt` minus the `EscrowCreated` block-header timestamp. The contract allows a duration from 1 second through 30 days. That 1 second is not this minimum. | **TBD** |
+
+`same_pair` applies to `fund`, `release_or_refund`, and the dispute-open case. It does not apply to `VoteCast`. While a number is still **TBD**, that one comparison is not applied, and the weight stays unset. When the number is set, a log that fails it is not committed.
 
 `release_or_refund` is one action. A release and a refund for the same wallet on the same UTC day share one slot. The row the server commits first keeps the slot. The other insert fails the unique constraint and credits nothing.
 
 `dispute_open_or_vote` is one action, same daily slot. An `EscrowDisputed` and a matched `VoteCast` for the same wallet on the same UTC day share that slot. `party` and `voter` are different event arguments. Splitting open and vote into two action strings is **TBD**.
 
-### First connect
+### First activity
 
-`first_connect` is a derived row. It is taken from the wallet's first countable escrow event, and it links to that source row.
+`first_activity` replaces the name `first_connect`. There is no connect signal. The dashboard in `docs/POINTS-PROGRAM.md` still has no connect-wallet button.
 
-A countable escrow event is a committed row for `fund`, `release_or_refund`, or the dispute-open case of `dispute_open_or_vote`. Those rows come from `EscrowCreated`, `EscrowReleased`, `EscrowRefunded`, and `EscrowDisputed` on `0x3d660502D75f1e97b08c110255921b437A3C4C42` at or after block `47715415`. `VoteCast` is not an escrow event and does not start `first_connect`.
+`first_activity` is one row per wallet. Its own key is `UNIQUE (wallet) WHERE action = 'first_activity'`. The chain-log unique key does not include this action, so the row does not collide with its source and does not need a NULL column to slip past that key. Every key column on the row is NOT NULL. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of the source log, stored for the link. They are not a second insert of `UNIQUE (chain_id, contract, tx_hash, log_index)`.
 
-For one wallet, the first of those rows in `(block_number, log_index)` order is the source. That order is the one `docs/reputation/INDEXER_SPEC.md` already uses. The wallet is the wallet column of the source row. There is one `first_connect` row per wallet.
+The source is the earliest stored escrow-log row for that wallet in `(block_number, log_index)` order. Escrow-log rows are `fund`, `release_or_refund`, and the dispute-open case of `dispute_open_or_vote` from `0x3d660502D75f1e97b08c110255921b437A3C4C42` at or after block `47715415`. `VoteCast` is not an escrow log and does not start `first_activity`. A stored row whose points are 0 because checklist #7 is still open does count as a source. A log that was not stored (cap reject, farming-gate reject, removed log, block not finalized) does not.
 
-The derived row stores a link to the source row's `(chain_id, contract, tx_hash, log_index)`. It is not a second insert of that key. Its own `log_index` and `block_number` are the source log's values, and both are NOT NULL. Its `utc_day` is the server-assigned UTC day of that same log. There is no off-chain connect signal. The dashboard in `docs/POINTS-PROGRAM.md` still has no connect-wallet button.
+Order is the log order in "Ingest", not the order rows arrived. The wallet is the wallet column of the source row. `utc_day` is that log's UTC day.
 
 ### Return days
 
 Return days are derived from activity on distinct UTC days. They are not an event.
 
-A `return_day` row uses the server-assigned `utc_day` of qualifying activity for that wallet. Qualifying activity means a row this ledger has already committed for that wallet on that UTC day. Whether the wallet's first active UTC day is itself a return day is **TBD**. The point weight is **TBD**. `UNIQUE(wallet, action, utc_day)` already allows at most one `return_day` row per wallet per UTC day.
+The wallet's first active UTC day is `first_activity`. It is not a `return_day`. Each later UTC day on which that wallet has a stored escrow-log or counted-vote row produces one `return_day`. The source log for the link is the earliest of those rows that day, in `(block_number, log_index)` order. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of that source, all NOT NULL. The chain-log unique key does not include `return_day`, so the copy is not a second insert of the source key. The row's own key is `UNIQUE (wallet, utc_day) WHERE action = 'return_day'`. The point weight is **TBD**.
 
 ## Ledger and daily cap
 
 The ledger is append-only. The server is the only writer.
 
-Daily cap, per wallet: one committed row per action per UTC day.
+Daily cap, per wallet: one committed row per action per UTC day. A release and a refund for the same wallet on the same UTC day share `release_or_refund`. The second insert fails and is not deferred to another day.
 
 ```text
 UNIQUE (wallet, action, utc_day)
+UNIQUE (chain_id, contract, tx_hash, log_index) WHERE action IN ('fund', 'release_or_refund', 'dispute_open_or_vote')
+UNIQUE (wallet) WHERE action = 'first_activity'
+UNIQUE (wallet, utc_day) WHERE action = 'return_day'
 ```
 
-Chain logs are deduped on the log, not on the transaction alone. One transaction can emit more than one counted log. Each counted log is one row.
+`wallet`, `contract`, and `tx_hash` are stored as lowercase hex with a `0x` prefix. The reputation read API already lowercases wallets. The RPC address is lowercase. Mixed case must not become two keys. `chain_id` is `84532`. `log_index` and `block_number` are integers and are NOT NULL on every committed row, including `first_activity` and `return_day`. No key column is NULL. A client cannot supply the key.
 
-```text
-UNIQUE (chain_id, contract, tx_hash, log_index)
-```
+`contract` for an escrow log is `0x3d660502d75f1e97b08c110255921b437a3c4c42`. For a counted `VoteCast` it is `0x31a92f9a25396968e14d2b55b6b0bb1482ecf1bb`.
 
-`contract` is the log address. For an escrow log it is `0x3d660502D75f1e97b08c110255921b437A3C4C42`. For a counted `VoteCast` it is `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. `chain_id` is `84532`. `tx_hash` and `log_index` are taken from the log the server read. A client cannot supply this key.
+`utc_day = floor(block_timestamp / 86400)`, using the block-header timestamp in unix seconds. `docs/reputation/INDEXER_SPEC.md` already says block-header timestamps are the only time source for chain logs. `00:00:00Z` belongs to the new day. Ingest time and the server wall clock are not `utc_day`.
 
-`log_index` and `block_number` are both required (NOT NULL) on every committed row.
+### Ingest
 
-`first_connect` does not insert a second `(chain_id, contract, tx_hash, log_index)`. The link to the source row is that key. The derived row's `log_index` and `block_number` are the source log's values.
+One block tag for backfill and for the live tail: `finalized`. That is `scan.final_tag` in `config/reputation/sepolia.json`. A log whose block is not yet `finalized` is not committed. `safe` (`scan.provisional_tag`) is display-only. It is not a points commit.
 
-`return_day` is not a chain log. Which source log supplies its NOT NULL `log_index` and `block_number` is **TBD**. Until that source is defined, a `return_day` row is not committed.
+Walk blocks from `47715415` through the finalized head, and within a block by `log_index` ascending. Backfill and live use that same order. Cap checks and `first_activity` see logs in that order, not in arrival order.
 
-Columns this spec requires:
+The only reorg rule is to skip a log marked `removed: true`. There is no cancel path and no rewrite of a committed row.
 
-| Column | Who writes it |
-|---|---|
-| `wallet` | Server, from the event mapping. Stored lowercase, the same address rule as the reputation read API in `docs/reputation-ledger.md`. For `first_connect`, the wallet on the source row |
-| `action` | Server, one of the five action strings |
-| `utc_day` | Server. UTC calendar day. Never a client field |
-| `chain_id` | Server. `84532` only |
-| `contract` | Server. The log address for a chain-log row. For `first_connect`, the link holds the source log address. The derived row does not reuse the unique key |
-| `tx_hash` | Server, from the log it read. For `first_connect`, the link holds the source hash |
-| `log_index` | Server, from the log. NOT NULL |
-| `block_number` | Server, from the log. NOT NULL |
+The cap insert is one database transaction. On conflict it rolls back. No second row and no partial amount.
 
-Further columns (bot ids, `dispute_id`, `support`, point weight) are **TBD**. `escrow_id` on an escrow log is the event's `escrowId`. On a matched `VoteCast` it is the matching `EscrowDisputed.escrowId`. The decision-chain link is required and is specified below.
+The same closed failure applies when the server cannot verify the log, when `chain_id` is not `84532`, when the contract is a retired escrow, when a `VoteCast` has no matching live-escrow `disputeId`, when `VoteCast.voter` is that escrow's payer or payee, when the block is not `finalized`, when the log is marked removed, or when the client is the only source of the hash, the log index, or the time.
 
-Time is set by the server.
-
-- A client-supplied `tx_hash`, `log_index`, timestamp, `utc_day`, or wallet is not a credit.
-- Escrow logs are read from chain id `84532` on `0x3d660502D75f1e97b08c110255921b437A3C4C42` at or after block `47715415`. The server sets `utc_day` from that log's block-header timestamp. `docs/reputation/INDEXER_SPEC.md` already says block-header timestamps are the only time source for chain logs, and `docs/reputation-ledger.md` defines a day as the UTC day of `block_timestamp`.
-- A `VoteCast` log is read from `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` only after the `disputeId` match. Its block is not required to be at or after `47715415`. The escrow log it matches is.
-- Commit only logs whose block is `finalized` or `safe`. Those are the tags in `config/reputation/sepolia.json` (`scan.final_tag` `finalized`, `scan.provisional_tag` `safe`). A log on a newer head is not committed. `docs/reputation/INDEXER_SPEC.md` already refuses logs past the `safe` tag.
-- Skip any log marked removed. `docs/reputation-ledger.md` drops logs with `removed: true` before scoring. A removed log is a reorg and is not a credit. A row already committed from a `safe` log is not kept as a credit if that log is later marked removed. `docs/reputation/INDEXER_SPEC.md` cancels the provisional entry with `cancel_reason = "reorg"`. A `finalized` entry stays as that spec describes: the indexer does not rewrite it.
-
-The cap is enforced atomically. The unique check and the insert are one database transaction. On conflict the transaction rolls back. No second row is written, and no partial point amount is written. The failure mode is closed: the extra activity does not become points.
-
-The same closed failure applies when the server cannot verify the log on the pinned contract and chain, when `chain_id` is not `84532`, when the contract address is a retired escrow, when a `VoteCast` has no matching escrow `disputeId`, when the log is not `finalized` or `safe`, when the log is marked removed, or when the client is the only source of the hash, the log index, or the time.
-
-Checklist #12, below, is still open. The unique triple is the daily cap this spec defines. It is not a locked numeric weight.
+Further columns (bot ids, `dispute_id`, `support`, point weight) are **TBD**. `escrow_id` on an escrow log is the event's `escrowId`. On a matched `VoteCast` it is the matching `EscrowDisputed.escrowId`. Checklist #12 stays open. The unique keys above are the caps this spec defines. They are not a locked numeric weight.
 
 ## Decision chain: proved on Agent-BV first
 
@@ -271,19 +267,33 @@ Each entry, from the decision-chain spec:
 
 Order is fixed: proposer, then each reviewer, then the terminal approver. A missing, reordered, or unsigned chain is rejected. Every chain, approved or blocked, is stored in full. The points row does not replace the chain log.
 
-The decision-chain link is required on every credit, including `first_connect`, `return_day`, and a matched vote. The link key is `escrowId` + `action` + `tx_hash` / `log_index`. The link is bound to a nonce. Neither `docs/decision-chain-spec.md` nor the escrow events define that nonce's issuer, type, or encoding. Those three are **TBD**. `createEscrow`'s comment says an `escrowId` may be a hash of an intent and a nonce. That comment is not this nonce. The claim-relayer `ClaimIntent` nonce is not this nonce.
+The decision-chain link is required on every credit, including `first_activity`, `return_day`, and a matched vote. The chain belongs to the points wallet, the address in the wallet column. It does not belong to `tx.from`. A refund submitted by the claim relayer `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` (`claimRelayerWallet` in `deployments/base-sepolia.json`) still requires the chain of `EscrowCreated.payer`, who is the credited wallet. The relayer is not the terminal approver. A release credits `EscrowCreated.payee`, including when only the payer may call `release` while the escrow is `Open`. The required chain is the payee's. The payer's transaction is not a substitute for that chain.
 
-The server confirms the link against the on-chain log after the nonce is bound. Confirmation reads the log at that `tx_hash` and `log_index` on chain id `84532` and checks:
+### EIP-712 link
 
-- the log's contract and `block_number` satisfy the commit rules in "Ledger and daily cap"
-- the log is not marked removed
-- for a chain-log credit, `action` is the action this spec assigns to that log
-- for `first_connect`, `action` is `first_connect` and the log is the source row's log
-- `escrowId` is the escrow id on that row (`EscrowDisputed.escrowId` for a matched `VoteCast`)
+Issuer: the points server. It is the only writer of this ledger. It issues the nonce and stores it. A client-supplied nonce is not accepted. `docs/reputation/INDEXER_SPEC.md` calls this class of points Steward-operated. That is the operator, not a second issuer. `createEscrow`'s intent-hash comment and the claim-relayer `ClaimIntent` nonce are not this nonce.
 
-The nonce is not an argument of the log. Confirmation checks the key against the log. A hash, log index, or escrow id that does not match that log is not confirmed. An unbound nonce, or a second nonce for the same key, does not credit. An unconfirmed link does not credit. The nonce's encoding stays **TBD**.
+Encoding: EIP-712. Domain and struct:
 
-For `first_connect`, `escrowId`, `tx_hash`, and `log_index` are the source row's, and `action` is `first_connect`. For a matched vote, `tx_hash` and `log_index` are the `VoteCast` log, and `escrowId` is taken from the matching `EscrowDisputed`. For `return_day`, which single `escrowId` and log go in the key is **TBD**, the same gap as its NOT NULL `log_index`. Until that is defined, the link cannot be confirmed, and the row is not committed.
+```text
+EIP712Domain(string name, string version, uint256 chainId, address verifyingContract)
+name = "Agent-BV Points"
+version = "1"
+chainId = 84532
+verifyingContract = 0x3d660502D75f1e97b08c110255921b437A3C4C42
+
+PointsLink(bytes32 escrowId, string action, bytes32 txHash, uint256 logIndex, uint256 nonce, uint64 expiry)
+```
+
+`action` is the EIP-712 dynamic `string`. `txHash` is the log's transaction hash. `logIndex` is the log's `log_index`.
+
+Scope: one signature covers one log. The signed `escrowId`, `action`, `txHash`, and `logIndex` must be that log, on chain id `84532`, with `verifyingContract` the live escrow. A different chain id, contract, escrow, action, hash, or log index does not confirm.
+
+Nonce: `uint256`, single-use, server-issued, server-stored, monotonic per signer. The signer is the terminal human approver, and that address is the points wallet. A missing nonce, a reused nonce, or a second nonce for the same link does not credit.
+
+Expiry: `uint64` unix seconds carried in the struct. No default duration is defined. The server rejects the link when `expiry` is below the log's block timestamp, or when the server confirms it after `expiry`.
+
+The terminal approver's chain-entry timestamp is strictly before the log's block timestamp. A signature at or after that timestamp does not credit. Confirmation also checks that the block is `finalized`, the log is not `removed: true`, and `escrowId` is the escrow id on the row (`EscrowDisputed.escrowId` for a matched `VoteCast`). For `first_activity` and `return_day`, `action` is that derived action and the hash and log index are the source log's.
 
 The origin tag is written server-side. A client cannot hide it or flip it. A `human` entry needs an identity anchor (government ID check, passkey, or a wallet signature tied to a prior human verification) plus behavioral signals. A checkbox is not that anchor. An `ai` entry names the agent and the model version. No AI actor may present itself as human.
 
@@ -333,7 +343,7 @@ The running definition in that same doc, which this spec uses:
 
 `docs/TERMS.md` section 4 already bars comprehensively sanctioned jurisdictions, OFAC SDN and similar denied-party listings, and persons owned or controlled by them. There is no screen implementation named in the sources. Provider, list set, and refresh interval are **TBD**.
 
-Interaction with the append-only ledger: a #7 zero row still occupies `UNIQUE(wallet, action, utc_day)` and, for a chain log, `UNIQUE(chain_id, contract, tx_hash, log_index)`. A later screen does not rewrite the row. Backfill of points onto a zero row is **TBD** and is not assumed.
+Interaction with the append-only ledger: a #7 zero row still occupies `UNIQUE(wallet, action, utc_day)` and, when it is a chain log, the partial unique key on `(chain_id, contract, tx_hash, log_index)`. A later screen does not rewrite the row. Backfill of points onto a zero row is **TBD** and is not assumed. A #7 zero row still counts as the `first_activity` source when it is that wallet's earliest stored escrow log.
 
 `allowAllEligibility` is a test hook in the reputation doc. It is not a production path for this ledger.
 
@@ -358,15 +368,13 @@ No owner is named, so this spec does not auto-cancel. ADJ lives on the reputatio
 
 **Open.** Definition from `docs/reputation-ledger.md`: lock caps before soft launch. The numbers in `config/reputation/sepolia.json` are labeled `DRAFT/GUESS`. `GET /v1/reputation/config` returns `status: "draft"` on the body and on each cap and threshold. `config/reputation/sepolia.json` says every value under `points`, `floors`, `caps`, and `flags` is a Tokenomics GUESS until Spencer locks checklist #12, and it must not be used against live data until Blockchain Verifier APPROVE and Spencer's GO via BOB.
 
-This spec does not lock those numbers and does not reuse them as weights for `first_connect`, `fund`, `release_or_refund`, `dispute_open_or_vote`, or `return_day`. The GUESS figures (including 20 usage points per wallet per day, 500 per season, and 30 arbitrator points per day) stay in that config. They are not the daily cap for this ledger.
+This spec does not lock those numbers and does not reuse them as weights for `first_activity`, `fund`, `release_or_refund`, `dispute_open_or_vote`, or `return_day`. The GUESS figures (including 20 usage points per wallet per day, 500 per season, and 30 arbitrator points per day) stay in that config. They are not the daily cap for this ledger.
 
-The daily cap this spec does define is the atomic unique constraint in "Ledger and daily cap": one row per wallet per action per server-assigned UTC day. Chain logs are separately deduped on `(chain_id, contract, tx_hash, log_index)`. Overflow is all-or-nothing. The insert fails closed. No clipped remainder is credited.
-
-`caps._label` remains `DRAFT/GUESS`. A numeric point cap, a per-bot cap, a pair cap, and a season cap for these actions are **TBD** until #12 locks.
+`caps._label` remains `DRAFT/GUESS`. A numeric point cap, a per-bot cap, and a season cap for these actions are **TBD** until #12 locks. `same_pair`, `min_escrow_amount`, and `min_escrow_duration` are named in "Gates set before weights". Their numbers are **TBD** and are set before any weight.
 
 ## No contract change
 
-No contract change is expected. Blockchain Builder confirms that.
+No contract change is expected. Blockchain Builder confirmation is pending. It was looked for as his review of commit `6bf8488ce6c983e2f008a84020f55fff34fd693f`. Pull request #85 has no review, no issue comment, no review comment, and no commit comment on that SHA.
 
 This spec reads events the deployed escrow and the deployed panel already emit. It does not add a function, an event, a storage field, or a check inside `BotAttestationEscrow` or `DisputePanel`. The decision-chain check is off-chain, in the points writer. The escrow does not take a chain, an `actor_type`, a nonce, or a point balance.
 
