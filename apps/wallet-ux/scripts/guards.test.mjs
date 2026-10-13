@@ -474,8 +474,8 @@ describe("deploy-wallet-ux workflow", () => {
 })
 
 describe("pages security headers", () => {
-  it("keeps public/_headers byte-for-byte, with no Content-Security-Policy", () => {
-    const file = readFileSync(new URL("../public/_headers", import.meta.url), "utf8")
+  it("keeps landing/_headers byte-for-byte, with no Content-Security-Policy", () => {
+    const file = readFileSync(new URL("../landing/_headers", import.meta.url), "utf8")
     expect(file).toBe(PAGES_HEADERS_FILE)
     expect(file).toContain("X-Content-Type-Options: nosniff")
     expect(file).toContain("Referrer-Policy: strict-origin-when-cross-origin")

@@ -14,13 +14,13 @@ export const PAGES_HEADERS_FILE = `/*
 `
 
 export function pagesHeadersPath(root = join(dirname(fileURLToPath(import.meta.url)), "..")) {
-  return join(root, "public", "_headers")
+  return join(root, "landing", "_headers")
 }
 
 export function assertPagesHeaders(root) {
   const actual = readFileSync(pagesHeadersPath(root), "utf8")
   if (actual !== PAGES_HEADERS_FILE) {
-    throw new Error("public/_headers content changed. Keep the pinned security headers.")
+    throw new Error("landing/_headers content changed. Keep the pinned security headers.")
   }
 }
 
