@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Coverage artifacts need actions: write. Tests only read the repo.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   python:
     runs-on: ubuntu-latest
@@ -16,7 +21,16 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
       - name: Unit / smoke tests (Grok is mocked; no API key)
-        run: pytest
+        # Same pytest selection as before, plus a coverage report. No fail-under gate.
+        run: |
+          mkdir -p coverage/python
+          pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml --cov-report=json --cov-report=lcov
+      - name: Upload Python coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python
+          path: coverage/python/
+          if-no-files-found: error
       - name: Stub audit path
         run: ./pipeline/run_audit.sh
 
@@ -48,6 +62,19 @@ jobs:
         env:
           MIGRATE_ESCROWS: "0"
         run: forge test
+      - name: Coverage
+        # forge test above is unchanged. Coverage runs the suite again and fails if a test fails.
+        env:
+          MIGRATE_ESCROWS: "0"
+        run: |
+          mkdir -p coverage/contracts out
+          forge coverage --report summary --report lcov --exclude-tests --report-file coverage/contracts/lcov.info
+      - name: Upload contract coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-contracts
+          path: coverage/contracts/
+          if-no-files-found: error
 
   claim-relayer:
     runs-on: ubuntu-latest
@@ -60,8 +87,15 @@ jobs:
         working-directory: claim-relayer
         run: npm ci
       - name: Claim relayer unit tests (no network)
+        # Same test/*.test.mjs files as npm test, with the built-in Node coverage report.
         working-directory: claim-relayer
-        run: npm test
+        run: npm run test:coverage
+      - name: Upload claim-relayer coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-claim-relayer
+          path: claim-relayer/coverage/
+          if-no-files-found: error
 
   # Public Base Sepolia fork of LiveDenylistVaultTest. continue-on-error so an RPC
   # failure cannot fail the required CI checks. No keys, no broadcast.
@@ -108,7 +142,14 @@ jobs:
           fi
       - name: Test
         # Includes src/**/*.test.ts and scripts/**/*.test.mjs (deploy guard scripts).
-        run: npm test
+        # test:coverage is vitest run --coverage: same files, plus the coverage report.
+        run: npm run test:coverage
+      - name: Upload wallet-ux coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-wallet-ux
+          path: apps/wallet-ux/coverage/
+          if-no-files-found: error
       - name: Build
         run: npm run build
       - name: Reject retired claim-secret markers

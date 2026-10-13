@@ -57,6 +57,19 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.mjs"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "text-summary", "html", "json-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.{ts,tsx}", "scripts/**/*.{mjs,js,ts}"],
+      exclude: [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.mjs",
+        "**/*.d.ts",
+        "**/dist/**",
+      ],
+    },
     // Cross-package tests load the relayer as real Node modules so claimIntent.json
     // stays next to import.meta.url. Vite must not bundle that package.
     server: {
