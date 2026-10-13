@@ -60,9 +60,29 @@ function assertPublicUrl(key, value) {
   return parsed
 }
 
+const ALLOWED_RELAYER_PATHS = new Set(["", "/", "/v1/claims"])
+const HEX_KEY = /0x?[0-9a-fA-F]{64}|[0-9a-fA-F]{64}/
+const QUERY_SECRET = /[?&](api[_-]?key|key|token|secret|auth)=/i
+const PATH_KEY = /\/v2\/[A-Za-z0-9_-]{16,}|\/[A-Za-z0-9_-]{32,}(?=[/?#]|$)/
+
 function assertPinnedRelayerHost(url) {
-  if (url.protocol !== "https:" || url.port !== "" || hostOf(url) !== PINNED_RELAYER_HOST) {
+  const host = hostOf(url)
+  if (url.protocol !== "https:" || url.port !== "" || host !== PINNED_RELAYER_HOST) {
     throw new BuildEnvError(`VITE_CLAIM_RELAYER_URL host must be ${PINNED_RELAYER_HOST}.`)
+  }
+}
+
+function assertRelayerPath(url) {
+  if (url.search || url.hash || !ALLOWED_RELAYER_PATHS.has(url.pathname)) {
+    throw new BuildEnvError(
+      "VITE_CLAIM_RELAYER_URL path must be empty, /, or /v1/claims, with no query and no fragment.",
+    )
+  }
+}
+
+function assertNoSecret(label, value) {
+  if (HEX_KEY.test(value) || QUERY_SECRET.test(value) || PATH_KEY.test(value)) {
+    throw new BuildEnvError(`${label} contains a secret.`)
   }
 }
 
@@ -131,6 +151,7 @@ export function readRequiredBuildEnvFile(root = appRoot) {
   } catch {
     throw new BuildEnvError(`${REQUIRED_BUILD_ENV_FILE} is missing.`)
   }
+  assertNoSecret(REQUIRED_BUILD_ENV_FILE, text)
   for (const forbidden of FORBIDDEN_TEXT) {
     if (text.includes(forbidden)) {
       throw new BuildEnvError(`${REQUIRED_BUILD_ENV_FILE} contains ${forbidden}.`)
@@ -172,8 +193,12 @@ export async function resolveRequiredBuildEnv(env, fileValues, lookup = lookupCh
       missing.push(key)
       continue
     }
+    assertNoSecret(key, value)
     const parsed = assertPublicUrl(key, value)
-    if (key === "VITE_CLAIM_RELAYER_URL") assertPinnedRelayerHost(parsed)
+    if (key === "VITE_CLAIM_RELAYER_URL") {
+      assertPinnedRelayerHost(parsed)
+      assertRelayerPath(parsed)
+    }
     if (key === "VITE_BASE_SEPOLIA_RPC_URL") await assertRpc(parsed, value, lookup)
     values[key] = value
   }

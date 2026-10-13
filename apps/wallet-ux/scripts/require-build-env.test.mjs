@@ -127,6 +127,109 @@ describe("resolve required build env", () => {
     ).rejects.toThrow("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
   })
 
+  it.each([
+    "https://evil-onrender.com",
+    "https://bot-verifier-claim-relayer.onrender.com.evil.com",
+    "https://other.onrender.com",
+  ])("rejects relayer host %s", async (url) => {
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: url,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    ).rejects.toThrow("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
+  })
+
+  it.each([
+    ["https://bot-verifier-claim-relayer.onrender.com", "empty"],
+    ["https://bot-verifier-claim-relayer.onrender.com/", "/"],
+    ["https://bot-verifier-claim-relayer.onrender.com/v1/claims", "/v1/claims"],
+  ])("accepts relayer path %s (%s)", async (url) => {
+    const values = await applyRequiredBuildEnv({
+      VITE_CLAIM_RELAYER_URL: url,
+      VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+    })
+    expect(values.VITE_CLAIM_RELAYER_URL).toBe(url)
+  })
+
+  it.each([
+    "https://bot-verifier-claim-relayer.onrender.com/other",
+    "https://bot-verifier-claim-relayer.onrender.com?x=1",
+    "https://bot-verifier-claim-relayer.onrender.com#frag",
+    "https://bot-verifier-claim-relayer.onrender.com/v1/claims?x=1",
+    "https://bot-verifier-claim-relayer.onrender.com/v1/claims#frag",
+  ])("rejects relayer path %s", async (url) => {
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: url,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    ).rejects.toThrow("VITE_CLAIM_RELAYER_URL path must be empty, /, or /v1/claims, with no query and no fragment.")
+  })
+
+  it("does not flag the checked-in relayer and RPC URLs as secrets", async () => {
+    expect(() => readRequiredBuildEnvFile()).not.toThrow()
+    const values = await applyRequiredBuildEnv({})
+    expect(values.VITE_CLAIM_RELAYER_URL).toBe(RELAYER_URL)
+    expect(values.VITE_BASE_SEPOLIA_RPC_URL).toBe(RPC_URL)
+  })
+
+  it("rejects a hex key, a query secret, and a long path key in resolved URLs", async () => {
+    const lookup = async () => 84532
+    const hex = "ab".repeat(32)
+    const prefixed = `0x${"cd".repeat(32)}`
+    await expect(
+      applyRequiredBuildEnv(
+        {
+          VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+          VITE_BASE_SEPOLIA_RPC_URL: `https://rpc.example.test/${hex}`,
+        },
+        undefined,
+        lookup,
+      ),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL contains a secret.")
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+        VITE_BASE_SEPOLIA_RPC_URL: `https://sepolia.base.org?api_key=${prefixed}`,
+      }),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL contains a secret.")
+    await expect(
+      applyRequiredBuildEnv(
+        {
+          VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+          VITE_BASE_SEPOLIA_RPC_URL: `https://eth-sepolia.g.alchemy.com/v2/${"A".repeat(32)}`,
+        },
+        undefined,
+        lookup,
+      ),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL contains a secret.")
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: `${RELAYER_URL}?token=relayer-secret`,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    ).rejects.toThrow("VITE_CLAIM_RELAYER_URL contains a secret.")
+  })
+
+  it("rejects a secret in build-env.required.json even when the shell URLs are clean", async () => {
+    const root = tempRoot(
+      JSON.stringify({
+        VITE_CLAIM_RELAYER_URL: `${RELAYER_URL}?token=in-file`,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    )
+    await expect(
+      applyRequiredBuildEnv(
+        {
+          VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+          VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+        },
+        root,
+      ),
+    ).rejects.toThrow("build-env.required.json contains a secret.")
+  })
+
   it("accepts an allowlisted RPC host without a chainId lookup", async () => {
     let lookedUp = false
     const values = await applyRequiredBuildEnv(
@@ -269,6 +372,24 @@ describe("npm run build", () => {
     expect(result.status).not.toBe(0)
     expect(output).toContain("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
     expect(output).not.toContain("assembled dist")
+  }, 60_000)
+
+  it("scans the checked-in build-env.required.json during the build", () => {
+    const path = join(appRoot, REQUIRED_BUILD_ENV_FILE)
+    const real = readFileSync(path, "utf8")
+    writeFileSync(path, real.replace(RELAYER_URL, `${RELAYER_URL}?token=build-scan`))
+    try {
+      const result = runBuild({
+        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      })
+      const output = outputOf(result)
+      expect(result.status).not.toBe(0)
+      expect(output).toContain("build-env.required.json contains a secret.")
+      expect(output).not.toContain("assembled dist")
+    } finally {
+      writeFileSync(path, real)
+    }
   }, 60_000)
 
   it("passes when VITE_CLAIM_RELAYER_URL is unset and inlines the checked-in URL", () => {
