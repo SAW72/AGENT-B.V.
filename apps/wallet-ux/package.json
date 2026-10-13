@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/sync-book.mjs && vite",
-    "build": "node scripts/sync-book.mjs && tsc --noEmit && vite build && node scripts/assemble-site.mjs",
+    "build": "node scripts/sync-book.mjs && node scripts/require-build-env.mjs && tsc --noEmit && vite build && node scripts/assemble-site.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
