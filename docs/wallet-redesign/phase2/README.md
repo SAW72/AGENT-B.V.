@@ -2,7 +2,7 @@
 
 Captured from the local production preview (`vite preview`) served under `/app/`. Widths are 1280 and 390, plus the connected header at 320.
 
-The first-run, task-picker, fund step, fund review, release input, and 390 chip-row shots use a mock wallet. It reports an address and a chain id, and it rejects signing. No key is loaded. The faucet link in those shots is the official Base docs page, `https://docs.base.org/get-started/get-funds`.
+The first-run, task-picker, fund step, fund review, release input, and 390 chip-row shots use a mock wallet. It reports an address and a chain id, and it rejects signing. The carried-escrow shot uses no wallet. No key is loaded. The faucet link in those shots is the official Base docs page, `https://docs.base.org/get-started/get-funds`.
 
 Shots that were not replaced in the walkthrough reshoot use a fixture wallet. Those task and form shots connect `0x5D467FA00eC0E92044f779e495a17db66c5964aa`. Fund shots that reach review connect the payer operator `0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac`. `eth_sendTransaction` is never forwarded to the network. Contract reads, balances, arbitrator seating, escrow state, and receipts use the real Base Sepolia RPC at `sepolia.base.org`. Nobody signed a transaction.
 
@@ -27,6 +27,7 @@ The connected header at 320px measures 48px tall, on two rows: the Agent-BV name
 | `after-*-first-run-ready` | Start here on Base Sepolia. Current step is Fill in the escrow, with the faucet link |
 | `after-*-task-picker` | Task picker under the walkthrough, wallet on Base Sepolia |
 | `after-390-chip-row` | Fund step 1 chip row at 390. Four named chips, wrapped, none clipped |
+| `after-*-carried-escrow` | `/app/?escrow=` then Release. The escrow id is filled. Nothing is prepared or sent |
 | `after-*-fund-step1` | Fund, escrow id and payee |
 | `after-*-fund-step2` | Fund, bot identifiers |
 | `after-*-fund-step3` | Fund, amount and time window |

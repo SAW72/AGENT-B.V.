@@ -12,6 +12,7 @@ import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
 import { previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
 import { DISPUTE_ZERO_IGNORED, ESCROW_ZERO_IGNORED, resetCarriedIds } from "./carriedIds"
 import { PAGE_IGNORED, STEP_IGNORED, navigate, readWalletRoute, useWalletRoute, walletHome } from "./routes"
+import { TaskPicker } from "./taskPicker"
 import { pendingSlot, pendingStorageKey, resetPendingStore } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
@@ -105,6 +106,13 @@ function Host() {
   if (route.flow === "vote") return <VoteScreen panel={panel} route={route} />
   if (route.flow === "withdraw") return <WithdrawScreen escrow={escrow} readsEnabled route={route} />
   if (route.flow == null) return <p data-testid="flow-home">Home</p>
+  return <FlowPreview escrow={escrow} panel={panel} route={route} showStrip />
+}
+
+function HomeTasks() {
+  const route = useWalletRoute()
+  if (route.flow === "vote") return <VoteScreen panel={panel} route={route} />
+  if (route.flow == null) return <TaskPicker voteReason={null} />
   return <FlowPreview escrow={escrow} panel={panel} route={route} showStrip />
 }
 
@@ -560,6 +568,41 @@ describe("phase 2 guided flows", () => {
     await waitFor(() => expect(relayerCalls().some((call) => String(call[0]).includes("/health"))).toBe(true))
     fetchSpy.mockRestore()
     vi.unstubAllEnvs()
+  })
+
+  it("carries a valid home escrow id into release, refund, and dispute without preparing", () => {
+    render(<HomeTasks />)
+    navigate(`/app/?escrow=${id}&dispute=${disputeId}`)
+    expect(screen.getByRole("link", { name: "Release a payment" }).getAttribute("href")).toBe(`/app/release?escrow=${id}`)
+    expect(screen.getByRole("link", { name: "Refund a payment" }).getAttribute("href")).toBe(`/app/refund?escrow=${id}`)
+    expect(screen.getByRole("link", { name: "Open a dispute" }).getAttribute("href")).toBe(`/app/dispute?escrow=${id}`)
+    expect(screen.getByRole("link", { name: "Vote (arbitrators)" }).getAttribute("href")).toBe(`/app/vote?dispute=${disputeId}`)
+    expect(screen.getByRole("link", { name: "Fund an escrow" }).getAttribute("href")).toBe("/app/fund")
+    expect(screen.getByRole("link", { name: "Withdraw" }).getAttribute("href")).toBe("/app/withdraw")
+    fireEvent.click(screen.getByRole("link", { name: "Release a payment" }))
+    expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
+    expect(screen.queryByTestId("calldata-preview")).toBeNull()
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("carries a valid home dispute id into vote and ignores an invalid id", () => {
+    render(<HomeTasks />)
+    navigate(`/app/?dispute=${disputeId}`)
+    expect(screen.getByRole("link", { name: "Vote (arbitrators)" }).getAttribute("href")).toBe(`/app/vote?dispute=${disputeId}`)
+    expect(screen.getByRole("link", { name: "Release a payment" }).getAttribute("href")).toBe("/app/release")
+    fireEvent.click(screen.getByRole("link", { name: "Vote (arbitrators)" }))
+    expect(compact(screen.getByTestId("vote-filled").textContent)).toContain(disputeId)
+    expect(screen.queryByTestId("vote-preview")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+
+    navigate("/app/?escrow=nope&dispute=0x1234")
+    expect(screen.getByRole("link", { name: "Release a payment" }).getAttribute("href")).toBe("/app/release")
+    expect(screen.getByRole("link", { name: "Vote (arbitrators)" }).getAttribute("href")).toBe("/app/vote")
+    const zero = `0x${"00".repeat(32)}`
+    navigate(`/app/?escrow=${zero}&dispute=${zero}`)
+    expect(screen.getByRole("link", { name: "Open a dispute" }).getAttribute("href")).toBe("/app/dispute")
+    expect(screen.getByRole("link", { name: "Vote (arbitrators)" }).getAttribute("href")).toBe("/app/vote")
   })
 
   it("replaces Next with a Base Sepolia switch when the wallet is on another network", () => {

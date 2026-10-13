@@ -8,7 +8,8 @@ import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
 import { FirstRun } from "./firstRun"
 import { PendingStrip, FlowPreview } from "./FlowPreview"
-import { TASKS, flowHref, navigate, useWalletRoute, type FlowId } from "./routes"
+import { useWalletRoute, type FlowId } from "./routes"
+import { TaskPicker } from "./taskPicker"
 import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
@@ -206,46 +207,6 @@ export function LiveStatus({
         <TextRow label="Native ETH" value={formatEth(status.insuranceFund.nativeBalanceWei)} />
       </section>
     </>
-  )
-}
-
-function TaskPicker({ voteReason }: { voteReason: string | null }) {
-  return (
-    <section className="card" aria-label="What do you want to do?" data-testid="task-picker">
-      <h2>What do you want to do?</h2>
-      <ul className="task-list">
-        {TASKS.map((task) => {
-          const blocked = task.flow === "vote" && voteReason != null
-          return (
-            <li key={task.flow} className="task-card" data-testid={`task-${task.flow}`}>
-              <h3>{task.title}</h3>
-              <p>{task.text}</p>
-              {blocked ? (
-                <>
-                  <button type="button" className="task-link" disabled>
-                    {task.title}
-                  </button>
-                  <p className="action-reason" data-testid="vote-task-reason">
-                    {voteReason}
-                  </p>
-                </>
-              ) : (
-                <a
-                  className="task-link"
-                  href={flowHref(task.flow, 1)}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    navigate(flowHref(task.flow, 1))
-                  }}
-                >
-                  {task.title}
-                </a>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </section>
   )
 }
 

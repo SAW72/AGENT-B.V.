@@ -1023,11 +1023,13 @@ describe("design v2.2 gates", () => {
 
 function filesContaining(root, needle) {
   const hits = [];
+  const walletDist = join(root, "apps", "wallet-ux", "dist");
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (full === walletDist) continue;
         walk(full);
       } else if (/\.(mjs|js|md|json|yml|yaml|sol)$/.test(entry.name)) {
         if (readFileSync(full, "utf8").includes(needle)) hits.push(full);

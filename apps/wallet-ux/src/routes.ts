@@ -96,6 +96,18 @@ export function readWalletRoute(href = typeof window === "undefined" ? "http://l
   return { flow, step: Number(rawStep), stepNotice: null, pageNotice: null, escrow, dispute }
 }
 
+/** Home task links. A valid escrow id is carried into release, refund, and dispute. A valid dispute id is carried into vote. Fund and withdraw stay bare. */
+export function taskHref(
+  flow: FlowId,
+  ids: { escrow?: string | null; dispute?: string | null } = {},
+): string {
+  if (flow === "release" || flow === "refund" || flow === "dispute") {
+    return flowHref(flow, 1, { escrow: ids.escrow ?? null })
+  }
+  if (flow === "vote") return flowHref(flow, 1, { dispute: ids.dispute ?? null })
+  return flowHref(flow, 1)
+}
+
 export function flowHref(
   flow: FlowId,
   step: number,

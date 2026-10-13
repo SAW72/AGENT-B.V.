@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 import { build } from "vite"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { readWalletRoute, taskHref } from "../src/routes.ts"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
@@ -147,6 +148,27 @@ describe("built site", () => {
     expect(forwardedHref(root.text, "https://agent-bv.pages.dev/?dispute=0xdef#ruling")).toBe(
       "https://agent-bv.pages.dev/app/?dispute=0xdef#ruling",
     )
+    const escrowId = `0x${"ab".repeat(32)}`
+    const disputeId = `0x${"cd".repeat(32)}`
+    const escrowForward = forwardedHref(root.text, `https://agent-bv.pages.dev/?escrow=${escrowId}#pay`)
+    expect(escrowForward).toBe(`https://agent-bv.pages.dev/app/?escrow=${escrowId}#pay`)
+    const escrowRoute = readWalletRoute(escrowForward)
+    expect(escrowRoute.flow).toBeNull()
+    expect(escrowRoute.escrow.value).toBe(escrowId)
+    expect(taskHref("release", { escrow: escrowRoute.escrow.value })).toBe(`/app/release?escrow=${escrowId}`)
+    expect(taskHref("refund", { escrow: escrowRoute.escrow.value })).toBe(`/app/refund?escrow=${escrowId}`)
+    expect(taskHref("dispute", { escrow: escrowRoute.escrow.value })).toBe(`/app/dispute?escrow=${escrowId}`)
+    expect(taskHref("fund", { escrow: escrowRoute.escrow.value })).toBe("/app/fund")
+    expect(taskHref("vote", { escrow: escrowRoute.escrow.value })).toBe("/app/vote")
+    const disputeForward = forwardedHref(root.text, `https://agent-bv.pages.dev/?dispute=${disputeId}`)
+    expect(disputeForward).toBe(`https://agent-bv.pages.dev/app/?dispute=${disputeId}`)
+    const disputeRoute = readWalletRoute(disputeForward)
+    expect(disputeRoute.dispute.value).toBe(disputeId)
+    expect(taskHref("vote", { dispute: disputeRoute.dispute.value })).toBe(`/app/vote?dispute=${disputeId}`)
+    expect(taskHref("release", { escrow: disputeRoute.escrow.value })).toBe("/app/release")
+    const ignored = readWalletRoute(forwardedHref(root.text, "https://agent-bv.pages.dev/?escrow=0xabc"))
+    expect(ignored.escrow.value).toBeNull()
+    expect(taskHref("release", { escrow: ignored.escrow.value })).toBe("/app/release")
     expect(forwardedHref(root.text, "https://agent-bv.pages.dev/?foo=1#top")).toBe(
       "https://agent-bv.pages.dev/?foo=1#top",
     )

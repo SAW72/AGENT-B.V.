@@ -140,7 +140,7 @@ The site root is the landing page. [`landing/_redirects`](landing/_redirects) is
 
 `/app/*` rewrites to `/app/` with status 200, so a refresh of a guided route still loads the app and leaves the browser URL unchanged. Those routes are `/app/fund`, `/app/release`, `/app/refund`, `/app/dispute`, `/app/vote`, and `/app/withdraw`. The client reads the path and does not prepare or submit from the address bar.
 
-A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash. `/claim` and `/release` redirect to `/app/` and keep the query string.
+A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash. `/points`, `/claim`, and `/release` each 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
 
 [`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
 
