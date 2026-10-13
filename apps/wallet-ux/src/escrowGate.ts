@@ -76,6 +76,14 @@ type GateStatus = "idle" | "reading" | "ready" | "unread"
 
 const OPEN_DECISION: GateDecision = { allowed: true, reason: null }
 
+export type EscrowFace = {
+  payee: Address
+  payerBotId: Hex
+  payeeBotId: Hex
+  amountWei: bigint
+  expiresAt: bigint
+}
+
 function tupleField(value: unknown, index: number, name: string): unknown {
   if (Array.isArray(value)) return value[index]
   if (typeof value === "object" && value !== null) {
@@ -124,24 +132,28 @@ export function useEscrowActionGate(
   const [status, setStatus] = useState<GateStatus>(id ? "reading" : "idle")
   const [release, setRelease] = useState<GateDecision>(OPEN_DECISION)
   const [refund, setRefund] = useState<GateDecision>(OPEN_DECISION)
+  const [face, setFace] = useState<EscrowFace | null>(null)
 
   useEffect(() => {
     if (!reader) {
       setStatus(id ? "unread" : "idle")
       setRelease(OPEN_DECISION)
       setRefund(OPEN_DECISION)
+      setFace(null)
       return
     }
     if (!id) {
       setStatus("idle")
       setRelease(OPEN_DECISION)
       setRefund(OPEN_DECISION)
+      setFace(null)
       return
     }
     let cancelled = false
     setStatus("reading")
     setRelease(OPEN_DECISION)
     setRefund(OPEN_DECISION)
+    setFace(null)
     void (async () => {
       try {
         const row = await reader.readContract({
@@ -151,6 +163,10 @@ export function useEscrowActionGate(
           args: [id],
         })
         const payer = asAddress(tupleField(row, 0, "payer"))
+        const payee = asAddress(tupleField(row, 1, "payee"))
+        const payerBotId = asBytes32(tupleField(row, 2, "payerBotId"))
+        const payeeBotId = asBytes32(tupleField(row, 3, "payeeBotId"))
+        const amountWei = asBigint(tupleField(row, 4, "amount"))
         const createdAt = asBigint(tupleField(row, 5, "createdAt"))
         const expiresAt = asBigint(tupleField(row, 6, "expiresAt"))
         const state = asState(tupleField(row, 7, "state"))
@@ -158,11 +174,16 @@ export function useEscrowActionGate(
         if (!payer || createdAt == null || expiresAt == null || state == null || !disputeId) {
           throw new Error("unreadable escrow")
         }
+        const nextFace =
+          payee && payerBotId && payeeBotId && amountWei != null
+            ? { payee, payerBotId, payeeBotId, amountWei, expiresAt }
+            : null
         if (payer.toLowerCase() === ZERO_ADDRESS) {
           const missing = { allowed: false, reason: "This escrow is not on the contract yet." }
           if (!cancelled) {
             setRelease(missing)
             setRefund(missing)
+            setFace(null)
             setStatus("ready")
           }
           return
@@ -198,12 +219,14 @@ export function useEscrowActionGate(
         if (!cancelled) {
           setRelease(next.release)
           setRefund(next.refund)
+          setFace(nextFace)
           setStatus("ready")
         }
       } catch {
         if (!cancelled) {
           setRelease(OPEN_DECISION)
           setRefund(OPEN_DECISION)
+          setFace(null)
           setStatus("unread")
         }
       }
@@ -213,5 +236,5 @@ export function useEscrowActionGate(
     }
   }, [reader, escrow, panel, id])
 
-  return { status, release, refund }
+  return { status, release, refund, face }
 }

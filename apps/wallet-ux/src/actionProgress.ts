@@ -1,3 +1,5 @@
+import { confirmedNext } from "./routes"
+
 export const GAS_FEE_TEXT = "Your wallet pays a small Base Sepolia gas fee in test ETH"
 export const CANCELLED_IDLE_TEXT = "You cancelled. Nothing was sent."
 export const PENDING_SLOW_TEXT = "Still waiting. This can take a minute on testnet. Do not submit this again."
@@ -18,29 +20,28 @@ export const ACTION_PROGRESS: Record<string, ActionProgress> = {
   createEscrow: {
     pending: "Funding escrow…",
     done: "Escrow funded",
-    next: { href: "#release-form", label: "Next: release the payment" },
   },
   release: {
     pending: "Releasing payment…",
     done: "Payment released",
-    next: { href: "#withdraw-screen", label: "Next: withdraw" },
   },
   refund: {
     pending: "Refunding payment…",
     done: "Payment refunded",
-    next: { href: "#withdraw-screen", label: "Next: withdraw" },
   },
   dispute: {
     pending: "Opening dispute…",
     done: "Dispute opened",
-    next: { href: "#vote-form", label: "Next: cast a vote" },
   },
   vote: { pending: "Casting vote…", done: "Vote cast" },
   withdraw: { pending: "Withdrawing…", done: "Withdrawn" },
 }
 
-export function actionProgress(functionName: string): ActionProgress {
-  return ACTION_PROGRESS[functionName] ?? { pending: "Submitting…", done: "Done" }
+/** Pending and done copy, plus the confirmed Next route for this action and id. */
+export function actionProgress(functionName: string, subjectId: string | null = null): ActionProgress {
+  const base = ACTION_PROGRESS[functionName] ?? { pending: "Submitting…", done: "Done" }
+  const next = confirmedNext(functionName, subjectId)
+  return next ? { pending: base.pending, done: base.done, next } : { pending: base.pending, done: base.done }
 }
 
 export const CONTRACT_LABELS = {

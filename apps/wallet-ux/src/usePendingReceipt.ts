@@ -3,6 +3,7 @@ import type { Hex } from "viem"
 import { carryDisputeId, carryEscrowId } from "./carriedIds"
 import {
   clearPending,
+  dismissClockNote,
   listClockNotes,
   listPending,
   resetPendingStore,
@@ -181,13 +182,20 @@ export function syncPendingViews() {
       if (stops.has(record.slot) || views.get(record.slot)?.phase === "confirmed") continue
       start(record, takeFreshPending(record.slot) ? "wait" : "poll")
     }
-    for (const hash of listClockNotes()) {
-      const slot = `clock:${hash}`
+    for (const note of listClockNotes()) {
+      const slot = `clock:${note.hash.toLowerCase()}`
       if (views.has(slot)) continue
       put(
-        { slot, action: "clock", subjectId: null, hash, startedAt: 0, saved: true },
+        {
+          slot,
+          action: note.action,
+          subjectId: note.subjectId,
+          hash: note.hash,
+          startedAt: 0,
+          saved: true,
+        },
         "idle",
-        { kind: "clock", hash },
+        { kind: "clock", hash: note.hash },
       )
     }
   } finally {
@@ -240,7 +248,8 @@ export function resetPendingRuntime() {
 export function dismissPending(slot: string) {
   stopTimer(slot)
   views.delete(slot)
-  clearPending(slot)
+  if (slot.startsWith("clock:")) dismissClockNote(slot.slice("clock:".length) as Hex)
+  else clearPending(slot)
   publish()
 }
 

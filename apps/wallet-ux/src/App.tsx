@@ -1,12 +1,15 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
-import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
+import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { visibleConnectors } from "./connectors"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
-import { VoteScreen } from "./VoteScreen"
+import { PendingStrip, FlowPreview } from "./FlowPreview"
+import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
+import { useWalletRoute, type FlowId } from "./routes"
+import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
 import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
@@ -27,6 +30,7 @@ import { createSepoliaClient, panelNotSeated, readGateStatus, rpcHost, type Gate
 import { relayerConfigFromEnv } from "./relayer"
 import { ReputationView } from "./reputation/ReputationView"
 import { useConnectorChainId } from "./useWalletChain"
+import { walletReadiness } from "./walkthrough"
 import { AddressRow, NoteList, TextRow } from "./ui"
 import { rpcUrl } from "./wagmi"
 
@@ -206,11 +210,40 @@ export function LiveStatus({
   )
 }
 
+function GuidedFlow({
+  flow,
+  readsEnabled,
+}: {
+  flow: FlowId
+  readsEnabled: boolean
+}) {
+  const route = useWalletRoute()
+  if (flow === "vote") return <VoteScreen panel={ADDRESSES.disputePanel} route={route} />
+  if (flow === "withdraw") {
+    return <WithdrawScreen escrow={ADDRESSES.botAttestationEscrow} readsEnabled={readsEnabled} route={route} />
+  }
+  const escrow = ADDRESSES.botAttestationEscrow
+  if (escrow == null) {
+    return (
+      <section className="card">
+        <div className="empty" role="status">
+          <strong>Not deployed on Sepolia yet.</strong>
+          <p>The escrow address is null. There is no contract to use.</p>
+        </div>
+      </section>
+    )
+  }
+  return (
+    <section className="card">
+      <FlowPreview escrow={escrow} panel={ADDRESSES.disputePanel} route={route} showStrip={false} />
+    </section>
+  )
+}
+
 export function App() {
   const account = useAccount()
   const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
   const { disconnect } = useDisconnect()
-  const { switchChain, isPending: switchPending, error: switchError } = useSwitchChain()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
   const walletChainId = account.isConnected
     ? resolveWalletChainId(account.chainId, connectorChainId)
@@ -244,7 +277,10 @@ export function App() {
     refetchInterval: 15_000,
   })
 
-  const showSwitch = account.isConnected && walletChainId !== BASE_SEPOLIA_CHAIN_ID
+  const readiness = walletReadiness(account.isConnected, walletChainId)
+  const [systemOpen, setSystemOpen] = useState(false)
+  const route = useWalletRoute()
+  const voteReason = voteTaskReason(useVoteSeat(ADDRESSES.disputePanel), account.address)
 
   return (
     <div className="wrap">
@@ -253,33 +289,41 @@ export function App() {
         <span className="pill info" data-testid="page-testnet">
           {TESTNET_LINE}
         </span>
-        <span className={showSwitch ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
+        <span className={readiness === "wrong-network" ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
           {account.isConnected && account.address ? (
             <span className="mono">{shortAddress(account.address)}</span>
           ) : (
             <span>No wallet</span>
           )}
-          {account.isConnected ? (
-            showSwitch ? (
-              <button
-                type="button"
-                className="secondary"
-                data-testid="header-switch"
-                onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
-                disabled={switchPending}
-              >
-                {switchPending ? "Switching…" : "Switch to Base Sepolia"}
-              </button>
-            ) : (
-              <span>Base Sepolia</span>
-            )
-          ) : null}
+          <HeaderNetwork connected={account.isConnected} chainId={walletChainId} />
         </span>
       </header>
       <p className="lede">
-        {DISPLAY_NAME} · Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+        Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
       </p>
 
+      {route.pageNotice ? (
+        <p className="banner" role="status" data-testid="url-page-notice">
+          {route.pageNotice}
+        </p>
+      ) : null}
+      {chainQuery.isPending ? <p className="banner info">Checking the Base Sepolia RPC.</p> : null}
+      {rpcFailed ? (
+        <p className="banner" role="alert" data-testid="chain-banner">
+          RPC request failed. {errorText(chainQuery.error)} Contract reads are off.
+        </p>
+      ) : null}
+      {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? <ChainBanner reason={guard.reason} /> : null}
+
+      <PendingStrip />
+      {route.flow == null ? <HomeScreen voteReason={voteReason} /> : <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />}
+
+      <details
+        className="system-status"
+        data-testid="system-status"
+        onToggle={(event) => setSystemOpen(event.currentTarget.open)}
+      >
+        <summary>System status</summary>
       <section className="card" aria-labelledby="connection-heading">
         <h2 id="connection-heading">Connection</h2>
         <div className="bar">
@@ -341,28 +385,6 @@ export function App() {
         </dl>
       </section>
 
-      {chainQuery.isPending ? <p className="banner info">Checking the Base Sepolia RPC.</p> : null}
-      {rpcFailed ? (
-        <p className="banner" role="alert" data-testid="chain-banner">
-          RPC request failed. {errorText(chainQuery.error)} Contract reads are off.
-        </p>
-      ) : null}
-      {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? (
-        <div className="banner" role="alert" data-testid="chain-banner">
-          <p>{guard.reason}</p>
-          {showSwitch ? (
-            <button
-              type="button"
-              onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
-              disabled={switchPending}
-            >
-              {switchPending ? "Switching…" : "Switch wallet to Base Sepolia"}
-            </button>
-          ) : null}
-          {switchError ? <p>{errorText(switchError)}</p> : null}
-        </div>
-      ) : null}
-
       <BookOwners />
 
       {guard.ok && statusQuery.isPending ? <p className="banner info">Reading Base Sepolia contracts.</p> : null}
@@ -383,10 +405,8 @@ export function App() {
         client={client}
         status={guard.ok && statusQuery.data ? statusQuery.data.escrow : null}
         readsEnabled={guard.ok}
+        forms={false}
       />
-
-      <VoteScreen panel={ADDRESSES.disputePanel} />
-      <WithdrawScreen escrow={ADDRESSES.botAttestationEscrow} readsEnabled={guard.ok} />
 
       <section className="card" aria-labelledby="bvt-heading">
         <h2 id="bvt-heading">BVT stack</h2>
@@ -395,12 +415,16 @@ export function App() {
 
       <DenylistLookup client={client} enabled={guard.ok} blockedReason={blockedReason} />
 
-      <ReputationView
-        connected={account.isConnected}
-        chainId={walletChainId}
-        address={account.address ?? null}
-        relayerUrl={relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL }).url}
-      />
+      {systemOpen ? (
+        <ReputationView
+          connected={account.isConnected}
+          chainId={walletChainId}
+          address={account.address ?? null}
+          relayerUrl={relayerConfigFromEnv({ VITE_CLAIM_RELAYER_URL: import.meta.env.VITE_CLAIM_RELAYER_URL }).url}
+        />
+      ) : null}
+
+      </details>
 
       <PageFooter />
     </div>
