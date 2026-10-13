@@ -1,3 +1,5 @@
+> **INTERNAL, counsel review only, not an offer or announcement.**
+
 # Legal jurisdiction matrix (risk map)
 
 **Status:** Informal **risk map** for Agent-BV maintainers.  
