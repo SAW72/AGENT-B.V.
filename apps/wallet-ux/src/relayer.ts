@@ -96,6 +96,8 @@ export const RELAYER_WAKING_TEXT =
 export const RELAYER_NO_RESPONSE_TEXT = "The refund service didn't respond. Nothing was sent. Try again, or refund from your own wallet."
 export const RELAYER_HEALTH_RETRY_LABEL = "Try again"
 export const CANONICAL_WALLET_ORIGIN = "https://agent-bv.pages.dev"
+/** Live app URL. Built from the origin constant so the allowlist check stays on the origin alone. */
+export const CANONICAL_WALLET_HREF = `${CANONICAL_WALLET_ORIGIN}/app/`
 export const RELAYER_OPEN_CANONICAL_LABEL = "Open agent-bv.pages.dev"
 export const RELAYER_WRONG_ORIGIN_TEXT =
   "This page isn't the official Agent-BV address; refunds only work at agent-bv.pages.dev"

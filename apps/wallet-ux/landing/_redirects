@@ -5,8 +5,19 @@
 /manifest.webmanifest /app/manifest.webmanifest 301
 /icon-192.png   /app/icon-192.png 301
 /icon-512.png   /app/icon-512.png 301
-# Old hashed bundles from the pre-/app build (e.g. /assets/index-DUIxmevy.js)
-# are gone; landing assets also live in /assets, so no blanket rule there.
-# The app is one page with no client router, so there is no /app/* SPA
-# rewrite: a 200 rewrite there would also shadow the real /app/assets files.
-# Unknown paths fall back to the landing page (Pages default, no 404.html).
+# Old wallet paths. 301 Moved Permanently. The destination has no query
+# string, so Pages keeps the incoming query string.
+/points         /app/            301
+/claim          /app/            301
+/release        /app/            301
+# Real files under /app/. A later /app/* rewrite matches these too, and a
+# 200 rewrite replaces the file, so each one is named here first.
+/app/manifest.webmanifest /app/manifest.webmanifest 200
+/app/icon-192.png /app/icon-192.png 200
+/app/icon-512.png /app/icon-512.png 200
+/app/assets/*   /app/assets/:splat 200
+# SPA fallback. Pages ignores `/app/* /app/index.html 200`: HTML handling
+# strips `index.html` and the splat matches again. `/app/* /app/ 200`
+# serves that same /app/index.html and leaves the browser URL unchanged.
+/app/*          /app/            200
+# Unknown paths outside /app/ fall back to the landing page (Pages default, no 404.html).

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-RFfE8rk4t4TP2i5v09TX/46zGlv47uGwXJcYJynASrU='; style-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<script>var p=new URLSearchParams(location.search);if(p.has("escrow")||p.has("dispute"))location.replace("/app/"+location.search+location.hash)</script>
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Agent-BV (Agent Bot Verifier): check the bot before you sign</title>
 <meta name="description" content="Agent-BV (Agent Bot Verifier): escrow, disputes and a denylist for AI agents that hold funds, live on Base Sepolia testnet. Not audited, no users yet.">
@@ -21,13 +22,13 @@
 <meta name="twitter:description" content="Check the bot before you sign. Escrow, disputes and a denylist for AI agents, live on Base Sepolia testnet. Not audited, no users yet.">
 <meta name="twitter:image" content="https://agent-bv.pages.dev/assets/og-image.png">
 <meta name="twitter:image:alt" content="Agent-BV (Agent Bot Verifier) fedora mascot on black">
-<link rel="icon" href="assets/icons/favicon.ico" sizes="any">
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
-<link rel="manifest" href="site.webmanifest">
-<link rel="preload" href="assets/fonts/Poppins-SemiBold.ttf" as="font" type="font/ttf" crossorigin>
-<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="/assets/icons/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="preload" href="/assets/fonts/Poppins-SemiBold.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -35,7 +36,7 @@
 <header class="header">
   <div class="wrap nav">
     <a class="brand" href="#top" aria-label="Agent-BV (Agent Bot Verifier), back to top">
-      <img src="assets/mascot-sm.png" width="38" height="40" alt="">
+      <img src="/assets/mascot-sm.png" width="38" height="40" alt="">
       <span class="txt"><span class="name">Agent-BV</span><span class="desc">(Agent Bot Verifier)</span></span>
     </a>
     <nav aria-label="Primary">
@@ -58,7 +59,7 @@
   <div class="wrap">
     <div class="stage">
       <div class="glow" aria-hidden="true"></div>
-      <img src="assets/mascot-hero.png" srcset="assets/mascot-hero.png 511w, assets/mascot-hero@2x.png 1022w" sizes="(max-width: 560px) 72vw, 400px" width="511" height="540" alt="The Agent-BV mascot: a white hexagon bot in a black fedora">
+      <img src="/assets/mascot-hero.png" srcset="/assets/mascot-hero.png 511w, /assets/mascot-hero@2x.png 1022w" sizes="(max-width: 560px) 72vw, 400px" width="511" height="540" alt="The Agent-BV mascot: a white hexagon bot in a black fedora">
     </div>
     <h1 id="hero-title">Agent-BV</h1>
     <p class="desc-lg">(Agent Bot Verifier)</p>
@@ -165,7 +166,7 @@
           <li>Core contract suite on Base Sepolia</li>
           <li>Source-verified on Blockscout, except the Denylist</li>
           <li>DisputePanel with three arbitrators seated</li>
-          <li>Claim relayer live on Base Sepolia (access-controlled; off unless switched on). <span class="aside">The claim relayer is a Steward-operated service that submits claim transactions and pays testnet gas. It never holds escrowed funds.</span></li>
+          <li>Claim relayer live on Base Sepolia, submitting transactions today, including refunds. <span class="aside">The claim relayer is a Steward-operated service that submits claim transactions and pays testnet gas. It never holds escrowed funds.</span></li>
         </ul>
       </li>
       <li class="card">
@@ -198,7 +199,7 @@
         <p class="sub">Open the app. Base Sepolia testnet, test funds only.</p>
       </div>
       <div class="act">
-        <img src="assets/mascot-sm.png" width="128" height="135" alt="">
+        <img src="/assets/mascot-sm.png" width="128" height="135" alt="">
         <a class="btn btn-dark" href="/app/">Open the app
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></a>
       </div>
@@ -210,7 +211,7 @@
 <footer class="footer">
   <div class="wrap">
     <div class="row">
-      <div class="lockup"><img src="assets/mascot-sm.png" width="38" height="40" alt=""><span class="t1">Agent-BV (Agent Bot Verifier)</span></div>
+      <div class="lockup"><img src="/assets/mascot-sm.png" width="38" height="40" alt=""><span class="t1">Agent-BV (Agent Bot Verifier)</span></div>
       <nav aria-label="Footer">
         <ul class="footlinks">
           <li><a href="/app/">Open the app</a></li>
