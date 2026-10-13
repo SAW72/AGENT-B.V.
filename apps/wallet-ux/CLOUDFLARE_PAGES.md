@@ -146,7 +146,7 @@ Do not put `PRIVATE_KEY`, `RELAYER_PRIVATE_KEY`, `SPENCER_RUN_AUTH`, `LIVE_SUBMI
 
 ## Bundle guard
 
-`node scripts/guard-claim-secret.mjs dist` fails the deploy if `dist` contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
+`node scripts/guard-claim-secret.mjs dist` fails the deploy if `dist` or `build-env.required.json` contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The scan always includes that JSON file. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
 
 The `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the same `node scripts/guard-claim-secret.mjs dist` from `apps/wallet-ux` after `npm run build`. A leak fails the pull request. A clean scan logs `Claim leak scan passed`.
 
