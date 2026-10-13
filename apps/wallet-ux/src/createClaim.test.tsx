@@ -8,7 +8,7 @@ import { escrowAbi } from "./abi"
 import { App } from "./App"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { DISPLAY_NAME } from "./brand"
-import { navigate } from "./routes"
+import { navigate, walletHome } from "./routes"
 import { FORM_ERRORS } from "./submit"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -135,7 +135,7 @@ function createScope() {
 }
 
 function openFund() {
-  navigate("/fund")
+  navigate("/app/fund")
   return createScope()
 }
 
@@ -172,7 +172,7 @@ function duplicateIds(): string[] {
 }
 
 beforeEach(() => {
-  navigate("/")
+  navigate(walletHome())
   world.explode = null
   vi.stubGlobal(
     "fetch",
@@ -297,11 +297,11 @@ describe("prepare this escrow", () => {
     await waitFor(() => expect(screen.getByTestId("task-picker")).toBeTruthy())
     const relayerCalls = () =>
       (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) => String(call[0]).includes("relayer.example.test"))
-    navigate(`/vote?dispute=${CLAIM}`)
+    navigate(`/app/vote?dispute=${CLAIM}`)
     await waitFor(() => expect(screen.getByTestId("step-count")).toBeTruthy())
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(relayerCalls()).toEqual([])
-    navigate("/withdraw")
+    navigate("/app/withdraw")
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(relayerCalls()).toEqual([])
@@ -314,13 +314,13 @@ describe("prepare this escrow", () => {
     renderApp()
     expect(document.getElementById("create-claim")).toBeNull()
     expect(duplicateIds()).toEqual([])
-    navigate("/fund")
+    navigate("/app/fund")
     await waitFor(() => expect(document.getElementById("create-claim")).toBeTruthy())
     expect(duplicateIds()).toEqual([])
-    navigate("/vote")
+    navigate("/app/vote")
     await waitFor(() => expect(document.getElementById("vote-form")).toBeTruthy())
     expect(duplicateIds()).toEqual([])
-    navigate("/withdraw")
+    navigate("/app/withdraw")
     await waitFor(() => expect(document.getElementById("withdraw-form")).toBeTruthy())
     expect(duplicateIds()).toEqual([])
   })

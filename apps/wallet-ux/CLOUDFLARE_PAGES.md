@@ -136,15 +136,13 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 
 ### SPA
 
-[`public/_redirects`](public/_redirects) is:
+The site root is the landing page. [`landing/_redirects`](landing/_redirects) is copied to `dist/_redirects` by `scripts/assemble-site.mjs`. The wallet app is built to `dist/app/` with Vite `base` `/app/`.
 
-```
-/* /index.html 200
-```
+`/app/*` rewrites to `/app/` with status 200, so a refresh of a guided route still loads the app and leaves the browser URL unchanged. Those routes are `/app/fund`, `/app/release`, `/app/refund`, `/app/dispute`, `/app/vote`, and `/app/withdraw`. The client reads the path and does not prepare or submit from the address bar.
 
-Vite copies that file to `dist/_redirects`. The wallet uses path routes (`/fund`, `/release`, `/refund`, `/dispute`, `/vote`, `/withdraw`). This rule serves `index.html` for those paths, so a deep link and a refresh both load the app. The client reads the path and does not prepare or submit from the address bar.
+A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash. `/claim` and `/release` redirect to `/app/` and keep the query string.
 
-[`public/_headers`](public/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. There is no `Content-Security-Policy`. `scripts/guard-pages-headers.mjs` fails when that file's bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
+[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
 
 ## Address book
 

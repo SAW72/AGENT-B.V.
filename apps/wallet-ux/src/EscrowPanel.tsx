@@ -5,7 +5,7 @@ import { ADDRESSES } from "./addresses"
 import { GOVERNANCE_TIMELOCK_PIN, liveExpectedOwner } from "./gate"
 import { parseBytes32 } from "./bytes32"
 import { FlowPreview } from "./FlowPreview"
-import { navigate } from "./routes"
+import { flowHref, navigate } from "./routes"
 import { errorText, formatEth, isZeroAddress, payeeOpenExpiryNotice } from "./format"
 import { PAYEE_NOW_INTERVAL_MS, nowSecondsFrom, startNowTicker } from "./nowClock"
 import { escrowStateLabel, readEscrowById, type EscrowRecord, type EscrowStatus, type SepoliaClient } from "./read"
@@ -199,7 +199,7 @@ function EscrowLookup({
                         onClick={(event) => {
                           event.preventDefault()
                           const escrowId = parseBytes32(id)
-                          navigate(escrowId ? `/dispute?escrow=${escrowId}` : "/dispute")
+                          navigate(flowHref("dispute", 1, { escrow: escrowId }))
                         }}
                       >
                         {expiryNotice.cta}

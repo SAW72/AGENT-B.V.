@@ -3,6 +3,13 @@ import { flushSync } from "react-dom"
 import { isZeroBytes32, parseBytes32 } from "./bytes32"
 import { DISPUTE_URL_IGNORED, DISPUTE_ZERO_IGNORED, ESCROW_URL_IGNORED, ESCROW_ZERO_IGNORED } from "./carriedIds"
 
+/** Landing page owns `/`. The wallet app is the Vite base `/app/`. */
+export const WALLET_BASE = "/app"
+
+export function walletHome(): string {
+  return `${WALLET_BASE}/`
+}
+
 export const FLOWS = ["fund", "release", "refund", "dispute", "vote", "withdraw"] as const
 
 export type FlowId = (typeof FLOWS)[number]
@@ -66,10 +73,14 @@ export function readWalletRoute(href = typeof window === "undefined" ? "http://l
   }
   const escrow = readId(url.searchParams, "escrow")
   const dispute = readId(url.searchParams, "dispute")
-  const parts = url.pathname.split("/").filter(Boolean)
-  if (parts.length === 0) return { ...HOME, escrow, dispute }
-  const head = parts[0]
-  if (parts.length !== 1 || head == null || !isFlow(head)) {
+  const parts = url.pathname.split("/").filter((part) => part.length > 0 && part !== "index.html")
+  // Wallet routes are `/app` and `/app/<flow>`. An empty path is the task picker.
+  // A bare `/fund` is outside the wallet and is ignored.
+  const flowParts = parts.length === 0 ? [] : parts[0] === "app" ? parts.slice(1) : null
+  if (flowParts == null) return { ...HOME, pageNotice: PAGE_IGNORED, escrow, dispute }
+  if (flowParts.length === 0) return { ...HOME, escrow, dispute }
+  const head = flowParts[0]
+  if (flowParts.length !== 1 || head == null || !isFlow(head)) {
     return { ...HOME, pageNotice: PAGE_IGNORED, escrow, dispute }
   }
   const flow = head
@@ -95,7 +106,8 @@ export function flowHref(
   if (query.dispute && flow === "vote") params.set("dispute", query.dispute)
   if (step > 1) params.set("step", String(step))
   const search = params.toString()
-  return search ? `/${flow}?${search}` : `/${flow}`
+  const path = `${WALLET_BASE}/${flow}`
+  return search ? `${path}?${search}` : path
 }
 
 /** Where a confirmed action sends the user, with the id that was actually sent. */
@@ -104,11 +116,11 @@ export function confirmedNext(
   subjectId: string | null,
 ): { href: string; label: string } | null {
   if (action === "createEscrow" && subjectId) {
-    return { href: `/release?escrow=${subjectId}`, label: "Next: release the payment" }
+    return { href: flowHref("release", 1, { escrow: subjectId }), label: "Next: release the payment" }
   }
-  if (action === "release" || action === "refund") return { href: "/withdraw", label: "Next: withdraw" }
-  if (action === "dispute" && subjectId) return { href: `/vote?dispute=${subjectId}`, label: "Next: cast a vote" }
-  if (action === "vote") return { href: "/release", label: "Next: release the payment" }
+  if (action === "release" || action === "refund") return { href: flowHref("withdraw", 1), label: "Next: withdraw" }
+  if (action === "dispute" && subjectId) return { href: flowHref("vote", 1, { dispute: subjectId }), label: "Next: cast a vote" }
+  if (action === "vote") return { href: flowHref("release", 1), label: "Next: release the payment" }
   return null
 }
 

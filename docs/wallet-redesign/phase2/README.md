@@ -26,20 +26,20 @@ The connected header at 320px measures 48px tall, on two rows: the Agent-BV name
 | `after-*-fund-step3` | Fund, amount and time window |
 | `after-*-fund-review` | Fund review, full escrow id with Copy, nothing sent |
 | `after-*-release-input` | Release input, live read, action unavailable |
-| `after-*-release-review` | `/release?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
+| `after-*-release-review` | `/app/release?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-refund-input` | Refund input, live read, action unavailable |
-| `after-*-refund-review` | `/refund?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
+| `after-*-refund-review` | `/app/refund?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-dispute-input` | Dispute input, live subject read |
-| `after-*-dispute-review` | `/dispute?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
+| `after-*-dispute-review` | `/app/dispute?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-vote-input` | Vote visible and disabled for a non-arbitrator |
-| `after-*-vote-review` | `/vote?dispute=…&step=2` lands on step 1, id filled, nothing prepared |
+| `after-*-vote-review` | `/app/vote?dispute=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-withdraw-input` | Withdraw input, live credit read |
-| `after-*-withdraw-review` | `/withdraw?step=2` lands on step 1, nothing prepared |
+| `after-*-withdraw-review` | `/app/withdraw?step=2` lands on step 1, nothing prepared |
 | `after-*-fund-waiting` | Confirm in MetaMask, with the popup hint |
 | `after-*-fund-cancelled` | Cancelled in the fixture wallet (4001) |
 | `after-*-fund-pending` | Waiting for Base Sepolia |
 | `after-*-pending-strip` | Pending transactions strip, including Copy on the escrow id |
-| `after-*-fund-confirmed` | One confirmed card and one Next to `/release`. Receipt is Spencer's tx; the form id is the fresh simulation id |
+| `after-*-fund-confirmed` | One confirmed card and one Next to `/app/release`. Receipt is Spencer's tx; the form id is the fresh simulation id |
 | `after-*-receipt-unreadable` | Receipt read forced to error |
 | `after-*-l8-future-record` | Future-dated record keeps the hash until Try again anyway |
 | `after-320-header` | Connected header at 320px |

@@ -101,7 +101,7 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
+import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
@@ -903,7 +903,7 @@ function guidedFor(flow: "fund" | "release" | "refund" | "dispute", route: Walle
     },
     back() {
       if (route.step > 1) navigate(flowHref(flow, route.step - 1, query), { allowStep: true })
-      else navigate("/")
+      else navigate(walletHome())
     },
   }
 }
@@ -1228,7 +1228,7 @@ function CreateForm({
   function backFund() {
     if (!guided) return
     if (step > 1) navigate(flowHref("fund", step - 1, { escrow: parseBytes32(escrowId) }), { allowStep: true })
-    else navigate("/")
+    else navigate(walletHome())
   }
 
   async function onSubmit(event?: FormEvent): Promise<boolean> {

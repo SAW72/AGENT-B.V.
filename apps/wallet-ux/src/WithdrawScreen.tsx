@@ -10,7 +10,7 @@ import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
 import { preparedMatches } from "./pendingTx"
 import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
-import { historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
+import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { previewCardCopy } from "./submit"
 import { StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
@@ -154,7 +154,7 @@ function WithdrawForm({
   const [withdrawStatus, setWithdrawStatus] = useState<HTMLElement | null>(null)
   useEffect(() => {
     if (!guided || step <= 1 || displayStep !== 1) return
-    replaceRoute("/withdraw")
+    replaceRoute(flowHref("withdraw", 1))
   }, [guided, step, displayStep])
 
   async function onWithdraw(event?: FormEvent): Promise<boolean> {
@@ -178,7 +178,7 @@ function WithdrawForm({
     const ok = await onWithdraw()
     if (ok) {
       guard.arm("withdraw|2")
-      navigate("/withdraw?step=2", { allowStep: true })
+      navigate(flowHref("withdraw", 2), { allowStep: true })
     }
   }
 
@@ -220,7 +220,7 @@ function WithdrawForm({
           <CalldataDetails calldata={session.preview.calldata} />
         </div>
         <div ref={setWithdrawStatus} />
-        <StepFooter onBack={() => navigate("/withdraw", { allowStep: true })}>
+        <StepFooter onBack={() => navigate(flowHref("withdraw", 1), { allowStep: true })}>
           <WalletOnlySubmit
             key={session.preview.calldata}
             preview={session.preview}
@@ -248,7 +248,7 @@ function WithdrawForm({
             void onNext()
           }}
         >
-          <StepFooter onBack={() => navigate("/")}>
+          <StepFooter onBack={() => navigate(walletHome())}>
             <ActionButton
               type="button"
               disabled={session.preparing || !canPrepare}

@@ -13,7 +13,7 @@ import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFe
 import { previewVote, type CallPreview } from "./preview"
 import { preparedMatches } from "./pendingTx"
 import { usePreparedRouteGuard } from "./prepareFeedback"
-import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, type WalletRoute } from "./routes"
+import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
 import { FilledFromLink, IdRow, StepFooter, Stepper } from "./steps"
 import { AddressRow, CalldataDetails, LabeledChunks } from "./ui"
@@ -376,17 +376,13 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
 
   function go(next: number, allowStep = false) {
     if (!guided) return
-    const params = new URLSearchParams()
-    if (guided.dispute.value) params.set("dispute", guided.dispute.value)
-    if (next > 1) params.set("step", String(next))
-    const search = params.toString()
-    navigate(search ? `/vote?${search}` : "/vote", { allowStep })
+    navigate(flowHref("vote", next, { dispute: guided.dispute.value }), { allowStep })
   }
 
   function back() {
     if (!guided) return
     if (guided.step > 1) go(guided.step - 1, true)
-    else navigate("/")
+    else navigate(walletHome())
   }
 
   async function onNext() {
