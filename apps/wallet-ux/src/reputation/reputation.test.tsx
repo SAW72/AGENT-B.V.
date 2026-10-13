@@ -27,7 +27,7 @@ const ADDRESS = exampleSnapshot.balance.address
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const sepoliaConfigPath = join(rootDir, "../../config/reputation/sepolia.json")
 
-const BANNED = /\b(reward|earnings|apy|yield|allocation)\b|may never convert/i
+const BANNED = /\b(reward|earnings|apy|yield|allocation)\b|may\s+never\s+(be\s+)?convert/i
 
 function sepoliaDisplayDisclaimer(): string {
   const raw = JSON.parse(readFileSync(sepoliaConfigPath, "utf8")) as { display?: { disclaimer?: unknown } }
@@ -36,11 +36,6 @@ function sepoliaDisplayDisclaimer(): string {
     throw new Error("config/reputation/sepolia.json display.disclaimer is missing")
   }
   return disclaimer
-}
-
-/** The config disclaimer is the only copy allowed to contain a banned phrase. */
-function outsidePinnedDisclaimer(text: string, disclaimer: string): string {
-  return text.split(disclaimer).join("")
 }
 
 afterEach(() => {
@@ -331,12 +326,13 @@ describe("reputation copy", () => {
 
   it("fails when banned words appear in the reputation components", () => {
     const disclaimer = sepoliaDisplayDisclaimer()
+    expect(disclaimer).not.toMatch(BANNED)
     const dir = join(rootDir, "src/reputation")
     const files = readdirSync(dir).filter((name) => name !== "reputation.test.tsx")
     const extras = [join(rootDir, "src/reputationExample.tsx"), join(rootDir, "reputation-example.html")]
     const texts = [...files.map((name) => readFileSync(join(dir, name), "utf8")), ...extras.map((path) => readFileSync(path, "utf8"))]
     for (const text of texts) {
-      expect(outsidePinnedDisclaimer(text, disclaimer)).not.toMatch(BANNED)
+      expect(text).not.toMatch(BANNED)
       expect(text).not.toMatch(/\bearn tokens\b/i)
       expect(text).not.toMatch(/stranded|gasrescue/i)
     }
