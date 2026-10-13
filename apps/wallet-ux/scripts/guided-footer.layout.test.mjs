@@ -69,15 +69,32 @@ async function reasonId(page) {
 }
 
 async function openFund(chainId) {
-  const page = await browser.newPage()
+  // A shared browser context keeps wagmi's localStorage. The next page can
+  // reconnect that session and then drop it after Next is already on screen.
+  const context = await browser.createBrowserContext()
+  let page
+  try {
+    page = await context.newPage()
+  } catch (error) {
+    await context.close()
+    throw error
+  }
   await page.setViewport(VIEWPORT)
   await page.evaluateOnNewDocument(
     (startChain, account) => {
       try {
         localStorage.clear()
         sessionStorage.clear()
+      } catch (error) {
+        window.__clearError = error instanceof Error ? error.message : String(error)
+      }
+      // A background tab clamps setInterval, so the connector chain poll never
+      // observes a silent chain change. This page is the one under test.
+      try {
+        Object.defineProperty(Document.prototype, "hidden", { configurable: true, get: () => false })
+        Object.defineProperty(Document.prototype, "visibilityState", { configurable: true, get: () => "visible" })
       } catch {
-        // The page can start before storage is reachable.
+        // The prototype getter is already fixed in this browser.
       }
       const listeners = new Map()
       let chain = startChain
@@ -130,10 +147,28 @@ async function openFund(chainId) {
     chainId,
     ACCOUNT,
   )
-  await page.goto(`${base}fund`, { waitUntil: "domcontentloaded", timeout: 30_000 })
-  await page.bringToFront()
-  await waitForReason(page, CONNECT)
-  return page
+  try {
+    await page.goto(`${base}fund`, { waitUntil: "domcontentloaded", timeout: 30_000 })
+    await page.bringToFront()
+    try {
+      const client = await page.createCDPSession()
+      await client.send("Page.setWebLifecycleState", { state: "active" })
+    } catch {
+      // Older headless builds omit this lifecycle command.
+    }
+    const clearError = await page.evaluate(() => window.__clearError || "")
+    if (clearError) throw new Error(`Could not clear wallet storage: ${clearError}`)
+    await waitForReason(page, CONNECT)
+    return page
+  } catch (error) {
+    await context.close()
+    throw error
+  }
+}
+
+async function closeFund(page) {
+  const context = page.browserContext()
+  await context.close()
 }
 
 async function setInput(page, selector, value) {
@@ -278,7 +313,7 @@ describe("guided footer reasons at 390x844", () => {
       expect(view.pageOverflow).toBe(false)
       expect(view.footerOverflow).toBe(false)
     } finally {
-      await page.close()
+      await closeFund(page)
     }
   }, 30_000)
 
@@ -304,7 +339,7 @@ describe("guided footer reasons at 390x844", () => {
       expect(view.pageOverflow).toBe(false)
       expect(view.footerOverflow).toBe(false)
     } finally {
-      await page.close()
+      await closeFund(page)
     }
   }, 30_000)
 
@@ -312,9 +347,19 @@ describe("guided footer reasons at 390x844", () => {
     const page = await openFund("0x14a34")
     try {
       await connect(page)
+      // Next has to stay up with an empty reason before the silent chain change.
+      // A reconnect can flash Next and then drop the session back to Connect.
       await page.waitForFunction(() => {
+        const reason = document.querySelector("[data-testid=footer-reason]")
         const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-        return button instanceof HTMLButtonElement && button.isConnected && button.textContent === "Next"
+        return (
+          reason instanceof HTMLElement &&
+          reason.isConnected &&
+          reason.textContent === "" &&
+          button instanceof HTMLButtonElement &&
+          button.isConnected &&
+          button.textContent === "Next"
+        )
       })
       const before = await reasonId(page)
       expect(before).not.toBe("")
@@ -323,10 +368,17 @@ describe("guided footer reasons at 390x844", () => {
       try {
         await waitForReason(page, SWITCH)
       } catch (error) {
-        const snap = await page.evaluate(() => ({
-          reason: document.querySelector("[data-testid=footer-reason]")?.textContent ?? "",
-          action: document.querySelector("[data-testid=guided-footer] button")?.textContent ?? "",
-        }))
+        const snap = await page.evaluate(() => {
+          const primary = document.querySelector(
+            "[data-testid=journey-connect], [data-testid=journey-switch], [data-testid=guided-footer] [data-action-button]",
+          )
+          return {
+            reason: document.querySelector("[data-testid=footer-reason]")?.textContent ?? "",
+            primary: primary?.textContent ?? "",
+            chip: document.querySelector("[data-testid=wallet-chip]")?.textContent ?? "",
+            hidden: document.hidden,
+          }
+        })
         throw new Error(`Switch sentence did not appear (${JSON.stringify(snap)})`, { cause: error })
       }
       expect(await reasonId(page)).toBe(before)
@@ -340,7 +392,7 @@ describe("guided footer reasons at 390x844", () => {
       expect(view.pageOverflow).toBe(false)
       expect(view.footerOverflow).toBe(false)
     } finally {
-      await page.close()
+      await closeFund(page)
     }
   }, 45_000)
 
@@ -379,7 +431,7 @@ describe("guided footer reasons at 390x844", () => {
       expect(view.pageOverflow).toBe(false)
       expect(view.footerOverflow).toBe(false)
     } finally {
-      await page.close()
+      await closeFund(page)
     }
   }, 30_000)
 })
