@@ -647,28 +647,12 @@ button.task-link.secondary {
 }
 
 @media (max-width: 640px) {
-  .step-actions {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 3;
-    margin: 0;
-    background: var(--bg);
-    border-top: 1px solid var(--line);
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-  }
-  .guided-flow { padding-bottom: 96px; }
   .step-actions .back-button { min-height: 44px; width: auto; flex: 0 0 auto; }
   .action-confirmed .kv-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 360px) {
-  .step-actions {
-    gap: 8px;
-    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
-  }
-  .guided-flow { padding-bottom: 64px; }
+  .step-actions { gap: 8px; }
   .step-actions .back-button,
   .step-primary button,
   .step-primary a.next-step {
