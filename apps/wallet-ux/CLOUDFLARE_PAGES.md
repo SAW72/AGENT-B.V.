@@ -104,11 +104,15 @@ Signed-intent auth is live in production only after cutover. The order is `claim
 
 ## Claim relayer
 
-Render auto-redeploys the claim relayer (`bot-verifier-claim-relayer`) on every merge to `main`. The auto-deploy setting is **After CI Checks Pass** (`autoDeployTrigger`: `checksPass`). The service deploys only after the merge-commit CI on `main` goes green. The per-PR-head GO is still the gate before merge, so nothing reaches `main` without every gate.
+Render auto-redeploys the claim relayer (`bot-verifier-claim-relayer`) on every merge to `main`. The required auto-deploy setting is **After CI Checks Pass** (`autoDeployTrigger`: `checksPass`), so the service deploys only after the merge-commit CI on `main` goes green.
 
-If that setting is ever found back on **On Commit**, treat that as a gate gap and report it.
+As of 2026-10-13 the service is still on **On Commit** (`autoDeployTrigger`: `commit`). The switch is waiting on Spencer in the Render dashboard.
 
-After each merge, when the deploy is live, check `GET /health`. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll back in the Render dashboard.
+Until it is switched, the relayer goes live as soon as the merge lands, before merge-commit CI finishes. The post-merge `GET /health` check is mandatory after every merge. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll back in the Render dashboard.
+
+Once the setting is **After CI Checks Pass**, finding it back on **On Commit** is a gate gap. Report it.
+
+The per-PR-head GO is still the gate before merge, so nothing reaches `main` without every gate.
 
 ## Warning
 
