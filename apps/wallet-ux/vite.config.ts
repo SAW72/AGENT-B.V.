@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { applyBrandHtml, brandManifestSource } from "./src/brand.ts"
+import { requiredBuildEnvPlugin } from "./scripts/require-build-env.mjs"
 
 const port = Number(process.env.PORT) || 5173
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
@@ -44,7 +45,7 @@ function walletBrand(): Plugin {
 export default defineConfig({
   base: "/app/",
   build: { outDir: "dist/app", emptyOutDir: true },
-  plugins: [react(), walletBrand()],
+  plugins: [requiredBuildEnvPlugin(), react(), walletBrand()],
   server: {
     host: "0.0.0.0",
     port,
