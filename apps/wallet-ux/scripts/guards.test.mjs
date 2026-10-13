@@ -194,6 +194,20 @@ describe("guard-claim-secret", () => {
     }
   })
 
+  it("also scans build-env.required.json", () => {
+    const clean = tempDir()
+    writeFileSync(join(clean, "clean.txt"), "ok")
+    const passed = runNode("scripts/guard-claim-secret.mjs", [join(clean, "clean.txt")])
+    expect(passed.status).toBe(0)
+    expect(passed.stdout).toContain("Claim leak scan passed for 2 path(s).")
+
+    const leak = tempDir()
+    writeFileSync(join(leak, "build-env.required.json"), `{"note":"${ENV_NAME}"}\n`)
+    const leaked = runNode("scripts/guard-claim-secret.mjs", [join(leak, "build-env.required.json")])
+    expect(leaked.status).not.toBe(0)
+    expect(leaked.stderr).toContain(`the raw form of ${ENV_NAME} is present`)
+  })
+
   it("fails when the bundle contains VITE_CLAIM_API_SECRET", () => {
     const raw = tempDir()
     writeFileSync(join(raw, "leak.txt"), `import.meta.env.${ENV_NAME}`)

@@ -94,6 +94,7 @@ jobs:
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/guard-escrow-addresses.mjs dist
 
       - name: Reject retired claim-secret markers
+        # Also scans apps/wallet-ux/build-env.required.json. The script appends that file.
         run: node scripts/guard-claim-secret.mjs dist
 
       - name: Reject non-ASCII dashes in the claim domain name
