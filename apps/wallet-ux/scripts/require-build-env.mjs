@@ -6,9 +6,14 @@ import { fileURLToPath } from "node:url"
 // VITE_CLAIM_RELAYER_URL unset compiled the in-app refund relayer to undefined.
 // This list is the default. A non-empty environment value overrides it.
 // An empty environment value does not fall through to the file: that is how an
-// empty GitHub variable used to wipe the URL. Secrets never belong in this list.
+// empty GitHub variable used to wipe the URL. The relayer host is pinned.
+// An RPC host is allowlisted or must answer eth_chainId with 84532. Anything
+// else fails closed. Secrets never belong in this list.
 export const REQUIRED_BUILD_ENV_FILE = "build-env.required.json"
 export const REQUIRED_BUILD_ENV_KEYS = ["VITE_CLAIM_RELAYER_URL", "VITE_BASE_SEPOLIA_RPC_URL"]
+export const PINNED_RELAYER_HOST = "bot-verifier-claim-relayer.onrender.com"
+export const RPC_HOST_ALLOWLIST = ["sepolia.base.org"]
+export const REQUIRED_CHAIN_ID = 84532
 
 const FORBIDDEN_TEXT = [
   "VITE_CLAIM_API_SECRET",
@@ -35,6 +40,10 @@ function emptyMessage(missing) {
   return `${missing.join(", ")} are empty.`
 }
 
+function hostOf(url) {
+  return url.hostname.toLowerCase().replace(/\.$/, "")
+}
+
 function assertPublicUrl(key, value) {
   let parsed
   try {
@@ -47,6 +56,70 @@ function assertPublicUrl(key, value) {
   const allowed = httpsOnly ? ["https:"] : ["https:", "http:"]
   if (!allowed.includes(parsed.protocol)) {
     throw new BuildEnvError(`${key} must be an ${httpsOnly ? "https" : "http or https"} URL.`)
+  }
+  return parsed
+}
+
+function assertPinnedRelayerHost(url) {
+  if (url.protocol !== "https:" || url.port !== "" || hostOf(url) !== PINNED_RELAYER_HOST) {
+    throw new BuildEnvError(`VITE_CLAIM_RELAYER_URL host must be ${PINNED_RELAYER_HOST}.`)
+  }
+}
+
+function isAllowlistedRpc(url) {
+  return url.protocol === "https:" && url.port === "" && RPC_HOST_ALLOWLIST.includes(hostOf(url))
+}
+
+function rpcLookupAllowed(url) {
+  if (url.protocol !== "https:" || url.port !== "") return false
+  const host = hostOf(url)
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false
+  if (host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return false
+  return host.includes(".")
+}
+
+export async function lookupChainId(rpcUrl) {
+  let response
+  try {
+    response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      signal: AbortSignal.timeout(10_000),
+    })
+  } catch {
+    throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  }
+  if (!response.ok) throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  let body
+  try {
+    body = await response.json()
+  } catch {
+    throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  }
+  const result = body?.result
+  const chainId =
+    typeof result === "number"
+      ? result
+      : typeof result === "string" && /^0x[0-9a-fA-F]+$/.test(result)
+        ? Number.parseInt(result, 16)
+        : Number.NaN
+  if (!Number.isInteger(chainId)) throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  return chainId
+}
+
+async function assertRpc(url, raw, lookup) {
+  if (isAllowlistedRpc(url)) return
+  if (!rpcLookupAllowed(url)) throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  let chainId
+  try {
+    chainId = await lookup(raw)
+  } catch (error) {
+    if (error instanceof BuildEnvError) throw error
+    throw new BuildEnvError("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  }
+  if (chainId !== REQUIRED_CHAIN_ID) {
+    throw new BuildEnvError(`VITE_BASE_SEPOLIA_RPC_URL chainId must be ${REQUIRED_CHAIN_ID}.`)
   }
 }
 
@@ -88,7 +161,7 @@ export function readRequiredBuildEnvFile(root = appRoot) {
   return parsed
 }
 
-export function resolveRequiredBuildEnv(env, fileValues) {
+export async function resolveRequiredBuildEnv(env, fileValues, lookup = lookupChainId) {
   const missing = []
   const values = {}
   for (const key of REQUIRED_BUILD_ENV_KEYS) {
@@ -99,15 +172,17 @@ export function resolveRequiredBuildEnv(env, fileValues) {
       missing.push(key)
       continue
     }
-    assertPublicUrl(key, value)
+    const parsed = assertPublicUrl(key, value)
+    if (key === "VITE_CLAIM_RELAYER_URL") assertPinnedRelayerHost(parsed)
+    if (key === "VITE_BASE_SEPOLIA_RPC_URL") await assertRpc(parsed, value, lookup)
     values[key] = value
   }
   if (missing.length > 0) throw new BuildEnvError(emptyMessage(missing), missing)
   return values
 }
 
-export function applyRequiredBuildEnv(env = process.env, root = appRoot) {
-  const values = resolveRequiredBuildEnv(env, readRequiredBuildEnvFile(root))
+export async function applyRequiredBuildEnv(env = process.env, root = appRoot, lookup = lookupChainId) {
+  const values = await resolveRequiredBuildEnv(env, readRequiredBuildEnvFile(root), lookup)
   for (const [key, value] of Object.entries(values)) env[key] = value
   return values
 }
@@ -122,18 +197,22 @@ export function requiredBuildEnvPlugin() {
     name: "wallet-ux-required-build-env",
     config(_config, { command }) {
       if (command !== "build") return
-      applyRequiredBuildEnv(process.env)
+      return applyRequiredBuildEnv(process.env).then(() => undefined)
     },
-    configResolved(config) {
+    async configResolved(config) {
       if (config.command !== "build") return
       assertInlinedBuildEnv(config.env)
+      await resolveRequiredBuildEnv(config.env, {
+        VITE_CLAIM_RELAYER_URL: "",
+        VITE_BASE_SEPOLIA_RPC_URL: "",
+      })
     },
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const values = applyRequiredBuildEnv(process.env)
+    const values = await applyRequiredBuildEnv(process.env)
     for (const key of REQUIRED_BUILD_ENV_KEYS) console.log(`${key}=${values[key]}`)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

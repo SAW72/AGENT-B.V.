@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   applyRequiredBuildEnv,
+  lookupChainId,
   readRequiredBuildEnvFile,
   REQUIRED_BUILD_ENV_FILE,
   requiredBuildEnvPlugin,
@@ -100,42 +101,102 @@ describe("required build env file", () => {
 })
 
 describe("resolve required build env", () => {
-  it("uses the checked-in URL when the variable is unset", () => {
-    const values = applyRequiredBuildEnv({})
+  it("uses the checked-in URL when the variable is unset", async () => {
+    const lookup = () => {
+      throw new Error("allowlisted RPC must not be looked up")
+    }
+    const values = await applyRequiredBuildEnv({}, undefined, lookup)
     expect(values.VITE_CLAIM_RELAYER_URL).toBe(RELAYER_URL)
     expect(values.VITE_BASE_SEPOLIA_RPC_URL).toBe(RPC_URL)
   })
 
-  it("keeps a non-empty override", () => {
-    const values = applyRequiredBuildEnv({
-      VITE_CLAIM_RELAYER_URL: `${OTHER_RELAYER}/`,
+  it("keeps a non-empty override on the pinned relayer host", async () => {
+    const values = await applyRequiredBuildEnv({
+      VITE_CLAIM_RELAYER_URL: `${RELAYER_URL}/`,
       VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
     })
-    expect(values.VITE_CLAIM_RELAYER_URL).toBe(`${OTHER_RELAYER}/`)
+    expect(values.VITE_CLAIM_RELAYER_URL).toBe(`${RELAYER_URL}/`)
   })
 
-  it("names VITE_CLAIM_RELAYER_URL when it is empty or whitespace", () => {
-    expect(() => applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL })).toThrow(
+  it("fails closed when the relayer host is not pinned", async () => {
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: OTHER_RELAYER,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    ).rejects.toThrow("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
+  })
+
+  it("accepts an allowlisted RPC host without a chainId lookup", async () => {
+    let lookedUp = false
+    const values = await applyRequiredBuildEnv(
+      { VITE_CLAIM_RELAYER_URL: RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL: RPC_URL },
+      undefined,
+      () => {
+        lookedUp = true
+        return 1
+      },
+    )
+    expect(lookedUp).toBe(false)
+    expect(values.VITE_BASE_SEPOLIA_RPC_URL).toBe(RPC_URL)
+  })
+
+  it("accepts another public RPC host when chainId is 84532", async () => {
+    const values = await applyRequiredBuildEnv(
+      { VITE_CLAIM_RELAYER_URL: RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL: "https://rpc.example.test" },
+      undefined,
+      async () => 84532,
+    )
+    expect(values.VITE_BASE_SEPOLIA_RPC_URL).toBe("https://rpc.example.test")
+  })
+
+  it("fails closed when a non-allowlisted RPC host is not chainId 84532", async () => {
+    await expect(
+      applyRequiredBuildEnv(
+        { VITE_CLAIM_RELAYER_URL: RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL: "https://rpc.example.test" },
+        undefined,
+        async () => 8453,
+      ),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL chainId must be 84532.")
+    await expect(
+      applyRequiredBuildEnv(
+        { VITE_CLAIM_RELAYER_URL: RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL: "https://rpc.example.test" },
+        undefined,
+        async () => {
+          throw new Error("down")
+        },
+      ),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+        VITE_BASE_SEPOLIA_RPC_URL: "http://sepolia.base.org",
+      }),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+  })
+
+  it("names VITE_CLAIM_RELAYER_URL when it is empty or whitespace", async () => {
+    await expect(applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL })).rejects.toThrow(
       /VITE_CLAIM_RELAYER_URL is empty/,
     )
-    expect(() => applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "  ", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL })).toThrow(
+    await expect(applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "  ", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL })).rejects.toThrow(
       /VITE_CLAIM_RELAYER_URL is empty/,
     )
   })
 
-  it("names every empty required variable", () => {
-    expect(() => applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: "" })).toThrow(
+  it("names every empty required variable", async () => {
+    await expect(applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: "" })).rejects.toThrow(
       /VITE_CLAIM_RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL are empty/,
     )
   })
 
-  it("refuses a relayer URL with credentials", () => {
-    expect(() =>
+  it("refuses a relayer URL with credentials", async () => {
+    await expect(
       applyRequiredBuildEnv({
         VITE_CLAIM_RELAYER_URL: "https://user:secret@bot-verifier-claim-relayer.onrender.com",
         VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
       }),
-    ).toThrow(/VITE_CLAIM_RELAYER_URL must not include credentials/)
+    ).rejects.toThrow(/VITE_CLAIM_RELAYER_URL must not include credentials/)
   })
 })
 
@@ -146,21 +207,50 @@ describe("vite build env plugin", () => {
     expect(process.env.VITE_CLAIM_RELAYER_URL).toBeUndefined()
   })
 
-  it("fills an unset relayer URL before Vite inlines env", () => {
+  it("fills an unset relayer URL before Vite inlines env", async () => {
     delete process.env.VITE_CLAIM_RELAYER_URL
     delete process.env.VITE_BASE_SEPOLIA_RPC_URL
-    requiredBuildEnvPlugin().config({}, { command: "build" })
+    await requiredBuildEnvPlugin().config({}, { command: "build" })
     expect(process.env.VITE_CLAIM_RELAYER_URL).toBe(RELAYER_URL)
     expect(process.env.VITE_BASE_SEPOLIA_RPC_URL).toBe(RPC_URL)
   })
 
-  it("fails the build hook when the inlined relayer URL is empty", () => {
-    expect(() =>
+  it("fails the build hook when the inlined relayer URL is empty", async () => {
+    await expect(
       requiredBuildEnvPlugin().configResolved({
         command: "build",
         env: { VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL },
       }),
-    ).toThrow(/VITE_CLAIM_RELAYER_URL is empty/)
+    ).rejects.toThrow(/VITE_CLAIM_RELAYER_URL is empty/)
+  })
+
+  it("fails the build hook when the inlined relayer host is not pinned", async () => {
+    await expect(
+      requiredBuildEnvPlugin().configResolved({
+        command: "build",
+        env: { VITE_CLAIM_RELAYER_URL: OTHER_RELAYER, VITE_BASE_SEPOLIA_RPC_URL: RPC_URL },
+      }),
+    ).rejects.toThrow("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
+  })
+})
+
+describe("chainId lookup", () => {
+  it("reads eth_chainId 0x14a34 as 84532 and fails closed on a bad response", async () => {
+    const original = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ result: "0x14a34" }) })
+    try {
+      expect(await lookupChainId("https://rpc.example.test")).toBe(84532)
+    } finally {
+      globalThis.fetch = original
+    }
+    globalThis.fetch = async () => ({ ok: false, json: async () => ({}) })
+    try {
+      await expect(lookupChainId("https://rpc.example.test")).rejects.toThrow(
+        "VITE_BASE_SEPOLIA_RPC_URL chainId check failed.",
+      )
+    } finally {
+      globalThis.fetch = original
+    }
   })
 })
 
@@ -173,14 +263,13 @@ describe("npm run build", () => {
     expect(output).not.toContain("assembled dist")
   }, 60_000)
 
-  it("passes when VITE_CLAIM_RELAYER_URL is set and inlines that URL", () => {
+  it("fails when the relayer host is not pinned and does not fall back to the file", () => {
     const result = runBuild({ VITE_CLAIM_RELAYER_URL: OTHER_RELAYER })
-    expect(result.status, outputOf(result)).toBe(0)
-    const javascript = distJavaScript()
-    expect(javascript).toContain(OTHER_RELAYER)
-    expect(javascript).not.toContain(RELAYER_URL)
-    expect(javascript).not.toContain("VITE_CLAIM_API_SECRET")
-  }, 180_000)
+    const output = outputOf(result)
+    expect(result.status).not.toBe(0)
+    expect(output).toContain("VITE_CLAIM_RELAYER_URL host must be bot-verifier-claim-relayer.onrender.com.")
+    expect(output).not.toContain("assembled dist")
+  }, 60_000)
 
   it("passes when VITE_CLAIM_RELAYER_URL is unset and inlines the checked-in URL", () => {
     const result = runBuild({})
