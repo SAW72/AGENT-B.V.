@@ -14,7 +14,7 @@ Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is 
 
 A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
 
-Spencer is still required for mainnet, spending, outside messages, and deletes.
+Spencer is the production approver. Spencer is still required for mainnet, spending, outside messages, and deletes.
 
 Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
@@ -105,9 +105,9 @@ The claim API secret is retired. Do not set a claim secret on Pages. Relayer aut
 
 Signed-intent auth is live in production only after cutover. The order is `claim-relayer/CUTOVER.md` in [PR #51](https://github.com/SAW72/AGENT-B.V./pull/51).
 
-### Stale workflow
+### Stale unused deploy-wallet-ux
 
-[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Deploy wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above. If that file is run anyway, its build reads [`build-env.required.json`](build-env.required.json) and does not pass `vars.VITE_CLAIM_RELAYER_URL`. An empty shell value fails the build; it does not fall back to the file.
+[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Stale unused deploy-wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above. If that file is run anyway, its build reads [`build-env.required.json`](build-env.required.json) and does not pass `vars.VITE_CLAIM_RELAYER_URL`. An empty shell value fails the build; it does not fall back to the file.
 
 ## Claim relayer
 
