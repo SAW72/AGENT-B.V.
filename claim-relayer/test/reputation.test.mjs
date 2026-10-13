@@ -197,6 +197,8 @@ describe("reputation config", () => {
       fileURLToPath(
         new URL("../../apps/wallet-ux/fixtures/reputation/EXAMPLE-DATA.config.example.json", import.meta.url),
       ),
+      fileURLToPath(new URL("../../docs/POINTS-PROGRAM.md", import.meta.url)),
+      fileURLToPath(new URL("../../docs/POINTS-ANNOUNCEMENT-DRAFT.md", import.meta.url)),
     ]);
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const claimDomainName = "Agent-BV Relayer";

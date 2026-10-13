@@ -152,7 +152,7 @@
     "abuse_policy": ""
   },
   "display": {
-    "disclaimer": "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and may never convert to anything.",
+    "disclaimer": "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.",
     "caps_label": "DRAFT/GUESS"
   },
   "read_api": {

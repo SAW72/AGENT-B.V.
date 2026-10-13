@@ -6,7 +6,7 @@ This file is the single copy inside AGENT B.V. of everything discussed for the p
 
 - STRANDED: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/STRANDED
 - RAT Score: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
-- Agent B.V. detail: `docs/AGENT-BV-POINTS-SPEC.md`, `docs/POINTS-ANNOUNCEMENT-DRAFT.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
+- Agent B.V. detail: `docs/AGENT-BV-POINTS-SPEC.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
 
 Counsel should review before any of this is published. The March 2026 SEC/CFTC airdrop interpretation is guidance, not a statute, and it does not bind a court.
 
