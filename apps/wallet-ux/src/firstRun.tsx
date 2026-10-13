@@ -7,10 +7,12 @@ import { flowHref, navigate } from "./routes"
 import { Stepper } from "./steps"
 import { useConnectorChainId } from "./useWalletChain"
 import {
+  BASE_SEPOLIA_FAUCET_DOCS_URL,
   CONNECT_NOTE,
+  TEST_ETH_LINK_LABEL,
   TEST_ETH_NOTE,
-  WALKTHROUGH_LABELS,
   WRONG_NETWORK_NOTE,
+  walkthroughLabels,
   walkthroughStates,
   walkthroughStep,
   walletReadiness,
@@ -70,17 +72,34 @@ export function ConnectWalletButton() {
   )
 }
 
-/** Three steps for a first visit: connect, fund, then send. One primary action. */
+/** The faucet sentence, with the official Base docs page as the only link. */
+export function TestEthNote() {
+  const at = TEST_ETH_NOTE.indexOf(TEST_ETH_LINK_LABEL)
+  const before = TEST_ETH_NOTE.slice(0, at)
+  const after = TEST_ETH_NOTE.slice(at + TEST_ETH_LINK_LABEL.length)
+  return (
+    <p className="hint" data-testid="test-eth-note">
+      {before}
+      <a href={BASE_SEPOLIA_FAUCET_DOCS_URL} rel="noopener noreferrer" target="_blank">
+        {TEST_ETH_LINK_LABEL}
+      </a>
+      {after}
+    </p>
+  )
+}
+
+/** Three steps for a first visit. One primary action. */
 export function FirstRun() {
   const account = useAccount()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
   const chainId = account.isConnected ? resolveWalletChainId(account.chainId, connectorChainId) : null
   const wallet = walletReadiness(account.isConnected, chainId)
   const states = walkthroughStates(wallet, "home")
+  const labels = walkthroughLabels(wallet)
   return (
     <section className="card first-run" data-testid="first-run" aria-label="Start here">
       <h2>Start here</h2>
-      <Stepper step={walkthroughStep(states)} total={WALKTHROUGH_LABELS.length} labels={WALKTHROUGH_LABELS} />
+      <Stepper step={walkthroughStep(states)} total={labels.length} labels={labels} />
       {wallet === "wrong-network" ? (
         <p className="banner" role="status" data-testid="wrong-network-note">
           {WRONG_NETWORK_NOTE}
@@ -91,11 +110,7 @@ export function FirstRun() {
           {CONNECT_NOTE}
         </p>
       ) : null}
-      {wallet === "ready" ? (
-        <p className="hint" data-testid="test-eth-note">
-          {TEST_ETH_NOTE}
-        </p>
-      ) : null}
+      {wallet === "ready" ? <TestEthNote /> : null}
       {wallet === "wrong-network" ? <SwitchToSepoliaButton /> : null}
       {wallet === "disconnected" ? <ConnectWalletButton /> : null}
       {wallet === "ready" ? (

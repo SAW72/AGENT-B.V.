@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
-import { ConnectWalletButton, SwitchToSepoliaButton } from "./firstRun"
+import { ConnectWalletButton, SwitchToSepoliaButton, TestEthNote } from "./firstRun"
 import {
   ActionButton,
   ActionStatus,
@@ -104,7 +104,7 @@ import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
-import { CONNECT_NOTE, FLOW_STEP_LABELS, TEST_ETH_NOTE, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
+import { CONNECT_NOTE, FLOW_STEP_LABELS, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -1509,9 +1509,7 @@ function CreateForm({
             ) : null
           }
         />
-        <p className="hint" data-testid="test-eth-note">
-          {TEST_ETH_NOTE}
-        </p>
+        <TestEthNote />
         {overBalance ? (
           <p className="warn-note" role="status" data-testid="balance-warning">
             {BALANCE_WARN_TEXT}

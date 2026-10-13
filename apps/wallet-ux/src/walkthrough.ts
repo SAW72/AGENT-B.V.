@@ -3,17 +3,18 @@ import type { WalletChainId } from "./guard"
 import type { FlowId } from "./routes"
 
 /** Home walkthrough for someone opening the app for the first time. */
-export const WALKTHROUGH_LABELS = [
-  "Connect your wallet",
-  "Fund an escrow",
-  "Send the first transaction",
-] as const
+export const CONNECT_STEP_LABEL = "Connect your wallet"
+export const SWITCH_STEP_LABEL = "Switch to Base Sepolia"
+export const FILL_ESCROW_LABEL = "Fill in the escrow"
+export const REVIEW_SEND_LABEL = "Review and send"
 
 export const CONNECT_NOTE = "Connect a wallet on Base Sepolia. You sign each transaction in that wallet."
 export const WRONG_NETWORK_NOTE =
   "This wallet is not on Base Sepolia. Switch to Base Sepolia before you send test ETH."
-export const TEST_ETH_NOTE =
-  "You need a little Base Sepolia test ETH for the amount and the gas fee. Get it from a faucet. It has no real value."
+/** Official Base docs. The older network-faucets paths redirect here. */
+export const BASE_SEPOLIA_FAUCET_DOCS_URL = "https://docs.base.org/get-started/get-funds"
+export const TEST_ETH_LINK_LABEL = "Base Sepolia faucet"
+export const TEST_ETH_NOTE = "Get free test ETH from a Base Sepolia faucet. It has no real value."
 
 /** Plain names for the fields inside a flow. The state word (Done, Now, Later) stays in front. */
 export const FLOW_STEP_LABELS: Record<FlowId, readonly string[]> = {
@@ -45,6 +46,15 @@ export function walkthroughStates(
   return ["done", "current", "upcoming"]
 }
 
+/** Three steps. The first name follows the wallet: connect, or switch when the chain is wrong. */
+export function walkthroughLabels(wallet: WalkthroughWallet): readonly [string, string, string] {
+  return [
+    wallet === "wrong-network" ? SWITCH_STEP_LABEL : CONNECT_STEP_LABEL,
+    FILL_ESCROW_LABEL,
+    REVIEW_SEND_LABEL,
+  ]
+}
+
 export function walkthroughStep(states: readonly WalkthroughState[]): number {
   const index = states.findIndex((state) => state === "current")
   return (index === -1 ? states.length : index) + 1
@@ -53,5 +63,5 @@ export function walkthroughStep(states: readonly WalkthroughState[]): number {
 export function journeyNow(wallet: WalkthroughWallet, place: WalkthroughPlace): string {
   const states = walkthroughStates(wallet, place)
   const index = states.findIndex((state) => state === "current")
-  return `Now · ${WALKTHROUGH_LABELS[index]}`
+  return `Now · ${walkthroughLabels(wallet)[index]}`
 }

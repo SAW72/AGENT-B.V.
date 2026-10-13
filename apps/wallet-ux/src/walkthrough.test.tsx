@@ -6,11 +6,12 @@ import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { FirstRun } from "./firstRun"
 import { Stepper } from "./steps"
 import {
+  BASE_SEPOLIA_FAUCET_DOCS_URL,
   CONNECT_NOTE,
   TEST_ETH_NOTE,
-  WALKTHROUGH_LABELS,
   WRONG_NETWORK_NOTE,
   journeyNow,
+  walkthroughLabels,
   walkthroughStates,
   walkthroughStep,
   walletReadiness,
@@ -85,10 +86,19 @@ describe("walkthrough states", () => {
     expect(walkthroughStates("ready", "home")).toEqual(["done", "current", "upcoming"])
     expect(walkthroughStates("ready", "review")).toEqual(["done", "done", "current"])
     expect(walkthroughStep(walkthroughStates("ready", "review"))).toBe(3)
-    expect(journeyNow("wrong-network", "funding")).toBe("Now · Connect your wallet")
-    expect(journeyNow("ready", "home")).toBe("Now · Fund an escrow")
-    expect(journeyNow("ready", "review")).toBe("Now · Send the first transaction")
-    expect(WALKTHROUGH_LABELS).toEqual(["Connect your wallet", "Fund an escrow", "Send the first transaction"])
+    expect(walkthroughLabels("disconnected")).toEqual(["Connect your wallet", "Fill in the escrow", "Review and send"])
+    expect(walkthroughLabels("ready")).toEqual(["Connect your wallet", "Fill in the escrow", "Review and send"])
+    expect(walkthroughLabels("wrong-network")).toEqual(["Switch to Base Sepolia", "Fill in the escrow", "Review and send"])
+    for (const chain of [1, null, "conflict" as const]) {
+      const wallet = walletReadiness(true, chain)
+      expect(wallet).toBe("wrong-network")
+      expect(journeyNow(wallet, "home")).toBe("Now · Switch to Base Sepolia")
+      expect(journeyNow(wallet, "funding")).toBe("Now · Switch to Base Sepolia")
+    }
+    expect(journeyNow("disconnected", "home")).toBe("Now · Connect your wallet")
+    expect(journeyNow("ready", "home")).toBe("Now · Fill in the escrow")
+    expect(journeyNow("ready", "funding")).toBe("Now · Fill in the escrow")
+    expect(journeyNow("ready", "review")).toBe("Now · Review and send")
   })
 
   it("keeps an unlabelled stepper on numbered state words", () => {
@@ -104,7 +114,11 @@ describe("walkthrough states", () => {
     render(<FirstRun />)
     const card = screen.getByTestId("first-run")
     expect(statesOf(card)).toEqual(["current", "upcoming", "upcoming"])
-    expect(within(card).getAllByRole("listitem")[0]?.querySelector(".step-dot-word")?.textContent).toBe("Now · Connect your wallet")
+    expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
+      "Now · Connect your wallet",
+      "Later · Fill in the escrow",
+      "Later · Review and send",
+    ])
     expect(screen.getByTestId("connect-note").textContent).toBe(CONNECT_NOTE)
     expect(screen.getByTestId("journey-connect").textContent).toBe("Connect wallet")
     expect(screen.getAllByRole("button")).toHaveLength(1)
@@ -122,12 +136,29 @@ describe("walkthrough states", () => {
     render(<FirstRun />)
     const card = screen.getByTestId("first-run")
     expect(statesOf(card)).toEqual(["current", "upcoming", "upcoming"])
+    expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
+      "Now · Switch to Base Sepolia",
+      "Later · Fill in the escrow",
+      "Later · Review and send",
+    ])
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     expect(screen.queryByTestId("journey-fund")).toBeNull()
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     fireEvent.click(screen.getByTestId("journey-switch"))
     expect(switchChain).toHaveBeenCalledWith({ chainId: BASE_SEPOLIA_CHAIN_ID })
+  })
+
+  it("uses the switch step when the connected chain is unknown", () => {
+    world.connected = true
+    world.chainId = undefined
+    render(<FirstRun />)
+    const words = within(screen.getByTestId("first-run"))
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector(".step-dot-word")?.textContent)
+    expect(words[0]).toBe("Now · Switch to Base Sepolia")
+    expect(words).toHaveLength(3)
+    expect(screen.getByTestId("journey-switch")).toBeTruthy()
   })
 
   it("offers fund as the only primary action once the wallet is on Base Sepolia", () => {
@@ -137,10 +168,18 @@ describe("walkthrough states", () => {
     expect(statesOf(card)).toEqual(["done", "current", "upcoming"])
     expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
       "Done · Connect your wallet",
-      "Now · Fund an escrow",
-      "Later · Send the first transaction",
+      "Now · Fill in the escrow",
+      "Later · Review and send",
     ])
-    expect(screen.getByTestId("test-eth-note").textContent).toBe(TEST_ETH_NOTE)
+    const note = screen.getByTestId("test-eth-note")
+    expect(note.textContent).toBe(TEST_ETH_NOTE)
+    const links = within(note).getAllByRole("link")
+    expect(links).toHaveLength(1)
+    expect(links[0]?.getAttribute("href")).toBe(BASE_SEPOLIA_FAUCET_DOCS_URL)
+    expect(links[0]?.getAttribute("href")).toBe("https://docs.base.org/get-started/get-funds")
+    expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer")
+    expect(links[0]?.getAttribute("target")).toBe("_blank")
+    expect(links[0]?.textContent).toBe("Base Sepolia faucet")
     const fund = screen.getByTestId("journey-fund")
     expect(fund.getAttribute("href")).toBe("/app/fund")
     expect(screen.queryByTestId("journey-connect")).toBeNull()
