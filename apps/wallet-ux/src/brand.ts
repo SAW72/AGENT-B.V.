@@ -41,9 +41,11 @@ export function brandManifest() {
   return {
     name: PRODUCT_TITLE,
     short_name: PRODUCT_NAME,
+    start_url: "/app/",
+    scope: "/app/",
     icons: [
-      { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      { src: "/app/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "/app/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
   }
 }

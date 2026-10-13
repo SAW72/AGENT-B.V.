@@ -1,0 +1,12 @@
+# Root (/) is the static landing page (landing/index.html). It is a real file,
+# so Pages serves it before any rule here. The wallet app lives under /app/.
+/app            /app/            301
+/index.html     /                301
+/manifest.webmanifest /app/manifest.webmanifest 301
+/icon-192.png   /app/icon-192.png 301
+/icon-512.png   /app/icon-512.png 301
+# Old hashed bundles from the pre-/app build (e.g. /assets/index-DUIxmevy.js)
+# are gone; landing assets also live in /assets, so no blanket rule there.
+# The app is one page with no client router, so there is no /app/* SPA
+# rewrite: a 200 rewrite there would also shadow the real /app/assets files.
+# Unknown paths fall back to the landing page (Pages default, no 404.html).

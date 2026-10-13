@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Agent-BV (Agent Bot Verifier): check the bot before you sign</title>
+<meta name="description" content="Agent-BV (Agent Bot Verifier): escrow, disputes and a denylist for AI agents that hold funds, live on Base Sepolia testnet. Not audited, no users yet.">
+<meta name="theme-color" content="#0B0B0F">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Agent-BV (Agent Bot Verifier)">
+<meta property="og:title" content="Agent-BV (Agent Bot Verifier)">
+<meta property="og:description" content="Check the bot before you sign. Escrow, disputes and a denylist for AI agents, live on Base Sepolia testnet. Not audited, no users yet.">
+<meta property="og:image" content="https://agent-bv.pages.dev/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Agent-BV (Agent Bot Verifier) fedora mascot on black">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent-BV (Agent Bot Verifier)">
+<meta name="twitter:description" content="Check the bot before you sign. Escrow, disputes and a denylist for AI agents, live on Base Sepolia testnet. Not audited, no users yet.">
+<meta name="twitter:image" content="https://agent-bv.pages.dev/assets/og-image.png">
+<meta name="twitter:image:alt" content="Agent-BV (Agent Bot Verifier) fedora mascot on black">
+<link rel="icon" href="assets/icons/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="preload" href="assets/fonts/Poppins-SemiBold.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="header">
+  <div class="wrap nav">
+    <a class="brand" href="#top" aria-label="Agent-BV (Agent Bot Verifier), back to top">
+      <img src="assets/mascot-sm.png" width="38" height="40" alt="">
+      <span class="txt"><span class="name">Agent-BV</span><span class="desc">(Agent Bot Verifier)</span></span>
+    </a>
+    <nav aria-label="Primary">
+      <ul class="navlinks">
+        <li class="opt mid"><a href="#how">How it works</a></li>
+        <li class="opt mid"><a href="#onchain">On-chain</a></li>
+        <li class="opt mid"><a href="#status">Status</a></li>
+        <li><a class="btn btn-white btn-sm" href="/app/">Open the app</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <div class="hex-field" aria-hidden="true">
+    <svg class="l" viewBox="0 0 360 360"><polygon points="180,10 320,90 320,250 180,330 40,250 40,90"/></svg>
+    <svg class="r" viewBox="0 0 360 360"><polygon points="180,10 320,90 320,250 180,330 40,250 40,90"/><polygon points="180,80 260,126 260,218 180,264 100,218 100,126"/></svg>
+  </div>
+  <div class="wrap">
+    <div class="stage">
+      <div class="glow" aria-hidden="true"></div>
+      <img src="assets/mascot-hero.png" srcset="assets/mascot-hero.png 511w, assets/mascot-hero@2x.png 1022w" sizes="(max-width: 560px) 72vw, 400px" width="511" height="540" alt="The Agent-BV mascot: a white hexagon bot in a black fedora">
+    </div>
+    <h1 id="hero-title">Agent-BV</h1>
+    <p class="desc-lg">(Agent Bot Verifier)</p>
+    <div class="rule" aria-hidden="true"></div>
+    <p class="tagline">Check the bot before you sign.</p>
+    <p class="lede"><strong>Agent-BV (Agent Bot Verifier)</strong> is an accountability layer for AI agents that hold funds and act on-chain: escrowed payments, a dispute panel and an on-chain denylist, deployed on Base Sepolia testnet.</p>
+    <ul class="chips" aria-label="Project status">
+      <li class="chip">Base Sepolia testnet</li>
+      <li class="chip">No users yet</li>
+      <li class="chip">Not audited</li>
+    </ul>
+    <div class="ctas">
+      <a class="btn btn-white" href="/app/">Open the app
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></a>
+      <a class="btn btn-ghost" href="#status">See what is live</a>
+    </div>
+    <p class="cta-note">Everything here is on Base Sepolia testnet, not mainnet. Use test funds only.</p>
+  </div>
+</section>
+
+<section class="section" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">How it works</div>
+      <h2 id="how-title">Test the bot, record it, <span class="soft">and back its payments with recourse.</span></h2>
+      <p>Four steps. Two run on Base Sepolia today. Two are still being built, and they are labeled that way.</p>
+    </div>
+    <ol class="cards c4">
+      <li class="card">
+        <div class="top"><div class="hex" aria-hidden="true">1</div><span class="chip road">In development</span></div>
+        <h3>Verify</h3>
+        <p>Bots will run against a library of adversarial scenarios and be scored with a fixed rubric.</p>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex" aria-hidden="true">2</div><span class="chip road">Roadmap</span></div>
+        <h3>Attest</h3>
+        <p>Results are to be recorded on Base, so anyone can check a bot's standing before they trust it. Not live yet.</p>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex on" aria-hidden="true">3</div><span class="chip live">Base Sepolia</span></div>
+        <h3>Escrow</h3>
+        <p>Payments to an agent are held by the BotAttestationEscrow contract, not by Steward of the King LLC, and are released to the agent or refunded to the payer under the contract's rules.</p>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex on" aria-hidden="true">4</div><span class="chip live">Base Sepolia</span></div>
+        <h3>Resolve</h3>
+        <p>A DisputePanel with three seated arbitrators is designed to settle disputes. Bots can be added to an on-chain denylist.</p>
+      </li>
+    </ol>
+    <div class="note">
+      <p><strong>Claims backstop (experimental):</strong> Vault, Liability and InsuranceFund contracts are deployed on Base Sepolia. This is not insurance. No claims have been paid and none are promised; any payout is at the contract owner's discretion. The names are contract names only.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="onchain" aria-labelledby="chain-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">On-chain · Base Sepolia (chain 84532)</div>
+      <h2 id="chain-title">Six core contracts, <span class="soft">plus the timelock that owns them.</span></h2>
+      <p>Every core contract is source-verified on Blockscout except the Denylist, which is still pending.</p>
+    </div>
+    <div class="chain">
+      <div class="tbl-wrap" role="region" aria-labelledby="tbl-cap" tabindex="0">
+        <table>
+          <caption id="tbl-cap">Core contracts on Base Sepolia testnet</caption>
+          <thead><tr><th scope="col">Contract</th><th scope="col">Address</th><th scope="col">Source verification</th></tr></thead>
+          <tbody>
+            <tr><td class="c">BotAttestationEscrow</td><td class="a">0x3d66…4C42</td><td>Sourcify exact match, Blockscout verified</td></tr>
+            <tr><td class="c">Denylist</td><td class="a">0xeE76…B224</td><td>Pending</td></tr>
+            <tr><td class="c">DisputePanel</td><td class="a">0x31a9…f1Bb</td><td>Sourcify exact match, Blockscout verified</td></tr>
+            <tr><td class="c">Vault</td><td class="a">0x1463…65bc</td><td>Blockscout verified</td></tr>
+            <tr><td class="c">Liability</td><td class="a">0x554C…7307</td><td>Sourcify exact match, Blockscout verified</td></tr>
+            <tr><td class="c">InsuranceFund</td><td class="a">0x19fc…3ab8</td><td>Sourcify exact match, Blockscout verified</td></tr>
+            <tr><td class="c">TimelockController</td><td class="a">0xa1ab…ca33</td><td>Blockscout verified</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="side" aria-labelledby="gov-title">
+        <h3 id="gov-title">Governance</h3>
+        <dl>
+          <dt>Owner of all six</dt><dd>The TimelockController, with a 1-day delay.</dd>
+          <dt>Proposer and executor</dt><dd>A 2-of-2 Safe, <span class="mono">0x12b3…dD54</span>. No open executor.</dd>
+          <dt>Admin</dt><dd>The timelock itself. The Safe holds no admin role.</dd>
+        </dl>
+      </aside>
+    </div>
+    <p class="powers"><strong>Timelock powers:</strong> After a 1-day delay, the timelock (controlled by the founder's 2-of-2 Safe) can: appoint or remove the dispute arbitrators, including while a dispute is open, which decides whether a disputed escrow is released to the agent or refunded to the payer; add or remove denylist entries, and register, re-assign or permanently deactivate bots in the Vault, any of which can block an open escrow's release so that it refunds to the payer after expiry; point the escrow at a different Denylist, Vault or DisputePanel, but only while no escrow is funded; file and settle claims that pay out ETH held by the Liability and InsuranceFund contracts; and hand ownership of any of these contracts to another address. It cannot take escrowed funds or credit them to anyone other than that escrow's payer or payee.</p>
+    <p class="fine">Addresses are shortened. Testnet only; verify on-chain before you send anything. The Safe is 2-of-2, so losing either key freezes admin changes.</p>
+  </div>
+</section>
+
+<section class="section status" id="status" aria-labelledby="status-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Where Agent-BV stands</div>
+      <h2 id="status-title">Testnet, no users yet. <span class="soft">What's live and what isn't.</span></h2>
+    </div>
+    <ul class="cards c3">
+      <li class="card built">
+        <div class="top"><div class="hex on" aria-hidden="true">✓</div><span class="chip live">Live on testnet</span></div>
+        <h3>Live on testnet</h3>
+        <ul class="list">
+          <li>Core contract suite on Base Sepolia</li>
+          <li>Source-verified on Blockscout, except the Denylist</li>
+          <li>DisputePanel with three arbitrators seated</li>
+          <li>Claim relayer live on Base Sepolia (access-controlled; off unless switched on). <span class="aside">The claim relayer is a Steward-operated service that submits claim transactions and pays testnet gas. It never holds escrowed funds.</span></li>
+        </ul>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex" aria-hidden="true">=</div><span class="chip">Stated plainly</span></div>
+        <h3>Not yet</h3>
+        <ul class="list">
+          <li>No users and no revenue</li>
+          <li>No security audit</li>
+          <li>Not on mainnet</li>
+        </ul>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex" aria-hidden="true">→</div><span class="chip road">Before mainnet</span></div>
+        <h3>What comes first</h3>
+        <ul class="list">
+          <li>A security audit</li>
+          <li>Source verification for the Denylist</li>
+          <li>The relayer refuses mainnet chain IDs 1 and 8453, by design</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section class="section cta" aria-labelledby="cta-title">
+  <div class="wrap">
+    <div class="band">
+      <div>
+        <p class="big" id="cta-title">Check the bot before you sign.</p>
+        <p class="sub">Open the app. Base Sepolia testnet, test funds only.</p>
+      </div>
+      <div class="act">
+        <img src="assets/mascot-sm.png" width="128" height="135" alt="">
+        <a class="btn btn-dark" href="/app/">Open the app
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="row">
+      <div class="lockup"><img src="assets/mascot-sm.png" width="38" height="40" alt=""><span class="t1">Agent-BV (Agent Bot Verifier)</span></div>
+      <nav aria-label="Footer">
+        <ul class="footlinks">
+          <li><a href="/app/">Open the app</a></li>
+          <li><a href="https://github.com/SAW72/AGENT-B.V." rel="noopener">GitHub</a></li>
+          <li><a href="mailto:hello@stewardoftheking.com">hello@stewardoftheking.com</a></li>
+        </ul>
+      </nav>
+    </div>
+    <hr>
+    <p class="legal">Agent-BV (Agent Bot Verifier) is a product of Steward of the King LLC, an Ohio (USA) limited liability company. Contact: <a href="mailto:hello@stewardoftheking.com">hello@stewardoftheking.com</a></p>
+    <p class="legal">Base Sepolia testnet only. Experimental software provided "as is", without warranties. Not audited. Not financial, legal or investment advice. The claims backstop is experimental and not insurance; no claims have been paid or are promised.</p>
+  </div>
+</footer>
+</body>
+</html>
