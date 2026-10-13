@@ -33,7 +33,7 @@ node scripts/guard-claim-secret.mjs dist
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
-`npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://bot-verifier-claim-relayer.onrender.com` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value fails the build; it does not fall back to the file. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset. Any RPC URL must answer `eth_chainId` with `84532`.
+`npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://bot-verifier-claim-relayer.onrender.com` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value fails the build; it does not fall back to the file. The relayer host must be `bot-verifier-claim-relayer.onrender.com`. An https RPC host on the allowlist (`sepolia.base.org`) is accepted. Any other public https RPC host must answer `eth_chainId` with `84532`. Anything else fails the build. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset.
 
 Before the production upload, note the deployment ID of the live production deployment (the current `main` deployment). That ID is the rollback target. Preview deployment IDs are not rollback targets.
 
@@ -89,14 +89,14 @@ VITE_CLAIM_RELAYER_URL:
 check results:
 ```
 
-`VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set: the checked-in URL, or a non-empty shell override. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
+`VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set: the checked-in URL, or a non-empty shell override on `bot-verifier-claim-relayer.onrender.com`. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
 
 | Name | Where | Role |
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | Environment of the deploy command. Never a repository secret. | API token with **Pages:Edit** scope only. Wrangler uses it to upload `dist`. |
 | `CLOUDFLARE_ACCOUNT_ID` | Environment of the deploy command. Never a repository secret. | Cloudflare account that owns `agent-bv`. |
-| `VITE_CLAIM_RELAYER_URL` | [`build-env.required.json`](build-env.required.json). Not a GitHub variable. | Public `https://bot-verifier-claim-relayer.onrender.com`. `npm run build` fails if the resolved value is empty. A non-empty shell value overrides the file. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. |
-| `VITE_BASE_SEPOLIA_RPC_URL` | [`build-env.required.json`](build-env.required.json). | Public `https://sepolia.base.org`. `npm run build` fails if the resolved value is empty. `npm run dev` uses that URL when the variable is unset. Any URL must answer `eth_chainId` with `84532`. |
+| `VITE_CLAIM_RELAYER_URL` | [`build-env.required.json`](build-env.required.json). Not a GitHub variable. | Public `https://bot-verifier-claim-relayer.onrender.com`. `npm run build` fails if the resolved value is empty. A non-empty shell value overrides the file only when the host stays `bot-verifier-claim-relayer.onrender.com`. Any other host fails the build. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. |
+| `VITE_BASE_SEPOLIA_RPC_URL` | [`build-env.required.json`](build-env.required.json). | Public `https://sepolia.base.org`, which is the RPC host allowlist. `npm run build` fails if the resolved value is empty. A public https host that is not on that allowlist must answer `eth_chainId` with `84532`. Anything else fails the build. `npm run dev` uses `https://sepolia.base.org` when the variable is unset. |
 | `VITE_CLAIM_API_SECRET` | Retired. Must not exist anywhere. | Do not set a claim secret on Pages. Not a repository secret, not an environment secret or variable, and not a Cloudflare Pages environment variable. |
 
 ### Relayer submit
