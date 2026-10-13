@@ -4,13 +4,12 @@
 
 Points in this spec are off-chain and unpaid. They have no value, no token, and no promise about anything later. The only network is Base Sepolia (testnet). Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope.
 
-This file is the points spec for that testnet ledger. It does not announce the program, deploy anything, or change a contract, a config file, or application code. Counsel review called for in `docs/POINTS-PROGRAM.md` and `docs/POINTS-AND-ACCOUNTABILITY.md` still applies before any public announcement.
+This file is the points spec for that testnet ledger. It does not announce the program, deploy anything, or change a contract, a config file, or application code. Counsel review called for in `docs/POINTS-AND-ACCOUNTABILITY.md` still applies before any public announcement.
 
 ## Sources
 
 Built only from:
 
-- `docs/POINTS-PROGRAM.md`
 - `docs/POINTS-AND-ACCOUNTABILITY.md`
 - `docs/decision-chain-spec.md`
 - `contracts/BotAttestationEscrow.sol` (event arguments and the functions that emit them)
@@ -22,15 +21,14 @@ Checklist #7, #9, and #12 use the definitions already written in `docs/reputatio
 
 ## What points are
 
-From `docs/POINTS-PROGRAM.md` and `docs/POINTS-AND-ACCOUNTABILITY.md`:
+From `docs/POINTS-AND-ACCOUNTABILITY.md`:
 
 - Points record activity that already happened. They are post-facto only.
 - There is no purchase, no referral bonus, and no holding requirement.
 - No token is minted during the points phase. `deployments/base-sepolia.json` has `BVT.address` set to `null`. No dollar amount is attached to a point.
-- The existing disclaimer line in `docs/reputation-ledger.md` is the posture of this ledger: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and may never convert to anything."
-- This spec has no conversion rate, no allocation table, and no later redemption. The illustrative TGE tables in `docs/POINTS-PROGRAM.md` are outside this spec.
-
-The read-only dashboard rule in `docs/POINTS-PROGRAM.md` still stands: enter a wallet address, see points by category and rank. No login, no sign-up, no connect-wallet button. This spec does not add a dashboard.
+- The existing disclaimer line in `docs/reputation-ledger.md` is the posture of this ledger: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
+- This spec has no conversion rate, no allocation table, and no later redemption.
+- The dashboard is read-only. It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button. This spec does not add a dashboard.
 
 ## Where the events come from
 
@@ -169,7 +167,7 @@ Negative test for retired escrows. The panel address is shared with the retired 
 
 ## Actions
 
-Point weights are **TBD**. This spec does not copy the rubric in `docs/POINTS-PROGRAM.md` (verification run 10, attestation 50, integration 100, bug bounty 100–500, mirrored point). Those are different actions. It also does not copy the GUESS weights in `config/reputation/sepolia.json`.
+Point weights are **TBD**. This spec does not copy a verification-run, attestation, integration, bug-bounty, or mirrored-point rubric. Those are different actions. It also does not copy the GUESS weights in `config/reputation/sepolia.json`.
 
 The `action` value stored in the ledger is one of the strings in this table. That string is the `action` column of `UNIQUE(wallet, action, utc_day)`.
 
@@ -199,7 +197,7 @@ These rules are named here. Their numbers are **TBD**. No point weight is assign
 
 ### First activity
 
-`first_activity` replaces the name `first_connect`. There is no connect signal. The dashboard in `docs/POINTS-PROGRAM.md` still has no connect-wallet button.
+`first_activity` replaces the name `first_connect`. There is no connect signal. The read-only dashboard reads the wallet address you entered. It does not read a connected wallet.
 
 `first_activity` is one row per wallet. Its own key is `UNIQUE (wallet) WHERE action = 'first_activity'`. The chain-log unique key does not include this action, so the row does not collide with its source and does not need a NULL column to slip past that key. Every key column on the row is NOT NULL. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of the source log, stored for the link. They are not a second insert of `UNIQUE (chain_id, contract, tx_hash, log_index)`.
 

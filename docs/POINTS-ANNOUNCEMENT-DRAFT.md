@@ -31,7 +31,7 @@ No token exists today. No rewards are guaranteed. If a token ever launches, poin
 - A verified person gets a human badge.
 - The decision chain shows whether an agent was instructed by a human or by another agent. See the decision-chain spec. Anything that moves funds still needs a verified human as the last approver.
 
-**Dashboard:** read-only. Enter a wallet address, see points by category and rank. No login, no sign-up, no connect-wallet button. Dashboard URL: [placeholder].
+**Dashboard:** read-only. It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button. Dashboard URL: [placeholder].
 
 ## Why this wording matters
 

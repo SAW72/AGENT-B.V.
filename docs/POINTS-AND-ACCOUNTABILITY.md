@@ -4,9 +4,9 @@
 
 This file is the single copy inside AGENT B.V. of everything discussed for the points programs and the accountability layer. Partner rubrics also live in their own repos:
 
-- STRANDED: `docs/POINTS-PROGRAM.md` and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/STRANDED
-- RAT Score: `docs/POINTS-PROGRAM.md` and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
-- Agent B.V. detail: `docs/POINTS-PROGRAM.md`, `docs/POINTS-ANNOUNCEMENT-DRAFT.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
+- STRANDED: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/STRANDED
+- RAT Score: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
+- Agent B.V. detail: `docs/AGENT-BV-POINTS-SPEC.md`, `docs/POINTS-ANNOUNCEMENT-DRAFT.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
 
 Counsel should review before any of this is published. The March 2026 SEC/CFTC airdrop interpretation is guidance, not a statute, and it does not bind a court.
 
@@ -17,11 +17,9 @@ Counsel should review before any of this is published. The March 2026 SEC/CFTC a
 1. **Post-facto only.** Points record activity that already happened. Do not announce "use this and you will be rewarded" while the activity is still open.
 2. **No consideration.** No purchase, no referral bonus, no holding requirement.
 3. **No token during the points phase.** No testnet reward token. No dollar amounts. No "your points are worth X."
-4. **Conversion rate set at TGE, never before.** Illustrative only: 5% of a 100M supply = 5M tokens for points. 2M points earned → 2.5 tokens/point. 5M → 1. 10M → 0.5. The real rate is chosen after the snapshot.
-5. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
-6. **Read-only dashboard.** Enter a wallet address. See points by category and rank. No login, no sign-up, no connect-wallet button.
-7. **Freeze.** Announce 14 days ahead. Stop writes at T-zero. Merkle tree of (wallet, total_points). Publish the root. Claim with a Merkle proof plus a wallet signature. Unclaimed after 90 days goes to a community treasury, not the team.
-8. **Illustrative allocation.** Team and investors 20% (4-year vest, 1-year cliff). Treasury 25%. Liquidity 10%. Public sale 15%. Points 5%. Unallocated 25%.
+4. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
+5. **Read-only dashboard.** It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button.
+6. **Freeze.** Announce 14 days ahead. Stop writes at T-zero. Merkle tree of (wallet, total_points). Publish the root. Claim with a Merkle proof plus a wallet signature. Unclaimed after 90 days goes to a community treasury, not the team.
 
 Points rent users. They do not keep them. Size the points slice modestly. The product has to be worth using after rewards stop.
 
