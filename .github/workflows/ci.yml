@@ -5,17 +5,16 @@ on:
     branches: [main]
   pull_request:
 
-# Coverage artifacts need actions: write. Tests only read the repo.
+# Tests only read the repo. upload-artifact@v4 authenticates with the runner token.
 permissions:
   contents: read
-  actions: write
 
 jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install deps
@@ -26,7 +25,7 @@ jobs:
           mkdir -p coverage/python
           pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml --cov-report=json --cov-report=lcov
       - name: Upload Python coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-python
           path: coverage/python/
@@ -37,10 +36,10 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       - name: Install zsh
         run: sudo apt-get update && sudo apt-get install -y zsh
       - name: Check operator guard in bash and zsh
@@ -70,7 +69,7 @@ jobs:
           mkdir -p coverage/contracts out
           forge coverage --report summary --report lcov --exclude-tests --report-file coverage/contracts/lcov.info
       - name: Upload contract coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-contracts
           path: coverage/contracts/
@@ -79,8 +78,8 @@ jobs:
   claim-relayer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
       - name: Install claim relayer deps
@@ -91,7 +90,7 @@ jobs:
         working-directory: claim-relayer
         run: npm run test:coverage
       - name: Upload claim-relayer coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-claim-relayer
           path: claim-relayer/coverage/
@@ -104,10 +103,10 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       - name: Install forge-std
         run: forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-commit
       - name: Live Denylist and Vault fork test (public Base Sepolia)
@@ -121,8 +120,8 @@ jobs:
       run:
         working-directory: apps/wallet-ux
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -145,7 +144,7 @@ jobs:
         # test:coverage is vitest run --coverage: same files, plus the coverage report.
         run: npm run test:coverage
       - name: Upload wallet-ux coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-wallet-ux
           path: apps/wallet-ux/coverage/
