@@ -8,7 +8,7 @@ This file is the single copy inside AGENT B.V. of everything discussed for the p
 - RAT Score: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
 - Agent B.V. detail: `docs/AGENT-BV-POINTS-SPEC.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
 
-Counsel should review before any of this is published. The March 2026 SEC/CFTC airdrop interpretation is guidance, not a statute, and it does not bind a court.
+Counsel should review before any of this is published.
 
 ---
 
@@ -19,7 +19,7 @@ Counsel should review before any of this is published. The March 2026 SEC/CFTC a
 3. **No token during the points phase.** No testnet reward token. No dollar amounts. No "your points are worth X."
 4. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
 5. **Read-only dashboard.** It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button.
-6. **Freeze.** Announce 14 days ahead. Stop writes at T-zero. Merkle tree of (wallet, total_points). Publish the root. Claim with a Merkle proof plus a wallet signature. Unclaimed after 90 days goes to a community treasury, not the team.
+6. **Freeze.** If the points program ends or pauses, Agent-BV announces it at least 14 days ahead, stops new writes at the stated time, and keeps the off-chain record read-only so anyone can still look up a wallet's activity. There is no snapshot for distribution, no Merkle root, no claim, and nothing is paid out, converted or transferred. The record may be archived or deleted later under the privacy policy.
 
 Points rent users. They do not keep them. Size the points slice modestly. The product has to be worth using after rewards stop.
 

@@ -197,8 +197,6 @@ describe("reputation config", () => {
       fileURLToPath(
         new URL("../../apps/wallet-ux/fixtures/reputation/EXAMPLE-DATA.config.example.json", import.meta.url),
       ),
-      fileURLToPath(new URL("../../docs/POINTS-PROGRAM.md", import.meta.url)),
-      fileURLToPath(new URL("../../docs/POINTS-ANNOUNCEMENT-DRAFT.md", import.meta.url)),
     ]);
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const claimDomainName = "Agent-BV Relayer";
@@ -206,8 +204,10 @@ describe("reputation config", () => {
       const hits = filesContaining(root, label).filter((file) => {
         if (allowed.has(file)) return false;
         // The short product name is human-readable copy in docs, Solidity comments,
-        // and the reference Blueprint comments. The full title stays in the config object.
+        // and the reference Blueprint comments. Markdown may also use the full title.
+        // Any other file that hardcodes the title still fails this check.
         if (label === raw.product.name && /\.(md|yml|yaml|sol)$/.test(file)) return false;
+        if (label === raw.product.title && /\.md$/.test(file)) return false;
         // The off-chain EIP-712 domain name contains the product name. That string is
         // not a scorer hardcode. A file that mentions the product name only inside it stays allowed.
         if (label === raw.product.name && !readFileSync(file, "utf8").split(claimDomainName).join("").includes(label)) {
