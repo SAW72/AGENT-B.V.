@@ -82,8 +82,14 @@ merge SHA:
 preview deploy ID:
 production deploy ID:
 rollback target:
+relayer deploy ID:
+/health build.commit:
+relayer rollback target:
+VITE_CLAIM_RELAYER_URL:
 check results:
 ```
+
+`VITE_CLAIM_RELAYER_URL` is the public Pages build value: the URL if it was set, or `unset`. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
 
 | Name | Where | Role |
 | --- | --- | --- |
@@ -108,7 +114,20 @@ Render auto-redeploys the claim relayer (`bot-verifier-claim-relayer`) on every 
 
 As of 2026-10-13 the service is still on **On Commit** (`autoDeployTrigger`: `commit`). The switch is waiting on Spencer in the Render dashboard.
 
-Until it is switched, the relayer goes live as soon as the merge lands, before merge-commit CI finishes. The post-merge `GET /health` check is mandatory after every merge. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll back in the Render dashboard.
+Until it is switched, the relayer goes live as soon as the merge lands, before merge-commit CI finishes. The post-merge `GET /health` check is mandatory after every merge. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the full 40-character merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll the relayer back as follows.
+
+### Relayer rollback
+
+1. Open the Render service `bot-verifier-claim-relayer`.
+2. Open **Deploys**.
+3. Pick the last good deploy ID recorded in the deploy record (the relayer rollback target).
+4. Choose **Rollback**.
+
+A dashboard rollback turns auto-deploy off. After the incident, turn auto-deploy back on with the trigger set to **After CI Checks Pass** (`checksPass`), not **On Commit**.
+
+After the rollback, `GET /health` must return HTTP 200 with `build.commit` equal to the full 40-character SHA of the previous good merge, `chainId` 84532, and `killSwitch` false.
+
+The bad commit is still on `main`. The next auto-deploy will ship it again unless that commit is reverted through a gated revert PR first. Turn auto-deploy back on only after that revert.
 
 Once the setting is **After CI Checks Pass**, finding it back on **On Commit** is a gate gap. Report it.
 
