@@ -6,12 +6,19 @@ import { fileURLToPath } from "node:url"
 // VITE_CLAIM_RELAYER_URL unset compiled the in-app refund relayer to undefined.
 // This list is the default. A non-empty environment value overrides it.
 // An empty environment value does not fall through to the file: that is how an
-// empty GitHub variable used to wipe the URL. The relayer host is pinned.
+// empty GitHub variable used to wipe the URL. The relayer value must be one
+// exact allowlist entry. The build inlines that entry, not the raw string.
 // An RPC host is allowlisted or must answer eth_chainId with 84532. Anything
 // else fails closed. Secrets never belong in this list.
 export const REQUIRED_BUILD_ENV_FILE = "build-env.required.json"
 export const REQUIRED_BUILD_ENV_KEYS = ["VITE_CLAIM_RELAYER_URL", "VITE_BASE_SEPOLIA_RPC_URL"]
 export const PINNED_RELAYER_HOST = "bot-verifier-claim-relayer.onrender.com"
+export const PINNED_RELAYER_ORIGIN = "https://bot-verifier-claim-relayer.onrender.com"
+export const ALLOWED_RELAYER_URLS = [
+  PINNED_RELAYER_ORIGIN,
+  `${PINNED_RELAYER_ORIGIN}/`,
+  `${PINNED_RELAYER_ORIGIN}/v1/claims`,
+]
 export const RPC_HOST_ALLOWLIST = ["sepolia.base.org"]
 export const REQUIRED_CHAIN_ID = 84532
 
@@ -40,10 +47,6 @@ function emptyMessage(missing) {
   return `${missing.join(", ")} are empty.`
 }
 
-function hostOf(url) {
-  return url.hostname.toLowerCase().replace(/\.$/, "")
-}
-
 function assertPublicUrl(key, value) {
   let parsed
   try {
@@ -52,32 +55,40 @@ function assertPublicUrl(key, value) {
     throw new BuildEnvError(`${key} is not a valid URL.`)
   }
   if (parsed.username || parsed.password) throw new BuildEnvError(`${key} must not include credentials.`)
-  const httpsOnly = key === "VITE_CLAIM_RELAYER_URL"
-  const allowed = httpsOnly ? ["https:"] : ["https:", "http:"]
-  if (!allowed.includes(parsed.protocol)) {
-    throw new BuildEnvError(`${key} must be an ${httpsOnly ? "https" : "http or https"} URL.`)
+  if (!["https:", "http:"].includes(parsed.protocol)) {
+    throw new BuildEnvError(`${key} must be an http or https URL.`)
   }
   return parsed
 }
 
-const ALLOWED_RELAYER_PATHS = new Set(["", "/", "/v1/claims"])
-const HEX_KEY = /0x?[0-9a-fA-F]{64}|[0-9a-fA-F]{64}/
+const RELAYER_URL_ERROR = `VITE_CLAIM_RELAYER_URL must be exactly ${ALLOWED_RELAYER_URLS.join(", ")}.`
+// A 64-hex key, with an optional 0x prefix, bounded so a longer hex run does not match.
+const HEX_KEY = /(?:^|[^0-9a-fA-F])(?:0x)?[0-9a-fA-F]{64}(?![0-9a-fA-F])/i
 const QUERY_SECRET = /[?&](api[_-]?key|key|token|secret|auth)=/i
 const PATH_KEY = /\/v2\/[A-Za-z0-9_-]{16,}|\/[A-Za-z0-9_-]{32,}(?=[/?#]|$)/
 
-function assertPinnedRelayerHost(url) {
-  const host = hostOf(url)
-  if (url.protocol !== "https:" || url.port !== "" || host !== PINNED_RELAYER_HOST) {
-    throw new BuildEnvError(`VITE_CLAIM_RELAYER_URL host must be ${PINNED_RELAYER_HOST}.`)
-  }
+function hrefMatchesEntry(url, entry) {
+  const href = new URL(entry).href
+  // Node keeps a trailing empty "?" or "#" on href. :443, dot segments, %2e,
+  // and backslashes are rewritten into href. The raw entry rejects all of those.
+  return url.href === href || url.href === `${href}?` || url.href === `${href}#`
 }
 
-function assertRelayerPath(url) {
-  if (url.search || url.hash || !ALLOWED_RELAYER_PATHS.has(url.pathname)) {
-    throw new BuildEnvError(
-      "VITE_CLAIM_RELAYER_URL path must be empty, /, or /v1/claims, with no query and no fragment.",
-    )
+function canonicalRelayerUrl(raw) {
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new BuildEnvError("VITE_CLAIM_RELAYER_URL is not a valid URL.")
   }
+  if (url.username || url.password) {
+    throw new BuildEnvError("VITE_CLAIM_RELAYER_URL must not include credentials.")
+  }
+  const entry = ALLOWED_RELAYER_URLS.find(
+    (candidate) => raw === candidate && hrefMatchesEntry(url, candidate) && url.hostname === PINNED_RELAYER_HOST,
+  )
+  if (entry === undefined) throw new BuildEnvError(RELAYER_URL_ERROR)
+  return entry
 }
 
 function assertNoSecret(label, value) {
@@ -87,12 +98,12 @@ function assertNoSecret(label, value) {
 }
 
 function isAllowlistedRpc(url) {
-  return url.protocol === "https:" && url.port === "" && RPC_HOST_ALLOWLIST.includes(hostOf(url))
+  return url.protocol === "https:" && url.port === "" && RPC_HOST_ALLOWLIST.includes(url.hostname)
 }
 
 function rpcLookupAllowed(url) {
   if (url.protocol !== "https:" || url.port !== "") return false
-  const host = hostOf(url)
+  const host = url.hostname
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false
   if (host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return false
   return host.includes(".")
@@ -194,11 +205,11 @@ export async function resolveRequiredBuildEnv(env, fileValues, lookup = lookupCh
       continue
     }
     assertNoSecret(key, value)
-    const parsed = assertPublicUrl(key, value)
     if (key === "VITE_CLAIM_RELAYER_URL") {
-      assertPinnedRelayerHost(parsed)
-      assertRelayerPath(parsed)
+      values[key] = canonicalRelayerUrl(value)
+      continue
     }
+    const parsed = assertPublicUrl(key, value)
     if (key === "VITE_BASE_SEPOLIA_RPC_URL") await assertRpc(parsed, value, lookup)
     values[key] = value
   }

@@ -176,6 +176,22 @@ describe("postLiveClaim", () => {
     expect(body.intent.sender).toBe(payerAccount.address)
   })
 
+  it.each([relayerUrl, `${relayerUrl}/`, `${relayerUrl}/v1/claims`])(
+    "builds POST /v1/claims from the canonical relayer URL %s",
+    async (url) => {
+      let captured = ""
+      await postLiveClaim({
+        url,
+        body: release,
+        fetchImpl: async (target) => {
+          captured = String(target)
+          return jsonResponse(200, { ok: true, mode: "live", txHash })
+        },
+      })
+      expect(captured).toBe(`${relayerUrl}/v1/claims`)
+    },
+  )
+
   it("surfaces 401, 503, and CORS without calling a mainnet chain", async () => {
     const unauthorized = postLiveClaim({
       url: relayerUrl,
