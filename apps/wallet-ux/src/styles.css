@@ -571,9 +571,17 @@ button.task-link.secondary {
   background: #f6f3ec;
 }
 
-.first-run { margin-bottom: 16px; }
-.first-run .task-link { margin-top: 8px; }
+.first-run {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.first-run > button,
+.first-run > a { align-self: flex-start; }
+.first-run .task-link { margin-top: 0; }
 .stepper { margin: 4px 0 12px; }
+.first-run > * { margin-top: 0; margin-bottom: 0; }
 .step-count { margin: 0 0 8px; font-weight: 700; }
 .step-dots {
   display: flex;
