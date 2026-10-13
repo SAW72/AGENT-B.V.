@@ -69,15 +69,16 @@ async function reasonId(page) {
 }
 
 async function openFund(chainId) {
-  // A fresh context so one case's wagmi storage cannot reconnect the next page.
-  const context = await browser.createBrowserContext()
-  const page = await context.newPage()
-  page.once("close", () => {
-    void context.close()
-  })
+  const page = await browser.newPage()
   await page.setViewport(VIEWPORT)
   await page.evaluateOnNewDocument(
     (startChain, account) => {
+      try {
+        localStorage.clear()
+        sessionStorage.clear()
+      } catch {
+        // The page can start before storage is reachable.
+      }
       const listeners = new Map()
       let chain = startChain
       let accounts = []
@@ -130,6 +131,7 @@ async function openFund(chainId) {
     ACCOUNT,
   )
   await page.goto(`${base}fund`, { waitUntil: "domcontentloaded", timeout: 30_000 })
+  await page.bringToFront()
   await waitForReason(page, CONNECT)
   return page
 }
@@ -316,8 +318,17 @@ describe("guided footer reasons at 390x844", () => {
       })
       const before = await reasonId(page)
       expect(before).not.toBe("")
+      await page.bringToFront()
       await page.evaluate(() => window.__wallet.setChain("0x1", false))
-      await waitForReason(page, SWITCH)
+      try {
+        await waitForReason(page, SWITCH)
+      } catch (error) {
+        const snap = await page.evaluate(() => ({
+          reason: document.querySelector("[data-testid=footer-reason]")?.textContent ?? "",
+          action: document.querySelector("[data-testid=guided-footer] button")?.textContent ?? "",
+        }))
+        throw new Error(`Switch sentence did not appear (${JSON.stringify(snap)})`, { cause: error })
+      }
       expect(await reasonId(page)).toBe(before)
       const view = await measure(page)
       expect(view.reasonText).toBe(SWITCH)

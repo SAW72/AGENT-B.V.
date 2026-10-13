@@ -38,11 +38,7 @@ let browser
 let base = ""
 
 async function openFlow(path, ready) {
-  const context = await browser.createBrowserContext()
-  const page = await context.newPage()
-  page.once("close", () => {
-    void context.close()
-  })
+  const page = await browser.newPage()
   await page.setViewport(VIEWPORT)
   await page.goto(`${base}${path}`, { waitUntil: "domcontentloaded", timeout: 30_000 })
   if (ready.click) {
