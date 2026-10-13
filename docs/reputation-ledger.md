@@ -180,7 +180,7 @@ ADJ rows bypass both masks so a cancel still applies while #7 and #9 are open.
 
 Disclaimer links (#11) are `disclaimer_links` in the config. Empty slots are returned as `null` until Lawyer fills them. The read API always returns the slots inside `disclaimer.links` and this line as `disclaimer.text`:
 
-> Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and may never convert to anything.
+> Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.
 
 The default eligibility hook reports API `eligibility.status` `"unverified"` and `points_withheld: true`. That is the same fail-closed mask (`eligible: false`, reason `ofac_unconfigured`): rows are stored and `points` is 0. `allowAllEligibility` is a test hook that reports `status: "eligible"` and `points_withheld: false`. If the enforcer has withheld that wallet, `points_withheld` is true even when the eligibility hook would otherwise allow the row.
 
@@ -210,7 +210,7 @@ Copy does not use "reward" or "earn". Any method other than GET or OPTIONS on th
 
 | # | Item | How this code treats it |
 | --- | --- | --- |
-| 1 | No public BVT supply promise. Points never convert. | No supply field, no conversion route. Disclaimer says points may never convert. Locked for this sprint. |
+| 1 | No public BVT supply promise. Points never convert. | No supply field, no conversion route. Disclaimer says points do not convert. Locked for this sprint. |
 | 2 | QA / testing / reputation framing. No "reward" in headlines or buttons. | API labels and the disclaimer use that framing. A test rejects `reward`, `earn`, `earnings`, `apy`, `yield`, and `allocation` in the JSON. Live UI still needs Lawyer's pass. |
 | 3 | No purchase. Points are not bought or sold. | Read-only API. No fee, list, or register route priced in points. |
 | 4 | Stranded fee credits are N/A. | No Stranded or GasRescue reads or writes. |
