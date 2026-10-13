@@ -9,7 +9,7 @@ export const SWITCH_STEP_LABEL = "Switch to Base Sepolia"
 export const FILL_ESCROW_LABEL = "Fill in the escrow"
 export const REVIEW_SEND_LABEL = "Review and send"
 
-export const CONNECT_NOTE = "Connect a wallet on Base Sepolia. You approve your own transactions in that wallet. Some claim and refund transactions are submitted for you by the Agent-BV relayer, which pays the testnet gas."
+export const CONNECT_NOTE = "Connect a wallet on Base Sepolia. You approve your own transactions in that wallet. Some refunds are submitted for you by the Agent-BV relayer, which pays the testnet gas."
 export const WRONG_NETWORK_NOTE =
   "This wallet is not on Base Sepolia. Switch to Base Sepolia before you send test ETH."
 /** Official Base docs. The older network-faucets paths redirect here. */
