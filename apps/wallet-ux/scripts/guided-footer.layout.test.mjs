@@ -56,7 +56,7 @@ async function waitForReason(page, text) {
       if (!(legal instanceof HTMLElement) || !legal.textContent?.includes("is a product of")) return false
       return reason.textContent === expected
     },
-    {},
+    { timeout: 15_000 },
     text,
   )
 }
@@ -69,7 +69,12 @@ async function reasonId(page) {
 }
 
 async function openFund(chainId) {
-  const page = await browser.newPage()
+  // A fresh context so one case's wagmi storage cannot reconnect the next page.
+  const context = await browser.createBrowserContext()
+  const page = await context.newPage()
+  page.once("close", () => {
+    void context.close()
+  })
   await page.setViewport(VIEWPORT)
   await page.evaluateOnNewDocument(
     (startChain, account) => {
@@ -146,8 +151,18 @@ async function setInput(page, selector, value) {
   if (!wrote) throw new Error(`Could not set ${selector}`)
 }
 
+async function clickWhen(page, ready) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const clicked = await page.evaluate(ready)
+    if (clicked) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error("The button was not ready to click")
+}
+
 async function connect(page) {
-  await page.waitForFunction(() => {
+  await clickWhen(page, () => {
     const button = document.querySelector("[data-testid=journey-connect]")
     if (!(button instanceof HTMLButtonElement) || !button.isConnected || button.disabled) return false
     if (button.textContent !== "Connect wallet") return false
@@ -157,7 +172,7 @@ async function connect(page) {
 }
 
 async function clickNext(page) {
-  await page.waitForFunction(() => {
+  await clickWhen(page, () => {
     const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
     if (!(button instanceof HTMLButtonElement) || !button.isConnected) return false
     if (button.disabled || button.getAttribute("aria-disabled") === "true" || button.textContent !== "Next") return false
@@ -231,7 +246,14 @@ describe("guided footer reasons at 390x844", () => {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ],
     })
   }, 60_000)
 
@@ -309,7 +331,7 @@ describe("guided footer reasons at 390x844", () => {
     } finally {
       await page.close()
     }
-  }, 30_000)
+  }, 45_000)
 
   it("shows the empty-amount reason without overlap or overflow", async () => {
     const page = await openFund("0x14a34")

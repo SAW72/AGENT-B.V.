@@ -38,16 +38,26 @@ let browser
 let base = ""
 
 async function openFlow(path, ready) {
-  const page = await browser.newPage()
+  const context = await browser.createBrowserContext()
+  const page = await context.newPage()
+  page.once("close", () => {
+    void context.close()
+  })
   await page.setViewport(VIEWPORT)
   await page.goto(`${base}${path}`, { waitUntil: "domcontentloaded", timeout: 30_000 })
   if (ready.click) {
-    await page.waitForFunction((selector) => {
-      const el = document.querySelector(selector)
-      if (!(el instanceof HTMLElement) || !el.isConnected) return false
-      el.click()
-      return true
-    }, {}, ready.click)
+    const deadline = Date.now() + 15_000
+    let clicked = false
+    while (Date.now() < deadline && !clicked) {
+      clicked = await page.evaluate((selector) => {
+        const el = document.querySelector(selector)
+        if (!(el instanceof HTMLElement) || !el.isConnected) return false
+        el.click()
+        return true
+      }, ready.click)
+      if (!clicked) await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    if (!clicked) throw new Error(`Could not click ${ready.click}`)
   }
   await page.waitForFunction((selector) => {
     const target = document.querySelector(selector)
@@ -105,7 +115,14 @@ describe("guided step footer at 390x844", () => {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ],
     })
   }, 60_000)
 
