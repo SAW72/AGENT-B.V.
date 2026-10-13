@@ -10,7 +10,11 @@ Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relaye
 
 ## Production deploy
 
-Merges and deploys need every gate plus Grok Bot's per-SHA GO. A merge to `main`, and a deploy of that merge SHA, both wait until every CI gate is green and Grok Bot has given a GO for that exact SHA. A GO for a different commit does not cover this SHA.
+Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is CI, Look, QA, Verifier, Security, and Lawyer when copy or legal text changes, then Grok Bot's per-SHA GO for that head. A GO for a different SHA does not cover this head. Nothing reaches `main` without every gate on that head.
+
+A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
+
+Spencer is still required for mainnet, spending, outside messages, and deletes.
 
 Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
@@ -41,24 +45,45 @@ Preview, with `<PR#>` the pull request that produced the merge and `<sha>` the m
 npx wrangler pages deploy dist --project-name=agent-bv --branch=preview-<PR#> --commit-hash=<sha>
 ```
 
-Live-check that preview deployment before uploading `main`:
+Live-check that preview deployment before uploading `main`. From `apps/wallet-ux`, run the served-bundle check against the deployment URL Wrangler prints. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
+
+```bash
+DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html node scripts/verify-served-bundle.mjs
+```
+
+The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
+
+The same preview URL also has to pass these checks. The script does not cover them:
 
 - `GET /` returns 200.
 - `GET /app/` returns 200.
-- Asset content types are right. Wallet JavaScript (`/app/assets/*.js`) is `text/javascript`, `application/javascript`, or `application/x-javascript` (a `charset` parameter is fine). The body is not empty and does not start with `<` after a UTF-8 BOM and leading whitespace. A `200` with `text/html` for a script is a failed check. Landing CSS is `text/css`. Landing PNG assets are `image/png`.
+- Asset content types are right. Wallet JavaScript (`/app/assets/*.js`) is `text/javascript`, `application/javascript`, or `application/x-javascript` (a `charset` parameter is fine). Landing CSS is `text/css`. Landing PNG assets are `image/png`.
 - Redirects go to `/app/`. `/app` (no trailing slash), `/points`, `/claim`, and `/release` are 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
 - The security headers are present: `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`.
-- Relayer `GET /health` is ok (HTTP 200 on the claim-relayer URL).
 
 A failed preview check stops the deploy. Do not upload `--branch=main`.
 
-Then deploy production with the same `dist` and the same merge SHA, and run the same live checks against `https://agent-bv.pages.dev` (and the deployment URL Wrangler prints):
+Then deploy production with the same `dist` and the same merge SHA:
 
 ```bash
 npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>
 ```
 
-If any production check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
+Run `scripts/verify-served-bundle.mjs` again with `DEPLOYMENT_URL` set to the production deployment URL Wrangler prints, and the same `APP_PATH` and `DIST_INDEX`. Run the same `/`, `/app/`, content-type, redirect, and security-header checks against `https://agent-bv.pages.dev`. If any production check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
+
+### Deploy record
+
+Write one record for the deploy. The head SHA is the PR head the gates and the GO covered. The merge SHA is the squash commit that was built, uploaded, and checked.
+
+```
+PR:
+head SHA:
+merge SHA:
+preview deploy ID:
+production deploy ID:
+rollback target:
+check results:
+```
 
 | Name | Where | Role |
 | --- | --- | --- |
@@ -73,9 +98,17 @@ The claim API secret is retired. Do not set a claim secret on Pages. Relayer aut
 
 Signed-intent auth is live in production only after cutover. The order is `claim-relayer/CUTOVER.md` in [PR #51](https://github.com/SAW72/AGENT-B.V./pull/51).
 
-### Unused workflow
+### Stale workflow
 
-[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) exists. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. It is currently unused. Production is the merge-SHA build and `wrangler pages deploy` above, not **Actions → Deploy wallet-ux → Run workflow**.
+[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Deploy wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above.
+
+## Claim relayer
+
+Render auto-redeploys the claim relayer (`bot-verifier-claim-relayer`) on every merge to `main`. The auto-deploy setting is **After CI Checks Pass** (`autoDeployTrigger`: `checksPass`). The service deploys only after the merge-commit CI on `main` goes green. The per-PR-head GO is still the gate before merge, so nothing reaches `main` without every gate.
+
+If that setting is ever found back on **On Commit**, treat that as a gate gap and report it.
+
+After each merge, when the deploy is live, check `GET /health`. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll back in the Render dashboard.
 
 ## Warning
 
@@ -102,7 +135,7 @@ The script imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` i
 
 Both retired addresses also appear in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json). Those sentences are not the `SUPERSEDED` literals. The script allowlists `SUPERSEDED`, `retired.*`, `superseded.*`, and the top-level notes. Any other client occurrence fails the check. The built `dist` must contain each retired address exactly as many times as those allowlisted sources. At this commit `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is 3 (SUPERSEDED, `retired.BotAttestationEscrow.address`, and notes). `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is 8 (SUPERSEDED plus seven allowlisted JSON fields, including `retired.BotAttestationEscrow.supersededBy`).
 
-`npm test` runs these guards. Deploy the merge SHA only after every gate is green and Grok Bot has given a GO for that SHA.
+`npm test` runs these guards. Deploy the merge SHA only after every gate on the PR head is green and Grok Bot has given a GO for that head SHA.
 
 ## Rollback
 
@@ -132,7 +165,7 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 | Dashboard env vars at build time | Unused. |
 | Build output directory | `dist` (landing at the root, wallet app in `dist/app`) |
 | Node.js | `22` |
-| Deploy workflow | [`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) exists, `workflow_dispatch` only, and is unused |
+| Deploy workflow | [`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete it. |
 
 `pages_build_output_dir = "./dist"` is the assembled site. Vite writes the app to `dist/app`. `scripts/assemble-site.mjs` then copies `landing/` to `dist/`.
 
