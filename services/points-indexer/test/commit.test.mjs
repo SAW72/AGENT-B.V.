@@ -596,6 +596,86 @@ describe("refused inputs", () => {
   });
 });
 
+describe("register gate", () => {
+  it("keeps a pending or absent voter at null weight and writes no credit", async () => {
+    const payer = account();
+    const payee = account();
+    const voter = account();
+    const day = 20_900 * 86400;
+    const disputeId = `0x${"c2".repeat(32)}`;
+    const logs = [
+      createdLog({
+        escrowId: `0x${"c0".repeat(32)}`,
+        payer: voter.address,
+        payee: payee.address,
+        expiresAt: day + 1000,
+        blockNumber: 48_900_000,
+        logIndex: 1,
+        txHash: `0x${"c0".repeat(32)}`,
+        timestamp: day + 5,
+      }),
+      createdLog({
+        escrowId: `0x${"c1".repeat(32)}`,
+        payer: payer.address,
+        payee: payee.address,
+        expiresAt: day + 1000,
+        blockNumber: 48_900_001,
+        logIndex: 1,
+        txHash: `0x${"c1".repeat(32)}`,
+        timestamp: day + 10,
+      }),
+      disputedLog({
+        escrowId: `0x${"c1".repeat(32)}`,
+        disputeId,
+        party: payee.address,
+        blockNumber: 48_900_002,
+        logIndex: 1,
+        txHash: `0x${"c2".repeat(32)}`,
+        timestamp: day + 20,
+      }),
+      voteLog({
+        disputeId,
+        voter: voter.address,
+        blockNumber: 48_900_090,
+        logIndex: 1,
+        txHash: `0x${"c3".repeat(32)}`,
+        timestamp: day + 86400 + 30,
+      }),
+    ];
+    const ctx = tempIndexer();
+    try {
+      ctx.indexer.setWeights({ vote: 5 });
+      const signers = new Map([
+        [payer.address.toLowerCase(), payer],
+        [payee.address.toLowerCase(), payee],
+        [voter.address.toLowerCase(), voter],
+      ]);
+      const creditAll = async () => {
+        ctx.indexer.ingestLogs(logs);
+        for (const candidate of ctx.indexer.attribute().candidates) {
+          await creditCandidate(ctx.indexer, signers.get(candidate.wallet), candidate);
+        }
+      };
+      const voteRow = () => rows(ctx.indexer).find((row) => row.wallet === voter.address.toLowerCase() && row.action === ACTION.disputeOpenOrVote);
+      ctx.indexer.setRegister({ voters: { [voter.address]: "pending" } });
+      await creditAll();
+      assert.equal(voteRow().rule_weight, null);
+      assert.equal(voteRow().points, 0);
+      assert.equal(voteRow().counts_for_return_day, 0);
+      assert.equal(rows(ctx.indexer, ACTION.returnDay).length, 0);
+      ctx.indexer.setRegister({ voters: {} });
+      assert.equal(ctx.indexer.register[voter.address.toLowerCase()], undefined);
+      assert.equal(voteRow().register_status, "pending");
+      assert.equal(voteRow().rule_weight, null);
+      assert.equal(voteRow().points, 0);
+      assert.equal(voteRow().counts_for_return_day, 0);
+      assert.equal(rows(ctx.indexer, ACTION.returnDay).length, 0);
+    } finally {
+      ctx.close();
+    }
+  });
+});
+
 describe("attribution helpers stay unused in the ledger until a link exists", () => {
   it("stores no row for a matched vote that has no chain", () => {
     const fixture = loadFixture();

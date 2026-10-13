@@ -24,7 +24,46 @@ describe("ledger schema", () => {
       assert.match(first.sql, /WHERE action = 'first_activity'/);
       assert.match(back.sql, /WHERE action = 'return_day'/);
       assert.match(day.sql, /wallet, action, utc_day/);
+      assert.match(open.sql, /CREATE UNIQUE INDEX/);
       assert.match(open.sql, /WHERE status = 'open'/);
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it("rejects a second open nonce for the same key inside the database", () => {
+    const payer = account();
+    const payee = account();
+    const log = createdLog({
+      escrowId: `0x${"46".repeat(32)}`,
+      payer: payer.address,
+      payee: payee.address,
+      expiresAt: 100,
+      blockNumber: 49_100_010,
+      logIndex: 4,
+      txHash: `0x${"47".repeat(32)}`,
+      timestamp: 21_110 * 86400,
+    });
+    const ctx = tempIndexer();
+    try {
+      ctx.indexer.ingestLogs([log]);
+      const issued = ctx.indexer.issueNonce({
+        txHash: log.transactionHash,
+        logIndex: 4,
+        wallet: payer.address,
+        issueTime: 21_110 * 86400 + 5,
+      });
+      assert.equal(issued.ok, true);
+      assert.throws(() => {
+        ctx.indexer.db.prepare(
+          `INSERT INTO nonces(nonce, tx_hash, log_index, wallet, block_timestamp, issue_time, status, seq)
+           VALUES(?, ?, ?, ?, ?, ?, 'open', ?)`,
+        ).run("2", issued.txHash, issued.logIndex, issued.wallet, 21_110 * 86400, 21_110 * 86400 + 6, 2);
+      }, (error) => {
+        assert.match(String(error.message), /UNIQUE/);
+        return true;
+      });
+      assert.equal(ctx.indexer.nonceCount(), 1);
     } finally {
       ctx.close();
     }

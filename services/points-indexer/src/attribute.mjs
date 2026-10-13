@@ -6,6 +6,7 @@ import {
   PANEL,
   RETIRED_ESCROWS,
   TOPIC,
+  isAcceptedChain,
   pairKey,
   utcDay,
 } from "./constants.mjs";
@@ -27,7 +28,7 @@ function indexTopics(log) {
  * A candidate is not a committed row.
  */
 export function attributeLogs(logs, { finalizedBlock, chainId = CHAIN_ID, includeUnfinalized = false } = {}) {
-  if (chainId !== CHAIN_ID) throw new PointsError("wrong_chain", { chainId });
+  if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
   if (!Number.isInteger(finalizedBlock) || finalizedBlock < 0) throw new PointsError("bad_finalized");
 
   const skipped = [];
@@ -69,19 +70,36 @@ export function attributeLogs(logs, { finalizedBlock, chainId = CHAIN_ID, includ
 
   const escrows = new Map();
   const disputes = new Map();
+  const ambiguousEscrows = new Set();
+  const ambiguousDisputes = new Set();
   for (const item of decoded) {
-    if (item.role === "fund") escrows.set(item.escrowId, item);
-    if (item.role === "dispute_open") disputes.set(item.disputeId, item);
+    if (item.role === "fund") noteUnique(escrows, ambiguousEscrows, item.escrowId, item);
+    if (item.role === "dispute_open") noteUnique(disputes, ambiguousDisputes, item.disputeId, item);
   }
 
   const candidates = [];
   const deferred = [];
   for (const item of decoded) {
     if (item.role === "fund" || item.role === "dispute_open") {
+      const ambiguous = item.role === "fund"
+        ? ambiguousEscrows.has(item.escrowId)
+        : ambiguousDisputes.has(item.disputeId);
+      if (ambiguous) {
+        skipped.push({
+          reason: item.role === "fund" ? "ambiguous_escrow" : "ambiguous_dispute",
+          txHash: item.txHash,
+          logIndex: item.logIndex,
+        });
+        continue;
+      }
       candidates.push(toCandidate(item, item.wallet, item.escrowId));
       continue;
     }
     if (item.role === "release" || item.role === "refund") {
+      if (ambiguousEscrows.has(item.escrowId)) {
+        skipped.push({ reason: "ambiguous_escrow", txHash: item.txHash, logIndex: item.logIndex });
+        continue;
+      }
       const created = escrows.get(item.escrowId);
       if (!created) {
         deferred.push({ ...item, reason: "create_not_stored" });
@@ -92,9 +110,17 @@ export function attributeLogs(logs, { finalizedBlock, chainId = CHAIN_ID, includ
       continue;
     }
     if (item.role === "vote") {
+      if (ambiguousDisputes.has(item.disputeId)) {
+        skipped.push({ reason: "ambiguous_dispute", txHash: item.txHash, logIndex: item.logIndex });
+        continue;
+      }
       const dispute = disputes.get(item.disputeId);
       if (!dispute) {
         deferred.push({ ...item, reason: "dispute_not_stored" });
+        continue;
+      }
+      if (ambiguousEscrows.has(dispute.escrowId)) {
+        skipped.push({ reason: "ambiguous_escrow", txHash: item.txHash, logIndex: item.logIndex });
         continue;
       }
       const created = escrows.get(dispute.escrowId);
@@ -112,6 +138,15 @@ export function attributeLogs(logs, { finalizedBlock, chainId = CHAIN_ID, includ
   }
 
   return { candidates, deferred, skipped, withheld, escrows, disputes };
+}
+
+function noteUnique(map, ambiguous, key, item) {
+  if (ambiguous.has(key) || map.has(key)) {
+    map.delete(key);
+    ambiguous.add(key);
+    return;
+  }
+  map.set(key, item);
 }
 
 function toCandidate(item, wallet, escrowId, created = null, dispute = null) {

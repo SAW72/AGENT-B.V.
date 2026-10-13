@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { attributeLogs, normalizeLog } from "./attribute.mjs";
 import { canonicalJson, compareRows } from "./canonical.mjs";
-import { ACTION, CHAIN_ID, DAY_SECONDS } from "./constants.mjs";
+import { ACTION, CHAIN_ID, DAY_SECONDS, isAcceptedChain } from "./constants.mjs";
 import { PointsError, hexInt, isUniqueError, lowerHex } from "./hex.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "./signature.mjs";
 
@@ -113,7 +113,7 @@ function normalizeRegister(register) {
   const out = {};
   for (const [wallet, kind] of Object.entries(voters)) {
     const address = lowerHex(wallet);
-    if (!address || (kind !== "human" && kind !== "ai")) {
+    if (!address || (kind !== "human" && kind !== "ai" && kind !== "pending")) {
       throw new PointsError("bad_register", { wallet });
     }
     out[address] = kind;
@@ -163,7 +163,7 @@ export function openIndexer(options = {}) {
 export class Indexer {
   constructor(options = {}) {
     const chainId = options.chainId ?? CHAIN_ID;
-    if (chainId !== CHAIN_ID) throw new PointsError("wrong_chain", { chainId });
+    if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
     this.chainId = CHAIN_ID;
     this.db = new DatabaseSync(options.path ?? ":memory:");
     this.db.exec("PRAGMA journal_mode = WAL");
@@ -270,7 +270,7 @@ export class Indexer {
    * A client-supplied tx hash or log index on the side is not read.
    */
   ingestLogs(logs, { chainId = CHAIN_ID, observedAt = null } = {}) {
-    if (chainId !== CHAIN_ID) throw new PointsError("wrong_chain", { chainId });
+    if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
     void observedAt;
     if (!Array.isArray(logs)) throw new PointsError("unverifiable_log");
     const normalized = logs.map((log) => normalizeLog(log));
@@ -447,6 +447,9 @@ export class Indexer {
     const parsed = parseLinkBody(body);
     if (!parsed.ok) return { ok: false, committed: false, reason: parsed.reason, stored: false };
     const hash = linkHash(parsed.link);
+    if (typeof hash !== "string") {
+      return { ok: false, committed: false, reason: hash?.reason || "bad_link", stored: false };
+    }
     const recovered = recoverSigner(hash, parsed.link.signature);
     if (!recovered.ok) return { ok: false, committed: false, reason: recovered.reason, stored: false };
     if (recovered.address !== parsed.link.wallet) {
@@ -784,7 +787,12 @@ export class Indexer {
         reason = "expiry";
         continue;
       }
-      const recovered = recoverSigner(linkHash(link), link.signature);
+      const digest = linkHash(link);
+      if (typeof digest !== "string") {
+        reason = digest?.reason || "bad_link";
+        continue;
+      }
+      const recovered = recoverSigner(digest, link.signature);
       if (!recovered.ok) {
         reason = recovered.reason;
         continue;
@@ -841,7 +849,7 @@ function parseLinkBody(body) {
   } catch {
     return { ok: false, reason: "bad_link" };
   }
-  if (body.nonce === undefined || body.nonce === null || String(body.nonce).trim() === "") {
+  if (body.nonce === undefined || body.nonce === null || body.nonce === "") {
     return { ok: false, reason: "nonce_unknown" };
   }
   return {
@@ -904,10 +912,12 @@ function voteFields(candidate, register, weights) {
   if (candidate.role === "vote") {
     const registerStatus = register[candidate.wallet] ?? "pending";
     const configured = weights.vote;
-    const countsForReturnDay = registerStatus === "human" && configured != null && configured > 0;
+    const registeredHuman = registerStatus === "human";
+    const weightSet = configured != null && configured > 0;
+    const countsForReturnDay = registeredHuman && weightSet;
     return {
       registerStatus,
-      ruleWeight: registerStatus === "human" ? configured : null,
+      ruleWeight: registeredHuman ? configured : null,
       countsForReturnDay,
     };
   }

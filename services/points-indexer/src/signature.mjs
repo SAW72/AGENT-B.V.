@@ -88,24 +88,50 @@ function bytes32(value) {
   return text;
 }
 
+const DECIMAL_UINT = /^(0|[1-9][0-9]*)$/;
+
+/** Canonical base-10 integer. Hex, signs, blanks, and leading zeroes are rejected. */
+function decimalUint(value) {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    const text = String(value);
+    return DECIMAL_UINT.test(text) ? text : null;
+  }
+  if (typeof value === "bigint") {
+    if (value < 0n) return null;
+    const text = value.toString(10);
+    return DECIMAL_UINT.test(text) ? text : null;
+  }
+  if (typeof value !== "string" || !DECIMAL_UINT.test(value)) return null;
+  return value;
+}
+
 export function linkHash(message) {
+  if (!message || typeof message !== "object") return { ok: false, reason: "bad_link" };
+  const logIndex = decimalUint(message.logIndex);
+  const nonce = decimalUint(message.nonce);
+  if (logIndex === null || nonce === null) return { ok: false, reason: "bad_link" };
   const escrowId = bytes32(message.escrowId);
   const txHash = bytes32(message.txHash);
   if (!escrowId || !txHash) return null;
-  return hashTypedData({
-    domain: POINTS_DOMAIN,
-    types: POINTS_LINK_TYPES,
-    primaryType: "PointsLink",
-    message: {
-      escrowId,
-      action: String(message.action),
-      txHash,
-      logIndex: BigInt(message.logIndex),
-      nonce: BigInt(message.nonce),
-      expiry: BigInt(message.expiry),
-      wallet: getAddress(message.wallet),
-    },
-  });
+  try {
+    return hashTypedData({
+      domain: POINTS_DOMAIN,
+      types: POINTS_LINK_TYPES,
+      primaryType: "PointsLink",
+      message: {
+        escrowId,
+        action: String(message.action),
+        txHash,
+        logIndex: BigInt(logIndex),
+        nonce: BigInt(nonce),
+        expiry: BigInt(message.expiry),
+        wallet: getAddress(message.wallet),
+      },
+    });
+  } catch {
+    return { ok: false, reason: "bad_link" };
+  }
 }
 
 export function entryHash(entry) {

@@ -2,6 +2,10 @@
 export const CHAIN_ID = 84532;
 export const REFUSED_CHAIN_IDS = Object.freeze([1, 8453]);
 
+export function isAcceptedChain(chainId) {
+  return chainId === CHAIN_ID && !REFUSED_CHAIN_IDS.includes(chainId);
+}
+
 export const ESCROW = "0x3d660502d75f1e97b08c110255921b437a3c4c42";
 export const PANEL = "0x31a92f9a25396968e14d2b55b6b0bb1482ecf1bb";
 export const ESCROW_START_BLOCK = 47715415;

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { keccak256, toBytes } from "viem";
 import { attributeLogs } from "../src/attribute.mjs";
 import { ESCROW, ESCROW_START_BLOCK, PANEL, TOPIC } from "../src/constants.mjs";
-import { LIVE, disputedLog, loadFixture, makeLog, voteLog } from "./support.mjs";
+import { LIVE, createdLog, disputedLog, loadFixture, makeLog, settlementLog, voteLog } from "./support.mjs";
 
 const FINAL = 100_000_000;
 
@@ -205,5 +205,91 @@ describe("panel logs are admitted only by disputeId", () => {
     assert.equal(matched.escrowId, LIVE.escrow1);
     assert.ok(matched.blockNumber < ESCROW_START_BLOCK);
     assert.equal(PANEL, early.address.toLowerCase());
+  });
+});
+
+describe("duplicate ids are ambiguous", () => {
+  it("skips a repeated escrowId or disputeId and writes no credit for either copy", () => {
+    const payer = "0x1111111111111111111111111111111111111111";
+    const payee = "0x2222222222222222222222222222222222222222";
+    const voter = "0x3333333333333333333333333333333333333333";
+    const escrowId = `0x${"a1".repeat(32)}`;
+    const disputeId = `0x${"b2".repeat(32)}`;
+    const day = 20_800 * 86400;
+    const logs = [
+      createdLog({
+        escrowId,
+        payer,
+        payee,
+        expiresAt: day + 100,
+        blockNumber: 48_800_001,
+        logIndex: 1,
+        txHash: `0x${"a1".repeat(32)}`,
+        timestamp: day + 1,
+      }),
+      createdLog({
+        escrowId,
+        payer,
+        payee,
+        expiresAt: day + 200,
+        blockNumber: 48_800_002,
+        logIndex: 1,
+        txHash: `0x${"a2".repeat(32)}`,
+        timestamp: day + 2,
+      }),
+      settlementLog({
+        kind: "release",
+        escrowId,
+        blockNumber: 48_800_003,
+        logIndex: 1,
+        txHash: `0x${"a3".repeat(32)}`,
+        timestamp: day + 3,
+      }),
+      createdLog({
+        escrowId: `0x${"a4".repeat(32)}`,
+        payer,
+        payee,
+        expiresAt: day + 100,
+        blockNumber: 48_800_004,
+        logIndex: 1,
+        txHash: `0x${"a4".repeat(32)}`,
+        timestamp: day + 4,
+      }),
+      disputedLog({
+        escrowId: `0x${"a4".repeat(32)}`,
+        disputeId,
+        party: payee,
+        blockNumber: 48_800_005,
+        logIndex: 1,
+        txHash: `0x${"b1".repeat(32)}`,
+        timestamp: day + 5,
+      }),
+      disputedLog({
+        escrowId: `0x${"a4".repeat(32)}`,
+        disputeId,
+        party: payer,
+        blockNumber: 48_800_006,
+        logIndex: 1,
+        txHash: `0x${"b2".repeat(32)}`,
+        timestamp: day + 6,
+      }),
+      voteLog({
+        disputeId,
+        voter,
+        blockNumber: 48_800_007,
+        logIndex: 1,
+        txHash: `0x${"b3".repeat(32)}`,
+        timestamp: day + 7,
+      }),
+    ];
+    const { candidates, skipped } = attr(logs);
+    assert.equal(candidates.some((row) => row.escrowId === escrowId), false);
+    assert.equal(candidates.some((row) => row.disputeId === disputeId), false);
+    assert.equal(candidates.filter((row) => row.role === "fund").length, 1);
+    assert.equal(candidates.filter((row) => row.role === "dispute_open").length, 0);
+    assert.equal(candidates.filter((row) => row.role === "vote").length, 0);
+    assert.equal(candidates.filter((row) => row.role === "release").length, 0);
+    assert.equal(skipped.filter((row) => row.reason === "ambiguous_escrow").length, 3);
+    assert.equal(skipped.filter((row) => row.reason === "ambiguous_dispute").length, 3);
   });
 });
