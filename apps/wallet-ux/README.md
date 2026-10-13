@@ -19,7 +19,7 @@ npm test
 npm run build
 ```
 
-`npm run build` reads [`build-env.required.json`](build-env.required.json) and fails if `VITE_CLAIM_RELAYER_URL` or `VITE_BASE_SEPOLIA_RPC_URL` is empty. The checked-in relayer URL is `https://bot-verifier-claim-relayer.onrender.com`. A non-empty environment value overrides the file. An empty value does not.
+`npm run build` reads [`build-env.required.json`](build-env.required.json) and fails if `VITE_CLAIM_RELAYER_URL` or `VITE_BASE_SEPOLIA_RPC_URL` is empty. The checked-in relayer URL is `https://bot-verifier-claim-relayer.onrender.com`. A non-empty environment value overrides the file. An empty shell value fails the build; it does not fall back to the file.
 
 `src/base-sepolia.json` is the address book this app bundles. `npm run dev` and `npm run build` refresh it from `deployments/base-sepolia.json` when that file is visible. Run `npm run sync-book` and commit `src/base-sepolia.json` after a book change. Publishing notes: [`CLOUDFLARE_PAGES.md`](CLOUDFLARE_PAGES.md). The current Pages project is `agent-bv` (https://agent-bv.pages.dev). https://agent-a-wallet-ux.pages.dev stays live until a live refund passes on the new site. Neither project is created from this repo.
 
