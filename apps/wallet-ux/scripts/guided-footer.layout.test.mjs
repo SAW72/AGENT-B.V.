@@ -42,6 +42,32 @@ let server
 let browser
 let base = ""
 
+// Read text in the page and return a boolean. waitForSelector adopts an
+// ElementHandle in another world, then DOM.resolveNode throws once a re-render
+// replaces that node.
+async function waitForReason(page, text) {
+  await page.waitForFunction(
+    (expected) => {
+      const footer = document.querySelector("[data-testid=guided-footer]")
+      const reason = document.querySelector("[data-testid=footer-reason]")
+      const legal = document.querySelector("footer")
+      if (!(footer instanceof HTMLElement) || !footer.isConnected) return false
+      if (!(reason instanceof HTMLElement) || !reason.isConnected) return false
+      if (!(legal instanceof HTMLElement) || !legal.textContent?.includes("is a product of")) return false
+      return reason.textContent === expected
+    },
+    {},
+    text,
+  )
+}
+
+async function reasonId(page) {
+  return page.evaluate(() => {
+    const reason = document.querySelector("[data-testid=footer-reason]")
+    return reason instanceof HTMLElement && reason.isConnected ? reason.id : ""
+  })
+}
+
 async function openFund(chainId) {
   const page = await browser.newPage()
   await page.setViewport(VIEWPORT)
@@ -99,41 +125,45 @@ async function openFund(chainId) {
     ACCOUNT,
   )
   await page.goto(`${base}fund`, { waitUntil: "domcontentloaded", timeout: 30_000 })
-  await page.waitForSelector("[data-testid=guided-footer]")
-  await page.waitForSelector("footer")
+  await waitForReason(page, CONNECT)
   return page
 }
 
 async function setInput(page, selector, value) {
-  await page.waitForSelector(selector)
-  await page.$eval(
-    selector,
-    (el, next) => {
-      const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
-      proto.set.call(el, next)
-      el.dispatchEvent(new Event("input", { bubbles: true }))
-      el.dispatchEvent(new Event("change", { bubbles: true }))
-    },
-    value,
-  )
+  await page.waitForFunction((sel) => {
+    const el = document.querySelector(sel)
+    return el instanceof HTMLInputElement && el.isConnected
+  }, {}, selector)
+  const wrote = await page.evaluate((sel, next) => {
+    const el = document.querySelector(sel)
+    if (!(el instanceof HTMLInputElement) || !el.isConnected) return false
+    const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
+    proto?.set?.call(el, next)
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+    el.dispatchEvent(new Event("change", { bubbles: true }))
+    return el.value === next
+  }, selector, value)
+  if (!wrote) throw new Error(`Could not set ${selector}`)
 }
 
 async function connect(page) {
-  await page.waitForSelector("[data-testid=journey-connect]")
-  await page.click("[data-testid=journey-connect]")
+  await page.waitForFunction(() => {
+    const button = document.querySelector("[data-testid=journey-connect]")
+    if (!(button instanceof HTMLButtonElement) || !button.isConnected || button.disabled) return false
+    if (button.textContent !== "Connect wallet") return false
+    button.click()
+    return true
+  })
 }
 
 async function clickNext(page) {
   await page.waitForFunction(() => {
     const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-    return (
-      button instanceof HTMLButtonElement &&
-      !button.disabled &&
-      button.getAttribute("aria-disabled") !== "true" &&
-      button.textContent === "Next"
-    )
+    if (!(button instanceof HTMLButtonElement) || !button.isConnected) return false
+    if (button.disabled || button.getAttribute("aria-disabled") === "true" || button.textContent !== "Next") return false
+    button.click()
+    return true
   })
-  await page.click("[data-testid=guided-footer] [data-action-button]")
 }
 
 async function measure(page) {
@@ -213,7 +243,6 @@ describe("guided footer reasons at 390x844", () => {
   it("shows Connect and its reason without overlap or overflow", async () => {
     const page = await openFund("0x14a34")
     try {
-      await page.waitForFunction((text) => document.querySelector("[data-testid=footer-reason]")?.textContent === text, {}, CONNECT)
       const view = await measure(page)
       expect(view.reasonText).toBe(CONNECT)
       expect(view.actionText).toBe("Connect wallet")
@@ -232,9 +261,13 @@ describe("guided footer reasons at 390x844", () => {
   it("shows Switch and its reason on chain 1 without overlap or overflow", async () => {
     const page = await openFund("0x1")
     try {
+      const before = await reasonId(page)
+      expect(before).not.toBe("")
       await connect(page)
-      await page.waitForFunction((text) => document.querySelector("[data-testid=footer-reason]")?.textContent === text, {}, SWITCH)
-      const step = await page.$eval("[data-testid=step-count]", (el) => el.textContent)
+      await waitForReason(page, SWITCH)
+      // The chain change swaps the action. It must not remount the footer.
+      expect(await reasonId(page)).toBe(before)
+      const step = await page.evaluate(() => document.querySelector("[data-testid=step-count]")?.textContent ?? "")
       expect(step).toBe("Step 1 of 4")
       const view = await measure(page)
       expect(view.reasonText).toBe(SWITCH)
@@ -257,14 +290,13 @@ describe("guided footer reasons at 390x844", () => {
       await connect(page)
       await page.waitForFunction(() => {
         const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-        return button instanceof HTMLButtonElement && button.textContent === "Next"
+        return button instanceof HTMLButtonElement && button.isConnected && button.textContent === "Next"
       })
+      const before = await reasonId(page)
+      expect(before).not.toBe("")
       await page.evaluate(() => window.__wallet.setChain("0x1", false))
-      await page.waitForFunction(
-        (text) => document.querySelector("[data-testid=footer-reason]")?.textContent === text,
-        { timeout: 8_000 },
-        SWITCH,
-      )
+      await waitForReason(page, SWITCH)
+      expect(await reasonId(page)).toBe(before)
       const view = await measure(page)
       expect(view.reasonText).toBe(SWITCH)
       expect(view.actionText).toBe("Switch to Base Sepolia")
@@ -282,24 +314,26 @@ describe("guided footer reasons at 390x844", () => {
   it("shows the empty-amount reason without overlap or overflow", async () => {
     const page = await openFund("0x14a34")
     try {
+      const before = await reasonId(page)
+      expect(before).not.toBe("")
       await connect(page)
-      await page.waitForSelector("#create-payee")
       await setInput(page, "#create-payee", PAYEE)
       await clickNext(page)
-      await page.waitForSelector("#create-payer-bot")
       await setInput(page, "#create-payer-bot", PAYER_BOT)
       await setInput(page, "#create-payee-bot", PAYEE_BOT)
       await clickNext(page)
-      await page.waitForSelector("#create-value")
-      await page.waitForFunction((text) => document.querySelector("[data-testid=footer-reason]")?.textContent === text, {}, AMOUNT)
-      const disabled = await page.$eval(
-        "[data-testid=guided-footer] [data-action-button]",
-        (el) =>
+      await waitForReason(page, AMOUNT)
+      expect(await reasonId(page)).toBe(before)
+      const disabled = await page.evaluate(() => {
+        const el = document.querySelector("[data-testid=guided-footer] [data-action-button]")
+        return (
           el instanceof HTMLButtonElement &&
+          el.isConnected &&
           el.getAttribute("aria-disabled") === "true" &&
           !el.disabled &&
-          el.textContent === "Next",
-      )
+          el.textContent === "Next"
+        )
+      })
       expect(disabled).toBe(true)
       const view = await measure(page)
       expect(view.reasonText).toBe(AMOUNT)

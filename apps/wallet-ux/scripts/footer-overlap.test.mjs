@@ -42,12 +42,27 @@ async function openFlow(path, ready) {
   await page.setViewport(VIEWPORT)
   await page.goto(`${base}${path}`, { waitUntil: "domcontentloaded", timeout: 30_000 })
   if (ready.click) {
-    await page.waitForSelector(ready.click)
-    await page.click(ready.click)
+    await page.waitForFunction((selector) => {
+      const el = document.querySelector(selector)
+      if (!(el instanceof HTMLElement) || !el.isConnected) return false
+      el.click()
+      return true
+    }, {}, ready.click)
   }
-  await page.waitForSelector(ready.selector)
-  await page.waitForSelector("footer")
-  await page.waitForSelector(".step-actions")
+  await page.waitForFunction((selector) => {
+    const target = document.querySelector(selector)
+    const legal = document.querySelector("footer")
+    const actions = document.querySelector(".step-actions")
+    return Boolean(
+      target instanceof HTMLElement &&
+        target.isConnected &&
+        legal instanceof HTMLElement &&
+        legal.isConnected &&
+        legal.textContent?.includes("is a product of") &&
+        actions instanceof HTMLElement &&
+        actions.isConnected,
+    )
+  }, {}, ready.selector)
   return page
 }
 
