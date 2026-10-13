@@ -31,12 +31,12 @@ Depth over breadth. One real rescue is worth a lot.
 
 | Action | Points | Notes |
 |---|---|---|
-| Rescue completed (GasRescue) | 100 + 1 per $1 of token value rescued | Core user signal |
+| Rescue completed (GasRescue) | 100 per verified rescue | Core user signal |
 | Relayer job executed | 50 | Registered operator identity required |
 | Registry find posted | 30 | Must be a real stranded balance |
 | Registry find claimed | 50 | Claim must succeed on-chain |
 | Active wallet session | 10 per week | One session per wallet per week |
-| Bug report / security finding | 100–500 by severity | Tx hash or reproducible steps |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 
 Anti-gaming: one rescue is 100 points no matter how many wallets. No referral bonuses. No points for holding or transferring. Relayer jobs need a registered operator.
 
