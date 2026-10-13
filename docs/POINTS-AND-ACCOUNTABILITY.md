@@ -21,7 +21,7 @@ Counsel should review before any of this is published.
 5. **Read-only dashboard.** It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button.
 6. **Freeze.** If the points program ends or pauses, Agent-BV announces it at least 14 days ahead, stops new writes at the stated time, and keeps the off-chain record read-only so anyone can still look up a wallet's activity. There is no snapshot for distribution, no Merkle root, no claim, and nothing is paid out, converted or transferred. The record may be archived or deleted later under the privacy policy.
 
-Points rent users. They do not keep them. Size the points slice modestly. The product has to be worth using after rewards stop.
+Points are a record of activity, not an incentive. The product has to be worth using on its own.
 
 ---
 
