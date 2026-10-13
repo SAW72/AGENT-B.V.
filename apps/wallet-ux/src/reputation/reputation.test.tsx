@@ -27,7 +27,10 @@ const ADDRESS = exampleSnapshot.balance.address
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const sepoliaConfigPath = join(rootDir, "../../config/reputation/sepolia.json")
 
-const BANNED = /\b(reward|earnings|apy|yield|allocation)\b|may\s+never\s+(be\s+)?convert/i
+const CONVERT_PHRASE =
+  /\b(may|might|could|will|would|can|shall)\s+(not\s+ever\s+|never\s+|later\s+|eventually\s+|someday\s+)?(be\s+)?convert|\bconvertible\b|\bredeemable\s+for\b/i
+
+const BANNED = new RegExp(String.raw`\b(reward|earnings|apy|yield|allocation)\b|${CONVERT_PHRASE.source}`, "i")
 
 function sepoliaDisplayDisclaimer(): string {
   const raw = JSON.parse(readFileSync(sepoliaConfigPath, "utf8")) as { display?: { disclaimer?: unknown } }
@@ -317,7 +320,27 @@ describe("reputation pagination and errors", () => {
   })
 })
 
+const CONVERT_PHRASE_CASES: Array<[string, boolean]> = [
+  ["may convert", true],
+  ["could convert", true],
+  ["will convert", true],
+  ["might never convert", true],
+  ["may not ever convert", true],
+  ["may never convert", true],
+  ["may never be converted", true],
+  ["convertible", true],
+  ["redeemable for", true],
+  ["does not convert to anything", false],
+]
+
 describe("reputation copy", () => {
+  it.each([...CONVERT_PHRASE_CASES, [sepoliaDisplayDisclaimer(), false] as [string, boolean]])(
+    "convert phrase %j matches=%s",
+    (text, matches) => {
+      expect(CONVERT_PHRASE.test(text)).toBe(matches)
+    },
+  )
+
   it("pins BALANCE_LINE to the Sepolia config display disclaimer", () => {
     const disclaimer = sepoliaDisplayDisclaimer()
     expect(disclaimer.startsWith("Testnet only.")).toBe(true)
