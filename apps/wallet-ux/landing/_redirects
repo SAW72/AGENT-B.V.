@@ -2,6 +2,8 @@
 # so Pages serves it before any rule here. The wallet app lives under /app/.
 /app            /app/            301
 /index.html     /                301
+# /app/ serves dist/app/index.html with status 200, so this does not loop.
+/app/index.html /app/            301
 /manifest.webmanifest /app/manifest.webmanifest 301
 /icon-192.png   /app/icon-192.png 301
 /icon-512.png   /app/icon-512.png 301
@@ -20,4 +22,6 @@
 # strips `index.html` and the splat matches again. `/app/* /app/ 200`
 # serves that same /app/index.html and leaves the browser URL unchanged.
 /app/*          /app/            200
-# Unknown paths outside /app/ fall back to the landing page (Pages default, no 404.html).
+# No top-level 404.html, so an unknown path outside /app/ falls back to the
+# landing page. Pages _redirects cannot use status 404. Missing files under
+# /assets/ and /app/assets/ use the 404.html in that directory.

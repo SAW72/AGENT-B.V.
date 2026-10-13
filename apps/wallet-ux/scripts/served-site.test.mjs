@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
-import { cpSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
-import { build } from "vite"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -16,8 +15,51 @@ const originalReplace = LocationImpl.prototype.replace
 const wranglerBin = join(appRoot, "node_modules/wrangler/bin/wrangler.js")
 
 let siteDir = ""
+let stateDir = ""
 let server
 let base = ""
+
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { cwd: appRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] })
+    let log = ""
+    proc.stdout?.on("data", (chunk) => {
+      log += chunk.toString()
+    })
+    proc.stderr?.on("data", (chunk) => {
+      log += chunk.toString()
+    })
+    proc.once("error", reject)
+    proc.once("exit", (code) => {
+      if (code === 0) resolve(log)
+      else reject(new Error(`${command} ${args.join(" ")} exited ${code}\n${log}`))
+    })
+  })
+}
+
+function sameBytes(left, right) {
+  return readFileSync(left).equals(readFileSync(right))
+}
+
+function openAppHrefs(html) {
+  const dom = new JSDOM(html)
+  return [...dom.window.document.querySelectorAll("a")]
+    .filter((anchor) => /open the app/i.test(anchor.textContent ?? ""))
+    .map((anchor) => anchor.getAttribute("href"))
+}
+
+function metaContent(html, selector) {
+  const dom = new JSDOM(html)
+  const element = dom.window.document.querySelector(selector)
+  expect(element).not.toBeNull()
+  return element.getAttribute("content")
+}
+
+function expectAbsoluteHttps(value) {
+  const url = new URL(value)
+  expect(url.protocol).toBe("https:")
+  expect(url.hostname).not.toBe("")
+}
 
 function waitReady(proc) {
   return new Promise((resolve, reject) => {
@@ -69,14 +111,10 @@ function forwardedHref(html, url) {
 
 describe("built site", () => {
   beforeAll(async () => {
-    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
-    cpSync(join(appRoot, "landing"), siteDir, { recursive: true })
-    await build({
-      configFile: join(appRoot, "vite.config.ts"),
-      root: appRoot,
-      logLevel: "error",
-      build: { outDir: join(siteDir, "app"), emptyOutDir: true },
-    })
+    // The real production build: vite writes dist/app, assemble-site.mjs copies landing/ into dist.
+    await run("npm", ["run", "build"])
+    siteDir = join(appRoot, "dist")
+    stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))
     const port = 18000 + Math.floor(Math.random() * 20000)
     base = `http://127.0.0.1:${port}`
     server = spawn(
@@ -93,12 +131,12 @@ describe("built site", () => {
         "--show-interactive-dev-session",
         "false",
         "--persist-to",
-        join(siteDir, ".wrangler-state"),
+        stateDir,
       ],
       { cwd: appRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
     )
     await waitReady(server)
-  }, 120_000)
+  }, 180_000)
 
   afterAll(() => {
     LocationImpl.prototype.replace = originalReplace
@@ -109,7 +147,38 @@ describe("built site", () => {
         server.kill("SIGTERM")
       }
     }
-    if (siteDir) rmSync(siteDir, { recursive: true, force: true })
+    if (stateDir) rmSync(stateDir, { recursive: true, force: true })
+  })
+
+  it("copies landing files into dist", async () => {
+    for (const name of ["index.html", "styles.css", "_redirects", "_headers", "site.webmanifest", "assets/og-image.png", "assets/404.html"]) {
+      expect(sameBytes(join(siteDir, name), join(appRoot, "landing", name))).toBe(true)
+    }
+    expect(sameBytes(join(siteDir, "app/assets/404.html"), join(appRoot, "landing/assets/404.html"))).toBe(true)
+    expect(statSync(join(siteDir, "app/index.html")).isFile()).toBe(true)
+  })
+
+  it("points open-app links at /app/", async () => {
+    const root = await get("/")
+    const hrefs = openAppHrefs(root.text)
+    expect(hrefs.length).toBeGreaterThan(0)
+    expect(hrefs.every((href) => href === "/app/")).toBe(true)
+  })
+
+  it("serves an app manifest whose start_url and scope are /app/", async () => {
+    const manifest = await get("/app/manifest.webmanifest")
+    const file = readFileSync(join(siteDir, "app/manifest.webmanifest"), "utf8")
+    expect(manifest.status).toBe(200)
+    expect(manifest.text).toBe(file)
+    const parsed = JSON.parse(manifest.text)
+    expect(parsed.start_url).toBe("/app/")
+    expect(parsed.scope).toBe("/app/")
+  })
+
+  it("serves absolute Open Graph and Twitter image URLs", async () => {
+    const root = await get("/")
+    expectAbsoluteHttps(metaContent(root.text, 'meta[property="og:image"]'))
+    expectAbsoluteHttps(metaContent(root.text, 'meta[name="twitter:image"]'))
   })
 
   it("serves the landing page at / and the app at /app/", async () => {
@@ -168,6 +237,12 @@ describe("built site", () => {
     expect(asset.type).toContain("javascript")
     expect(asset.body.equals(file)).toBe(true)
     expect(asset.text.startsWith("<!doctype")).toBe(false)
+    const missing = await get("/app/assets/nope.js")
+    const notFound = readFileSync(join(siteDir, "app/assets/404.html"))
+    expect(missing.status).toBe(404)
+    expect(missing.type).toContain("text/html")
+    expect(missing.body.equals(notFound)).toBe(true)
+    expect(missing.text).not.toBe(app.text)
   })
 
   it("styles nested landing fallbacks from root-relative assets", async () => {
@@ -185,6 +260,28 @@ describe("built site", () => {
     expect(image.status).toBe(200)
     expect(image.type).toContain("image/png")
     expect(image.body.length).toBe(statSync(join(siteDir, "assets/mascot-sm.png")).size)
+    const missing = await get("/assets/nope.png")
+    const notFound = readFileSync(join(siteDir, "assets/404.html"))
+    expect(missing.status).toBe(404)
+    expect(missing.type).toContain("text/html")
+    expect(missing.body.equals(notFound)).toBe(true)
+    expect(missing.text).not.toBe(root.text)
+  })
+
+  it("redirects /app/index.html to /app/ and does not redirect /app/ back", async () => {
+    const redirected = await get("/app/index.html")
+    expect(redirected.status).toBe(301)
+    expect(redirected.location).toBe("/app/")
+    const app = await get("/app/")
+    expect(app.status).toBe(200)
+    expect(app.location).toBeNull()
+    const followed = await fetch(`${base}/app/index.html`)
+    expect(followed.status).toBe(200)
+    expect(new URL(followed.url).pathname).toBe("/app/")
+    expect(await followed.text()).toBe(app.text)
+    const withQuery = await get("/app/index.html?x=1")
+    expect(withQuery.status).toBe(301)
+    expect(withQuery.location).toBe("/app/?x=1")
   })
 
   it("pins the served inline script hash in the CSP", async () => {
