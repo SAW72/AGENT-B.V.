@@ -187,11 +187,11 @@ These rules are named here. Their numbers are **TBD**. No point weight is assign
 
 | Rule | What it compares | Value |
 |---|---|---|
-| `same_pair` | How many credited escrow logs share `EscrowCreated.payer` and `EscrowCreated.payee`. One cap per UTC day and one cap for the life of the ledger. A same-controller identity beyond that pair is not defined in the sources, so this is the named rule. | **TBD** |
+| `same_pair` | How many credited escrow logs share the unordered pair of `EscrowCreated.payer` and `EscrowCreated.payee`. The two lowercase addresses are one pair in either order. One cap per UTC day and one cap for the life of the ledger, on the credited wallet's counter for that pair. A same-controller identity beyond that pair is not defined in the sources, so this is the named rule. | **TBD** |
 | `min_escrow_amount` | `EscrowCreated.amount` for that `escrowId`. A log whose create amount is below the minimum is not credited. This is the gate against 1-wei farming. | **TBD** |
 | `min_escrow_duration` | `EscrowCreated.expiresAt` minus the `EscrowCreated` block-header timestamp. The contract allows a duration from 1 second through 30 days. That 1 second is not this minimum. | **TBD** |
 
-`same_pair` applies to `fund`, `release_or_refund`, and the dispute-open case. It does not apply to `VoteCast`. While a number is still **TBD**, that one comparison is not applied, and the weight stays unset. When the number is set, a log that fails it is not committed.
+`same_pair` applies to `fund`, `release_or_refund`, and the dispute-open case. It does not apply to `VoteCast`. The counter is the credited wallet's. `fund` credits the payer, so it uses the payer's counter. A release credits the payee, so `EscrowReleased` uses the payee's counter. A refund credits the payer, so `EscrowRefunded` uses the payer's counter. Dispute open credits `party`, so it uses `party`'s counter. While a number is still **TBD**, that one comparison is not applied, and the weight stays unset. When the number is set, a log that fails it is not committed.
 
 `release_or_refund` is one action. A release and a refund for the same wallet on the same UTC day share one slot. The row the server commits first keeps the slot. The other insert fails the unique constraint and credits nothing.
 
@@ -211,7 +211,7 @@ Order is the log order in "Ingest", not the order rows arrived. The wallet is th
 
 Return days are derived from activity on distinct UTC days. They are not an event.
 
-The wallet's first active UTC day is `first_activity`. It is not a `return_day`. Each later UTC day on which that wallet has a stored escrow-log or counted-vote row produces one `return_day`. The source log for the link is the earliest of those rows that day, in `(block_number, log_index)` order. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of that source, all NOT NULL. The chain-log unique key does not include `return_day`, so the copy is not a second insert of the source key. The row's own key is `UNIQUE (wallet, utc_day) WHERE action = 'return_day'`. The point weight is **TBD**.
+The wallet's first active UTC day is `first_activity`. It is not a `return_day`. Each later UTC day on which that wallet has a stored escrow-log row, or a stored vote row whose points are greater than 0, produces one `return_day`. A stored vote with points 0 does not count. The source log for the link is the earliest row that does count that day, in `(block_number, log_index)` order. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of that source, all NOT NULL. The chain-log unique key does not include `return_day`, so the copy is not a second insert of the source key. The row's own key is `UNIQUE (wallet, utc_day) WHERE action = 'return_day'`. The point weight is **TBD**.
 
 ## Ledger and daily cap
 
@@ -267,7 +267,11 @@ Each entry, from the decision-chain spec:
 
 Order is fixed: proposer, then each reviewer, then the terminal approver. A missing, reordered, or unsigned chain is rejected. Every chain, approved or blocked, is stored in full. The points row does not replace the chain log.
 
-The decision-chain link is required on every credit, including `first_activity`, `return_day`, and a matched vote. The chain belongs to the points wallet, the address in the wallet column. It does not belong to `tx.from`. A refund submitted by the claim relayer `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` (`claimRelayerWallet` in `deployments/base-sepolia.json`) still requires the chain of `EscrowCreated.payer`, who is the credited wallet. The relayer is not the terminal approver. A release credits `EscrowCreated.payee`, including when only the payer may call `release` while the escrow is `Open`. The required chain is the payee's. The payer's transaction is not a substitute for that chain.
+The decision-chain link is required on every chain-log credit, including a matched vote. `first_activity` and `return_day` do not take a second link. They are confirmed by the source row's link. The chain belongs to the points wallet, the address in the wallet column. It does not belong to `tx.from`. A refund submitted by the claim relayer `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` (`claimRelayerWallet` in `deployments/base-sepolia.json`) still requires the chain of `EscrowCreated.payer`, who is the credited wallet. The relayer is not the terminal approver. A release credits `EscrowCreated.payee`, including when only the payer may call `release` while the escrow is `Open`. The required chain is the payee's. The payer's transaction is not a substitute for that chain.
+
+Two signatures, in this order. The decision-chain entry, including the terminal approval, is signed before the transaction. `PointsLink` is signed after the transaction, because `txHash` and `logIndex` exist only once the log is mined. The rule that a signature after the action is not prior authority applies to the decision-chain entry only. It does not apply to `PointsLink`.
+
+The payee's signing load on a release is intended. The payee signs the decision-chain approval before the transaction, and signs one `PointsLink` after it for `release_or_refund`. Derived rows add no signature.
 
 ### EIP-712 link
 
@@ -282,18 +286,22 @@ version = "1"
 chainId = 84532
 verifyingContract = 0x3d660502D75f1e97b08c110255921b437A3C4C42
 
-PointsLink(bytes32 escrowId, string action, bytes32 txHash, uint256 logIndex, uint256 nonce, uint64 expiry)
+PointsLink(bytes32 escrowId, string action, bytes32 txHash, uint256 logIndex, uint256 nonce, uint64 expiry, address wallet)
 ```
 
-`action` is the EIP-712 dynamic `string`. `txHash` is the log's transaction hash. `logIndex` is the log's `log_index`.
+`action` is the EIP-712 dynamic `string`. `txHash` is the log's transaction hash. `logIndex` is the log's `log_index`. `wallet` is the points wallet. It must equal the ledger row's wallet and the address recovered from the signature. If either check fails, the link does not credit. There is no salt field.
 
-Scope: one signature covers one log. The signed `escrowId`, `action`, `txHash`, and `logIndex` must be that log, on chain id `84532`, with `verifyingContract` the live escrow. A different chain id, contract, escrow, action, hash, or log index does not confirm.
+Scope: one signature covers one log. The signed `escrowId`, `action`, `txHash`, `logIndex`, and `wallet` must be that log and that row, on chain id `84532`, with `verifyingContract` the live escrow. A different chain id, contract, escrow, action, hash, log index, or wallet does not confirm. `BotAttestationEscrow` does not verify `PointsLink`. This spec does not add that check.
 
-Nonce: `uint256`, single-use, server-issued, server-stored, monotonic per signer. The signer is the terminal human approver, and that address is the points wallet. A missing nonce, a reused nonce, or a second nonce for the same link does not credit.
+Recovery is ECDSA only (`ecrecover`). ERC-1271 contract-wallet signatures are refused. That matches the claim relayer's testnet default, where ERC-1271 stays off unless `ERC1271_ENABLED=1` (`claim-relayer/README.md`). An EIP-7702 account whose ECDSA signature recovers to `wallet` is accepted. A contract wallet that does not recover that way is refused.
 
-Expiry: `uint64` unix seconds carried in the struct. No default duration is defined. The server rejects the link when `expiry` is below the log's block timestamp, or when the server confirms it after `expiry`.
+Nonce: `uint256`, single-use, server-issued, server-stored, monotonic per signer. The signer is the terminal human approver, and that address is `wallet`. A missing nonce, a reused nonce, or a second nonce for the same link does not credit. Before confirmation, the points server may revoke the nonce by consuming it. A consumed nonce does not confirm. The revoke is an append-only stored record. Rebuilds read that record. They do not infer it from the clock.
 
-The terminal approver's chain-entry timestamp is strictly before the log's block timestamp. A signature at or after that timestamp does not credit. Confirmation also checks that the block is `finalized`, the log is not `removed: true`, and `escrowId` is the escrow id on the row (`EscrowDisputed.escrowId` for a matched `VoteCast`). For `first_activity` and `return_day`, `action` is that derived action and the hash and log index are the source log's.
+Expiry is checked only against the log's block timestamp: `block_timestamp <= expiry <= block_timestamp + 86400`. The `86400` is the same one-day length used in `utc_day = floor(block_timestamp / 86400)`. Confirmation time is not compared to `expiry`. A rebuild the next day accepts the same link when the block timestamp still falls in that window.
+
+The decision-chain approval is signed before the transaction. Its timestamp is strictly before the log's block timestamp. A chain entry at or after that timestamp does not credit. `PointsLink` is signed after the transaction. That later signature is the link.
+
+Confirmation also checks that the block is `finalized`, the log is not `removed: true`, and `escrowId` is the escrow id on the row (`EscrowDisputed.escrowId` for a matched `VoteCast`). `first_activity` and `return_day` use the source row's confirmed `PointsLink`. They do not require `action` to be `first_activity` or `return_day` inside a second struct.
 
 The origin tag is written server-side. A client cannot hide it or flip it. A `human` entry needs an identity anchor (government ID check, passkey, or a wallet signature tied to a prior human verification) plus behavioral signals. A checkbox is not that anchor. An `ai` entry names the agent and the model version. No AI actor may present itself as human.
 
@@ -314,11 +322,11 @@ A credit for one of those actions is committed only when all of the following ar
 2. The chain is ordered and every entry is signed.
 3. The terminal approver's `actor_type` is `human`, and that human entry has the identity anchor and behavioral signals the decision-chain spec requires.
 4. The event mapping in this spec names the wallet, and the ledger constraints accept the row.
-5. The decision-chain link for `escrowId` + `action` + `tx_hash` / `log_index` is bound to its nonce and confirmed against that log.
+5. The `PointsLink` for that log is signed after the transaction, its `wallet` matches the row, and it confirms under the rules above. The decision-chain approval for that same action was signed before the transaction.
 
-A matched `VoteCast` can pass these checks and still receive no numeric credit. Vote credit stays **TBD** until the human/AI arbitrator register exists.
+A matched `VoteCast` can pass these checks and still receive no numeric credit. Vote credit stays **TBD** until the human/AI arbitrator register exists. A stored vote with points 0 does not produce a `return_day`.
 
-If the terminal approver is `ai`, Agent-BV already blocks the action and logs the full chain. The points consequence, which is the proof on this ledger, is that no points row is committed. A signature added after the escrow transaction is a confirmation, not prior authority, so a chain attached after the log does not make the log eligible. If the escrow was called outside the block and the log exists anyway, the points writer still commits nothing.
+If the terminal approver is `ai`, Agent-BV already blocks the action and logs the full chain. The points consequence, which is the proof on this ledger, is that no points row is committed. A decision-chain signature added after the escrow transaction is a confirmation, not prior authority, so a chain attached after the log does not make the log eligible. That rule does not apply to `PointsLink`, which is signed after the log. If the escrow was called outside the block and the log exists anyway, the points writer still commits nothing unless both signatures are present in that order.
 
 The badge when the check passes is `Human-instructed`: a verified human approved before execution. `Bot-instructed` means every actor is `ai`. That badge is allowed only inside a non-financial scope, so it does not authorize a credit for these four events. `Human` by itself does not authorize fund movement. `Trusted` and `Not trusted` are labels on a scenario-library result. None of the badges is an action in the table above, and none of them has a point weight.
 
@@ -376,7 +384,7 @@ This spec does not lock those numbers and does not reuse them as weights for `fi
 
 No contract change is expected. Blockchain Builder confirmation is pending. It was looked for as his review of commit `6bf8488ce6c983e2f008a84020f55fff34fd693f`. Pull request #85 has no review, no issue comment, no review comment, and no commit comment on that SHA.
 
-This spec reads events the deployed escrow and the deployed panel already emit. It does not add a function, an event, a storage field, or a check inside `BotAttestationEscrow` or `DisputePanel`. The decision-chain check is off-chain, in the points writer. The escrow does not take a chain, an `actor_type`, a nonce, or a point balance.
+This spec reads events the deployed escrow and the deployed panel already emit. It does not add a function, an event, a storage field, a salt, or a check inside `BotAttestationEscrow` or `DisputePanel`. The escrow does not verify `PointsLink`. The decision-chain check is off-chain, in the points writer. The approval is signed before the transaction. The link is signed after it. The escrow does not take a chain, an `actor_type`, a nonce, or a point balance.
 
 Vote-event gap, for that confirmation: the escrow has no vote event. This spec counts the existing `DisputePanel.VoteCast` log only when `disputeId` matches an `EscrowDisputed` from `0x3d660502D75f1e97b08c110255921b437A3C4C42` at or after block `47715415`. That match does not require an escrow change. Adding a vote event, or a voter argument, on `BotAttestationEscrow` would be a contract change. This spec does not ask for that change. Vote credit stays **TBD** until a register exists of which arbitrators are human and which are AI. That register is not a contract field today.
 
