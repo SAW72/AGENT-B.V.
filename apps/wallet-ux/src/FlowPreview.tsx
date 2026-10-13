@@ -116,7 +116,7 @@ import {
   type WalletRoute,
 } from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
-import { CONNECT_NOTE, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
+import { CONNECT_NOTE, WRONG_NETWORK_NOTE, walletReadiness } from "./walkthrough"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -1398,8 +1398,6 @@ function CreateForm({
   const step = problem ? problem.step : guided ? flowStep.display : 1
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
-  const journeyLine = journeyNow(readiness, step < 4 ? "funding" : "review")
-  const currentStepLine = `Now · ${FLOW_STEP_LABELS.fund[step - 1] ?? ""}`
 
   return (
     <section id="fund-form" className={guided ? "guided-flow" : undefined} aria-label={flowTitle("fund")}>
@@ -1414,7 +1412,6 @@ function CreateForm({
           if (step < 4 && readiness === "ready") void onNext()
         }}
       >
-        {guided && journeyLine !== currentStepLine ? <p data-testid="journey-now">{journeyLine}</p> : null}
         {guided && readiness === "wrong-network" && step < 4 ? (
           <p className="banner" role="status" data-testid="wrong-network-note">
             {WRONG_NETWORK_NOTE}

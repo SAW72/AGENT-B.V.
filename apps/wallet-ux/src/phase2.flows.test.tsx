@@ -222,9 +222,11 @@ describe("phase 2 guided flows", () => {
   it("counts steps and walks back and forward without leaving the flow", async () => {
     render(<Host />)
     navigate("/app/fund")
-    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Fill in the escrow")
+    expect(screen.queryByTestId("journey-now")).toBeNull()
     expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
-    expect(within(screen.getByTestId("stepper")).getAllByRole("listitem")[0]?.querySelector(".step-dot-word")?.textContent).toBe("Now · Who is paid")
+    const first = within(screen.getByTestId("stepper")).getAllByRole("listitem")[0]
+    expect(first?.querySelector(".step-dot-word")?.textContent).toBe("Now · Who is paid")
+    expect(first?.getAttribute("aria-current")).toBe("step")
     fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
     fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: id } })
     fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
@@ -270,9 +272,9 @@ describe("phase 2 guided flows", () => {
     const review = await waitFor(() => screen.getByTestId("review-step"))
     expect(screen.queryByTestId("journey-now")).toBeNull()
     expect(screen.queryAllByText("Now · Review and send")).toHaveLength(1)
-    expect(within(screen.getByTestId("stepper")).getAllByRole("listitem")[3]?.querySelector(".step-dot-word")?.textContent).toBe(
-      "Now · Review and send",
-    )
+    const reviewChip = within(screen.getByTestId("stepper")).getAllByRole("listitem")[3]
+    expect(reviewChip?.querySelector(".step-dot-word")?.textContent).toBe("Now · Review and send")
+    expect(reviewChip?.getAttribute("aria-current")).toBe("step")
     expect(screen.queryByTestId("test-eth-note")).toBeNull()
     expect(screen.getByTestId("step-count").textContent).toBe("Step 4 of 4")
     expect(within(review).getByTestId("review-plain").textContent).toContain("0.001 test ETH")
@@ -704,12 +706,13 @@ describe("phase 2 guided flows", () => {
     world.chainId = 1
     render(<Host />)
     navigate("/app/fund")
-    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Switch to Base Sepolia")
+    expect(screen.queryByTestId("journey-now")).toBeNull()
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     const dots = within(screen.getByTestId("stepper")).getAllByRole("listitem")
     expect(dots.map((dot) => dot.getAttribute("data-step-state"))).toEqual(["current", "upcoming", "upcoming", "upcoming"])
+    expect(dots[0]?.getAttribute("aria-current")).toBe("step")
     fireEvent.click(screen.getByTestId("journey-switch"))
     expect(world.switchChain).toHaveBeenCalledWith({ chainId: 84532 })
     fireEvent.submit(document.getElementById("create-claim")!)
@@ -721,7 +724,8 @@ describe("phase 2 guided flows", () => {
     world.connected = false
     render(<Host />)
     navigate("/app/fund")
-    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Connect your wallet")
+    expect(screen.queryByTestId("journey-now")).toBeNull()
+    expect(within(screen.getByTestId("stepper")).getAllByRole("listitem")[0]?.getAttribute("aria-current")).toBe("step")
     expect(screen.getByTestId("connect-note").textContent).toBe(CONNECT_NOTE)
     expect(screen.getByTestId("journey-connect").textContent).toBe("Connect wallet")
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()

@@ -10,7 +10,6 @@ import {
   CONNECT_NOTE,
   TEST_ETH_NOTE,
   WRONG_NETWORK_NOTE,
-  journeyNow,
   walkthroughLabels,
   walkthroughStates,
   walkthroughStep,
@@ -90,15 +89,8 @@ describe("walkthrough states", () => {
     expect(walkthroughLabels("ready")).toEqual(["Connect your wallet", "Fill in the escrow", "Review and send"])
     expect(walkthroughLabels("wrong-network")).toEqual(["Switch to Base Sepolia", "Fill in the escrow", "Review and send"])
     for (const chain of [1, null, "conflict" as const]) {
-      const wallet = walletReadiness(true, chain)
-      expect(wallet).toBe("wrong-network")
-      expect(journeyNow(wallet, "home")).toBe("Now · Switch to Base Sepolia")
-      expect(journeyNow(wallet, "funding")).toBe("Now · Switch to Base Sepolia")
+      expect(walletReadiness(true, chain)).toBe("wrong-network")
     }
-    expect(journeyNow("disconnected", "home")).toBe("Now · Connect your wallet")
-    expect(journeyNow("ready", "home")).toBe("Now · Fill in the escrow")
-    expect(journeyNow("ready", "funding")).toBe("Now · Fill in the escrow")
-    expect(journeyNow("ready", "review")).toBe("Now · Review and send")
   })
 
   it("keeps an unlabelled stepper on numbered state words", () => {

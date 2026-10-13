@@ -50,9 +50,3 @@ export function walkthroughStep(states: readonly WalkthroughState[]): number {
   const index = states.findIndex((state) => state === "current")
   return (index === -1 ? states.length : index) + 1
 }
-
-export function journeyNow(wallet: WalkthroughWallet, place: WalkthroughPlace): string {
-  const states = walkthroughStates(wallet, place)
-  const index = states.findIndex((state) => state === "current")
-  return `Now · ${walkthroughLabels(wallet)[index]}`
-}
