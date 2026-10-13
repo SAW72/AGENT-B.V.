@@ -14,7 +14,7 @@ import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
 import { GuidedStepFooter } from "./guidedFooter"
 import { FORM_ERRORS } from "./submit"
 import { previewCreateEscrow } from "./preview"
-import { navigate, useWalletRoute, walletHome } from "./routes"
+import { navigate, STEP_IGNORED, useWalletRoute, walletHome } from "./routes"
 import { useConnectorChainId } from "./useWalletChain"
 import { wagmiConfig } from "./wagmi"
 
@@ -146,8 +146,8 @@ function Host() {
   )
 }
 
-function renderFund() {
-  navigate("/app/fund")
+function renderFundAt(href: string) {
+  navigate(href)
   return render(
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -155,6 +155,20 @@ function renderFund() {
       </QueryClientProvider>
     </WagmiProvider>,
   )
+}
+
+function renderFund() {
+  return renderFundAt("/app/fund")
+}
+
+function paragraphCopies(text: string): HTMLElement[] {
+  return [...document.querySelectorAll("p")].filter((node) => node.textContent === text)
+}
+
+function escrowInUrl(): string {
+  const escrow = new URLSearchParams(window.location.search).get("escrow")
+  if (!escrow) throw new Error("fund url is missing the escrow id")
+  return escrow
 }
 
 function BusyFooter() {
@@ -504,5 +518,121 @@ describe("guided footer with an injected connector", () => {
     fireEvent.click(preparing)
     expect(screen.queryByTestId("advanced")).toBeNull()
     expect(screen.getByRole("button", { name: "Preparing…" })).toBe(preparing)
+  })
+
+  it("shows an invalid amount from ?step=4 once, and only in the footer", async () => {
+    installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    fill("Amount in ETH", "0")
+    await waitFor(() => expect(reasonLine().textContent).toBe(FORM_ERRORS.valueZero))
+    navigate(`/app/fund?step=4&escrow=${escrowInUrl()}`)
+    await waitFor(() => expect(screen.getByTestId("step-count").textContent).toBe("Step 3 of 4"))
+    expect(paragraphCopies(FORM_ERRORS.valueZero)).toHaveLength(1)
+    expect(reasonLine().textContent).toBe(FORM_ERRORS.valueZero)
+    expect(screen.queryByTestId("step-error")).toBeNull()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("shows only the switch sentence for ?step=4 with an invalid amount on chain 1", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    fill("Amount in ETH", "0")
+    await waitFor(() => expect(reasonLine().textContent).toBe(FORM_ERRORS.valueZero))
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    navigate(`/app/fund?step=4&escrow=${escrowInUrl()}`)
+    await waitFor(() => expect(screen.getByTestId("step-count").textContent).toBe("Step 3 of 4"))
+    expect(paragraphCopies(SWITCH)).toHaveLength(1)
+    expect(paragraphCopies(FORM_ERRORS.valueZero)).toHaveLength(0)
+    expect(screen.queryByTestId("step-error")).toBeNull()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+  })
+
+  it("keeps a later-step reason after the chain changes and comes back", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFundAt("/app/fund?step=3")
+    await waitFor(() => expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee))
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    await connectWallet()
+    expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee)
+    expect(paragraphCopies(FORM_ERRORS.payee)).toHaveLength(1)
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee)
+    expect(paragraphCopies(SWITCH)).toHaveLength(1)
+    await act(async () => {
+      wallet.setChain("0x14a34", true)
+    })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
+    expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee)
+    expect(paragraphCopies(FORM_ERRORS.payee)).toHaveLength(1)
+    expect(reasonLine().textContent).toBe("")
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+  })
+
+  it("keeps the escrow-id notice and a bad-step notice, and still clears a prepare error", async () => {
+    const wallet = installProvider("0x14a34")
+    const changed = "The escrow id for this flow changed. The id below is the one that will be funded."
+    window.sessionStorage.setItem(FUND_ESCROW_STORAGE_KEY, PAYER_BOT)
+    renderFundAt(`/app/fund?escrow=${PAYEE_BOT}`)
+    const notice = await waitFor(() => screen.getByTestId("step-error"))
+    expect(notice.textContent).toBe(changed)
+    expect((screen.getByLabelText("Escrow ID") as HTMLInputElement).value.toLowerCase()).toBe(PAYEE_BOT.toLowerCase())
+    await connectWallet()
+    expect(screen.getByTestId("step-error").textContent).toBe(changed)
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    const alert = await waitFor(() => screen.getByRole("alert"))
+    expect(alert.textContent).toBe(FORM_ERRORS.payee)
+    expect(screen.getByTestId("step-error").textContent).toBe(changed)
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByText(FORM_ERRORS.payee)).toBeNull()
+    expect(screen.getByTestId("step-error").textContent).toBe(changed)
+    await act(async () => {
+      wallet.setChain("0x14a34", true)
+    })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.getByTestId("step-error").textContent).toBe(changed)
+
+    navigate("/app/fund?step=9")
+    await waitFor(() => expect(screen.getByTestId("url-step-notice").textContent).toBe(STEP_IGNORED))
+    expect(window.location.search).toContain("step=9")
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(screen.getByTestId("url-step-notice").textContent).toBe(STEP_IGNORED)
+    expect(window.location.search).toContain("step=9")
+    await act(async () => {
+      wallet.setChain("0x14a34", true)
+    })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
+    expect(screen.getByTestId("url-step-notice").textContent).toBe(STEP_IGNORED)
+  })
+
+  it("does not leave step 1 when Enter is pressed on chain 1 with a payee", async () => {
+    installProvider("0x1")
+    renderFund()
+    fireEvent.click(screen.getByTestId("journey-connect"))
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    fill("Payee wallet", PAYEE)
+    fireEvent.submit(document.getElementById("create-claim")!)
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.queryByLabelText("Payer bot identifier")).toBeNull()
+    expect(reasonLine().textContent).toBe(SWITCH)
+    expect(paragraphCopies(SWITCH)).toHaveLength(1)
   })
 })

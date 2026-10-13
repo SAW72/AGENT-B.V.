@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import { TestEthNote } from "./firstRun"
-import { GuidedStepFooter, flowMayAdvance, useClearOnReadinessChange, useFlowReadiness } from "./guidedFooter"
+import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
 import {
   ActionButton,
   ActionStatus,
@@ -1164,7 +1164,7 @@ function CreateForm({
   const [preset, setPreset] = useState<number | "custom">(DEFAULT_DURATION_SECONDS)
   const [customDuration, setCustomDuration] = useState("")
   const [value, setValue] = useState("")
-  const [heldError, setHeldError] = useState<string | null>(null)
+  const [idNotice, setIdNotice] = useState<string | null>(null)
   const session = usePrepareSession<CallPreview>("create", active)
   const [fundStatus, setFundStatus] = useState<HTMLElement | null>(null)
   const escrowHex = parseBytes32(escrowId)
@@ -1181,10 +1181,10 @@ function CreateForm({
   )
   const fundFields = { escrowId, payee, payerBotId, payeeBotId, value, preset, customDuration }
   const problem = guided && guided.step > 1 ? firstFundProblem(guided.step, fundFields) : null
-  useEffect(() => {
-    if (problem) setHeldError(problem.message)
-  }, [problem?.message])
-  useClearOnReadinessChange(() => setHeldError(null))
+  // Highest step this visit asked for. The URL is rewritten down to the first
+  // invalid step, so the banner has to keep asking about the original step.
+  const askedStep = useRef(guided?.step ?? 1)
+  if (guided && guided.step > askedStep.current) askedStep.current = guided.step
   useEffect(() => {
     if (!guided) return
     const id = parseBytes32(escrowId)
@@ -1195,7 +1195,7 @@ function CreateForm({
     if (guided.notice) return
     const link = guided.linkEscrow
     if (previous && link && previous !== link && id === link && !problem) {
-      setHeldError("The escrow id for this flow changed. The id below is the one that will be funded.")
+      setIdNotice("The escrow id for this flow changed. The id below is the one that will be funded.")
     }
     const current = `${window.location.pathname}${window.location.search}`
     if (problem) {
@@ -1228,12 +1228,14 @@ function CreateForm({
   function edit(apply: () => void) {
     apply()
     session.clear()
-    setHeldError(null)
+    setIdNotice(null)
+    askedStep.current = guided?.step ?? 1
   }
 
   function goFund(nextStep: number) {
     const id = parseBytes32(escrowId)
-    setHeldError(null)
+    setIdNotice(null)
+    askedStep.current = nextStep
     flowStep.arm(`fund|${id ?? ""}|${nextStep}`)
     navigate(flowHref("fund", nextStep, { escrow: id }), { allowStep: true })
   }
@@ -1335,7 +1337,8 @@ function CreateForm({
   }
 
   async function onNext() {
-    if (!guided || !flowMayAdvance(readiness)) return
+    // Enter and the Next button both call this. It is the only readiness guard.
+    if (!flowMayAdvance(readiness)) return
     if (step === 1) {
       if (!parseBytes32(escrowId)) {
         session.publish(FORM_ERRORS.createIds, null)
@@ -1384,7 +1387,7 @@ function CreateForm({
     if (step === 3) {
       const blocked = firstFundProblem(4, fundFields)
       if (blocked && blocked.step < 3) {
-        setHeldError(blocked.message)
+        askedStep.current = 4
         navigate(flowHref("fund", blocked.step, { escrow: parseBytes32(escrowId) }), { allowStep: true })
         return
       }
@@ -1397,6 +1400,11 @@ function CreateForm({
   const step = problem ? problem.step : guided ? flowStep.display : 1
   const amountBlock = guided && step === 3 ? firstFundProblem(4, fundFields) : null
   const amountMissing = amountBlock?.step === 3 ? amountBlock.message : null
+  // Amount and time on step 3 are the footer sentence. Earlier gaps stay in the
+  // banner, derived from the fields, so a chain change cannot drop them.
+  const fieldProblem = guided && askedStep.current > step ? firstFundProblem(askedStep.current, fundFields) : null
+  const fieldBanner = fieldProblem && fieldProblem.step === step && step < 3 ? fieldProblem.message : null
+  const stepBanner = fieldBanner ?? idNotice
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
 
@@ -1410,7 +1418,6 @@ function CreateForm({
             return
           }
           event.preventDefault()
-          if (!flowMayAdvance(readiness) || step >= 4) return
           void onNext()
         }}
       >
@@ -1426,9 +1433,9 @@ function CreateForm({
         ) : null}
         {guided ? <Stepper step={step} total={4} labels={FLOW_STEP_LABELS.fund} /> : null}
         <ActionTestnet title={flowTitle("fund")} />
-        {heldError ? (
+        {stepBanner ? (
           <p className="warn-note" role="status" data-testid="step-error">
-            {heldError}
+            {stepBanner}
           </p>
         ) : null}
         {show(1) ? (
