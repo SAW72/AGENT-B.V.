@@ -31,14 +31,14 @@ Depth over breadth. One real rescue is worth a lot.
 
 | Action | Points | Notes |
 |---|---|---|
-| Rescue completed (GasRescue) | 100 + 1 per $1 of token value rescued | Core user signal |
+| Rescue completed (GasRescue) | TBD per verified rescue | Core user signal |
 | Relayer job executed | 50 | Registered operator identity required |
 | Registry find posted | 30 | Must be a real stranded balance |
 | Registry find claimed | 50 | Claim must succeed on-chain |
 | Active wallet session | 10 per week | One session per wallet per week |
-| Bug report / security finding | 100–500 by severity | Tx hash or reproducible steps |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 
-Anti-gaming: one rescue is 100 points no matter how many wallets. No referral bonuses. No points for holding or transferring. Relayer jobs need a registered operator.
+Anti-gaming: one rescue counts once no matter how many wallets. No referral bonuses. No points for holding or transferring. Relayer jobs need a registered operator.
 
 Chain of record: Arbitrum Sepolia.
 
@@ -56,7 +56,7 @@ Breadth over depth. Many small scores, not one big rescue. Not part of the CoinM
 | Score attested on-chain | 25 | ScoreAttestation hash on Base Sepolia |
 | Score shared on X | 15 | Distribution |
 | API integration built | 100 | Must be live and publicly documented |
-| Bug report / security finding | 100–500 by severity | Tx hash or reproducible steps |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 
 Same anti-gaming rules. Repeated runs of the same issuer do not multiply.
 
@@ -73,7 +73,7 @@ AI-generated scores count only with an AGENT B.V. attestation. See section 5.
 | Verification run completed | 10 | One run per wallet per day |
 | Attestation issued on-chain | 50 | Hash locked on-chain |
 | Integration built by another project | 100 | Live and publicly documented |
-| Bug report / security finding | 100–500 by severity | Reproducible steps or tx hash |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 | Partner credits a user because of an AGENT B.V. attestation | 1 mirrored point | No attestation, no mirror |
 
 AGENT B.V. does not pay the partner's points. The partner does. AGENT B.V. only records that it did the verification.

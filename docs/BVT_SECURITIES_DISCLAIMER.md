@@ -1,3 +1,5 @@
+> **INTERNAL, counsel review only, not an offer or announcement.**
+
 # BVT securities disclaimer
 
 **Not an offer of securities.** This document, [BVT_TOKENOMICS.md](BVT_TOKENOMICS.md), the `contracts/bvt/` sources, and any related discussion describe an **experimental protocol mechanism**. They are **not** an offer to sell, or a solicitation of an offer to buy, any security, commodity interest, or crypto-asset in any jurisdiction.
