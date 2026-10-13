@@ -128,6 +128,8 @@ jobs:
       - name: Verify the preview bundle
         env:
           DEPLOYMENT_URL: ${{ steps.preview.outputs.deployment-url }}
+          APP_PATH: /app/
+          DIST_INDEX: dist/app/index.html
         run: node scripts/verify-served-bundle.mjs
 
       - name: Deploy production
@@ -142,6 +144,8 @@ jobs:
       - name: Verify the production bundle
         env:
           DEPLOYMENT_URL: ${{ steps.production.outputs.deployment-url }}
+          APP_PATH: /app/
+          DIST_INDEX: dist/app/index.html
         run: node scripts/verify-served-bundle.mjs
 
       # preview-<run id> has a single deployment, so it is the latest on that

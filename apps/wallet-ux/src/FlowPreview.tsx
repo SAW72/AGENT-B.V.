@@ -55,6 +55,7 @@ import {
   type CallPreview,
 } from "./preview"
 import {
+  CANONICAL_WALLET_HREF,
   CANONICAL_WALLET_ORIGIN,
   formatHealthReply,
   isHealthCancelled,
@@ -577,7 +578,7 @@ function SepoliaSubmit({
           ) : null}
           {pageOrigin() !== CANONICAL_WALLET_ORIGIN && relayerHealth === "unreachable" ? (
             <p className="hint" role="status" data-testid="relayer-unreachable-link">
-              <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+              <a href={CANONICAL_WALLET_HREF} data-testid="relayer-canonical-link">
                 {RELAYER_OPEN_CANONICAL_LABEL}
               </a>
             </p>
@@ -840,7 +841,7 @@ export function FlowPreview({ escrow, panel }: { escrow: Address; panel: Address
       {originAllowed ? null : (
         <p className="banner" role="status" data-testid="relayer-origin-notice">
           {RELAYER_WRONG_ORIGIN_TEXT}{" "}
-          <a href={CANONICAL_WALLET_ORIGIN} data-testid="relayer-canonical-link">
+          <a href={CANONICAL_WALLET_HREF} data-testid="relayer-canonical-link">
             {RELAYER_OPEN_CANONICAL_LABEL}
           </a>
         </p>

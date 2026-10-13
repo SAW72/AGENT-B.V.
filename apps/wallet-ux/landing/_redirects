@@ -1,0 +1,23 @@
+# Root (/) is the static landing page (landing/index.html). It is a real file,
+# so Pages serves it before any rule here. The wallet app lives under /app/.
+/app            /app/            301
+/index.html     /                301
+/manifest.webmanifest /app/manifest.webmanifest 301
+/icon-192.png   /app/icon-192.png 301
+/icon-512.png   /app/icon-512.png 301
+# Old wallet paths. 301 Moved Permanently. The destination has no query
+# string, so Pages keeps the incoming query string.
+/points         /app/            301
+/claim          /app/            301
+/release        /app/            301
+# Real files under /app/. A later /app/* rewrite matches these too, and a
+# 200 rewrite replaces the file, so each one is named here first.
+/app/manifest.webmanifest /app/manifest.webmanifest 200
+/app/icon-192.png /app/icon-192.png 200
+/app/icon-512.png /app/icon-512.png 200
+/app/assets/*   /app/assets/:splat 200
+# SPA fallback. Pages ignores `/app/* /app/index.html 200`: HTML handling
+# strips `index.html` and the splat matches again. `/app/* /app/ 200`
+# serves that same /app/index.html and leaves the browser URL unchanged.
+/app/*          /app/            200
+# Unknown paths outside /app/ fall back to the landing page (Pages default, no 404.html).

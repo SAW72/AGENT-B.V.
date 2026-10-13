@@ -7,6 +7,7 @@ import { FlowPreview } from "./FlowPreview"
 import { resetCarriedIds } from "./carriedIds"
 import { resetPendingRuntime } from "./usePendingReceipt"
 import {
+  CANONICAL_WALLET_HREF,
   CANONICAL_WALLET_ORIGIN,
   RELAYER_CHECKING_NOTE,
   RELAYER_DOWN_NOTE,
@@ -210,6 +211,7 @@ describe("refund service health", () => {
       "The refund service can't be reached from this page or network. Open agent-bv.pages.dev.",
     )
     expect(CANONICAL_WALLET_ORIGIN).toBe("https://agent-bv.pages.dev")
+    expect(CANONICAL_WALLET_HREF).toBe(`${CANONICAL_WALLET_ORIGIN}/app/`)
   })
 
   beforeEach(() => {
@@ -303,7 +305,7 @@ describe("refund service health", () => {
     fireEvent.change(refund.getByLabelText("Escrow ID"), { target: { value: claim } })
     await prepareRefund(refund)
     expect(refund.getByTestId("relayer-note").textContent).toBe(RELAYER_UNREACHABLE_TEXT)
-    expect(refund.getByTestId("relayer-canonical-link").getAttribute("href")).toBe(CANONICAL_WALLET_ORIGIN)
+    expect(refund.getByTestId("relayer-canonical-link").getAttribute("href")).toBe(CANONICAL_WALLET_HREF)
     expect(refund.getByTestId("relayer-canonical-link").textContent).toBe(RELAYER_OPEN_CANONICAL_LABEL)
     expect((refund.getByTestId("relayer-submit") as HTMLButtonElement).disabled).toBe(true)
     expect(counts.post).toBe(0)
@@ -648,7 +650,7 @@ describe("refund service health", () => {
     expect(notice?.textContent).toContain(RELAYER_WRONG_ORIGIN_TEXT)
     const link = notice?.querySelector("a")
     expect(link?.textContent).toBe(RELAYER_OPEN_CANONICAL_LABEL)
-    expect(link?.getAttribute("href")).toBe(CANONICAL_WALLET_ORIGIN)
+    expect(link?.getAttribute("href")).toBe(CANONICAL_WALLET_HREF)
     expect(counts.health).toBe(0)
     const refund = refundSection()
     expect(refund.queryByTestId("relayer-submit")).toBeNull()

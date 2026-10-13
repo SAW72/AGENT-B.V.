@@ -14,7 +14,7 @@ function walletBrand(): Plugin {
   const serveManifest: Plugin["configureServer"] = (server) => {
     server.middlewares.use((req, res, next) => {
       const path = req.url?.split("?")[0]
-      if (path !== "/manifest.webmanifest") {
+      if (path !== "/manifest.webmanifest" && path !== "/app/manifest.webmanifest") {
         next()
         return
       }
@@ -39,7 +39,11 @@ function walletBrand(): Plugin {
   }
 }
 
+// The wallet app is served under /app/; the landing page owns the site root.
+// scripts/assemble-site.mjs puts landing/ at dist/ and this build at dist/app/.
 export default defineConfig({
+  base: "/app/",
+  build: { outDir: "dist/app", emptyOutDir: true },
   plugins: [react(), walletBrand()],
   server: {
     host: "0.0.0.0",

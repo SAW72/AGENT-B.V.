@@ -57,7 +57,7 @@ function runGuard(args) {
 }
 
 function referencedAssets(html) {
-  return [...new Set([...html.matchAll(/\/assets\/[A-Za-z0-9._-]+\.(?:js|css)/g)].map((match) => match[0]))].sort()
+  return [...new Set([...html.matchAll(/(?:\/app)?\/assets\/[A-Za-z0-9._-]+\.(?:js|css)/g)].map((match) => match[0]))].sort()
 }
 
 async function fetchChecked(url) {
@@ -83,11 +83,14 @@ if (!deploymentUrl) {
 }
 
 const base = deploymentUrl.replace(/\/$/, "")
-const indexResponse = await fetchChecked(`${base}/`)
+// APP_PATH is where the wallet app index lives ("/" by default, "/app/" for the
+// landing-at-root layout). The landing page at "/" has no hashed bundle.
+const appPath = (process.env.APP_PATH ?? "/").trim() || "/"
+const indexResponse = await fetchChecked(`${base}${appPath}`)
 if (!indexResponse.ok) {
   fail(`Verify failed: index responded ${indexResponse.status}.`)
 }
-const html = await readBody(indexResponse, `${base}/`)
+const html = await readBody(indexResponse, `${base}${appPath}`)
 const distIndexPath = process.env.DIST_INDEX ?? "dist/index.html"
 let builtHtml = ""
 try {
@@ -137,11 +140,11 @@ try {
       }
     }
     javascript += `${text}\n`
-    for (const match of text.matchAll(/\/assets\/[A-Za-z0-9._-]+\.(?:js|css)/g)) {
+    for (const match of text.matchAll(/(?:\/app)?\/assets\/[A-Za-z0-9._-]+\.(?:js|css)/g)) {
       if (!seen.has(match[0])) pending.push(match[0])
     }
     for (const match of text.matchAll(/["'`]\.\/([A-Za-z0-9._-]+\.js)["'`]/g)) {
-      const chunkPath = `/assets/${match[1]}`
+      const chunkPath = `${appPath === "/" ? "" : appPath.replace(/\/$/, "")}/assets/${match[1]}`
       if (!seen.has(chunkPath)) pending.push(chunkPath)
     }
   }
