@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { useState } from "react"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -10,6 +11,8 @@ import { ADDRESSES } from "./addresses"
 import { parseBytes32 } from "./bytes32"
 import { DEFAULT_DURATION_SECONDS } from "./duration"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
+import { GuidedStepFooter } from "./guidedFooter"
+import { FORM_ERRORS } from "./submit"
 import { previewCreateEscrow } from "./preview"
 import { navigate, useWalletRoute, walletHome } from "./routes"
 import { useConnectorChainId } from "./useWalletChain"
@@ -21,7 +24,7 @@ const PAYER_BOT = "0x2c2859b9e712890799696d217e9fe2eec1151822ed1b7168785b38991dc
 const PAYEE_BOT = "0xc62c848cf38434b66945ed12b266365ef9390b0281b0ca6bc20ba7ab46a06d2f" as Hex
 const CONNECT = "Connect a wallet to continue."
 const SWITCH = "Switch your wallet to Base Sepolia to continue."
-const AMOUNT = "Enter an amount to continue."
+const AMOUNT = FORM_ERRORS.valueEmpty
 const SEND_METHODS = [
   "eth_sendTransaction",
   "eth_signTransaction",
@@ -154,6 +157,31 @@ function renderFund() {
   )
 }
 
+function BusyFooter() {
+  const [advanced, setAdvanced] = useState(false)
+  if (advanced) return <p data-testid="advanced">advanced</p>
+  return (
+    <GuidedStepFooter
+      onBack={() => undefined}
+      onNext={() => setAdvanced(true)}
+      busy
+      nextDisabled
+      missing={FORM_ERRORS.valueZero}
+      reason="This vote is not available yet."
+    />
+  )
+}
+
+function renderBusyFooter() {
+  return render(
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BusyFooter />
+      </QueryClientProvider>
+    </WagmiProvider>,
+  )
+}
+
 function resetMemory() {
   wagmiConfig.setState((current) => ({
     ...current,
@@ -219,7 +247,7 @@ describe("guided footer with an injected connector", () => {
     expect(escrowId).toBeTruthy()
     await goToAmount()
     fill("Amount in ETH", "0.0001")
-    await waitFor(() => expect(screen.queryByTestId("footer-reason")).toBeNull())
+    await waitFor(() => expect(reasonLine().textContent).toBe(""))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const review = await waitFor(() => screen.getByTestId("review-step"))
     const escrow = ADDRESSES.botAttestationEscrow
@@ -242,8 +270,8 @@ describe("guided footer with an injected connector", () => {
     installProvider("0x1")
     renderFund()
     fireEvent.click(screen.getByTestId("journey-connect"))
-    const reason = await waitFor(() => reasonLine())
-    expect(reason.textContent).toBe(SWITCH)
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    const reason = reasonLine()
     expect(reason.getAttribute("role")).toBe("status")
     expect(reason.getAttribute("aria-live")).toBe("polite")
     const switchButton = screen.getByTestId("journey-switch")
@@ -260,10 +288,10 @@ describe("guided footer with an injected connector", () => {
     const wallet = installProvider("0x14a34")
     renderFund()
     await connectWallet()
-    expect(screen.queryByTestId("footer-reason")).toBeNull()
+    expect(reasonLine().textContent).toBe("")
     wallet.setChain("0x1", false)
-    const reason = await waitFor(() => reasonLine(), { timeout: 8_000 })
-    expect(reason.textContent).toBe(SWITCH)
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH), { timeout: 8_000 })
+    const reason = reasonLine()
     expect(screen.getByTestId("journey-switch").getAttribute("aria-describedby")).toBe(reason.id)
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
@@ -284,8 +312,8 @@ describe("guided footer with an injected connector", () => {
     await act(async () => {
       wallet.setChain("0x1", true)
     })
-    const reason = await waitFor(() => reasonLine())
-    expect(reason.textContent).toBe(SWITCH)
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    const reason = reasonLine()
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(screen.getByTestId("chain-probe").textContent).toBe("yes:1:1")
     expect(screen.getByTestId("step-count").textContent).toBe("Step 2 of 4")
@@ -293,7 +321,8 @@ describe("guided footer with an injected connector", () => {
     expect((screen.getByLabelText("Payee bot identifier") as HTMLInputElement).value).toBe(PAYEE_BOT)
     wallet.setChain("0x14a34", true)
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
-    expect(screen.queryByTestId("footer-reason")).toBeNull()
+    expect(reasonLine().textContent).toBe("")
+    expect(reasonLine()).toBe(reason)
     expect((screen.getByLabelText("Payer bot identifier") as HTMLInputElement).value).toBe(PAYER_BOT)
     fireEvent.click(screen.getByRole("button", { name: "Back" }))
     expect((screen.getByLabelText("Payee wallet") as HTMLInputElement).value).toBe(PAYEE)
@@ -308,8 +337,8 @@ describe("guided footer with an injected connector", () => {
     await act(async () => {
       await disconnect(wagmiConfig)
     })
-    const reason = await waitFor(() => reasonLine())
-    expect(reason.textContent).toBe(CONNECT)
+    await waitFor(() => expect(reasonLine().textContent).toBe(CONNECT))
+    const reason = reasonLine()
     expect(reason.getAttribute("aria-live")).toBe("polite")
     const connect = screen.getByTestId("journey-connect")
     expect(connect.textContent).toBe("Connect wallet")
@@ -319,7 +348,7 @@ describe("guided footer with an injected connector", () => {
     expect((screen.getByLabelText("Payer bot identifier") as HTMLInputElement).value).toBe(PAYER_BOT)
     fireEvent.click(connect)
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
-    expect(screen.queryByTestId("footer-reason")).toBeNull()
+    expect(reasonLine().textContent).toBe("")
     expect(screen.getByTestId("step-count").textContent).toBe("Step 2 of 4")
     expect((screen.getByLabelText("Payer bot identifier") as HTMLInputElement).value).toBe(PAYER_BOT)
     fireEvent.click(screen.getByRole("button", { name: "Back" }))
@@ -334,15 +363,146 @@ describe("guided footer with an injected connector", () => {
     const reason = reasonLine()
     expect(reason.textContent).toBe(AMOUNT)
     const next = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
-    expect(next.disabled).toBe(true)
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
     expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+    next.focus()
+    expect(document.activeElement).toBe(next)
     fireEvent.click(next)
     fireEvent.submit(document.getElementById("create-claim")!)
     expect(screen.getByTestId("step-count").textContent).toBe("Step 3 of 4")
     expect(screen.queryByTestId("review-step")).toBeNull()
     expect(wallet.calls.some((method) => SEND_METHODS.includes(method))).toBe(false)
     fill("Amount in ETH", "0.0001")
-    await waitFor(() => expect(screen.queryByTestId("footer-reason")).toBeNull())
-    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false)
+    await waitFor(() => expect(reasonLine().textContent).toBe(""))
+    const open = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
+    expect(open.getAttribute("aria-disabled")).not.toBe("true")
+    expect(open.hasAttribute("disabled")).toBe(false)
+  })
+
+  it("clears a step error when wallet readiness changes", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    const alert = await waitFor(() => screen.getByRole("alert"))
+    expect(alert.textContent).toBe(FORM_ERRORS.payee)
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByText(FORM_ERRORS.payee)).toBeNull()
+    expect(screen.queryByTestId("step-error")).toBeNull()
+    expect(screen.getAllByText(SWITCH)).toHaveLength(1)
+  })
+
+  it("keeps the same live region node as its text changes", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    const node = reasonLine()
+    expect(node.getAttribute("role")).toBe("status")
+    expect(node.getAttribute("aria-live")).toBe("polite")
+    expect(node.textContent).toBe(FORM_ERRORS.valueEmpty)
+    fill("Amount in ETH", "0")
+    await waitFor(() => expect(reasonLine().textContent).toBe(FORM_ERRORS.valueZero))
+    expect(reasonLine()).toBe(node)
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(reasonLine()).toBe(node)
+    await act(async () => {
+      wallet.setChain("0x14a34", true)
+    })
+    fill("Amount in ETH", "0.0001")
+    await waitFor(() => expect(reasonLine().textContent).toBe(""))
+    expect(reasonLine()).toBe(node)
+  })
+
+  it("blocks Next for each invalid amount and announces that reason", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    const cases: [string, string][] = [
+      ["", FORM_ERRORS.valueEmpty],
+      ["0", FORM_ERRORS.valueZero],
+      ["-1", FORM_ERRORS.valueZero],
+      ["abc", FORM_ERRORS.valueFormat],
+      ["1e3", FORM_ERRORS.valueFormat],
+    ]
+    for (const [amount, message] of cases) {
+      fill("Amount in ETH", amount)
+      await waitFor(() => expect(reasonLine().textContent).toBe(message))
+      expect(screen.getAllByText(message)).toHaveLength(1)
+      const next = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      expect(next.getAttribute("aria-describedby")).toBe(reasonLine().id)
+      next.focus()
+      expect(document.activeElement).toBe(next)
+      fireEvent.click(next)
+      fireEvent.submit(document.getElementById("create-claim")!)
+      expect(screen.getByTestId("step-count").textContent).toBe("Step 3 of 4")
+      expect(screen.queryByTestId("review-step")).toBeNull()
+      expect(screen.queryByRole("alert")).toBeNull()
+    }
+    expect(wallet.calls.some((method) => SEND_METHODS.includes(method))).toBe(false)
+    fill("Amount in ETH", "0.0001")
+    await waitFor(() => expect(reasonLine().textContent).toBe(""))
+    const open = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
+    expect(open.getAttribute("aria-disabled")).not.toBe("true")
+    open.focus()
+    expect(document.activeElement).toBe(open)
+    fireEvent.click(open)
+    await waitFor(() => expect(screen.getByTestId("review-step")).toBeTruthy())
+  })
+
+  it("lets the wallet reason outrank an invalid amount", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    fill("Amount in ETH", "0")
+    await waitFor(() => expect(reasonLine().textContent).toBe(FORM_ERRORS.valueZero))
+    await act(async () => {
+      wallet.setChain("0x1", true)
+    })
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    expect(screen.getAllByText(SWITCH)).toHaveLength(1)
+    expect(screen.queryByText(FORM_ERRORS.valueZero)).toBeNull()
+    expect(screen.queryByTestId("step-error")).toBeNull()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+  })
+
+  it("shows the amount reason once without a second copy", async () => {
+    installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    expect(screen.getAllByText(FORM_ERRORS.valueEmpty)).toHaveLength(1)
+    expect(reasonLine().textContent).toBe(FORM_ERRORS.valueEmpty)
+    const copies = [...document.querySelectorAll("p")].filter((node) => node.textContent === FORM_ERRORS.valueEmpty)
+    expect(copies).toHaveLength(1)
+  })
+
+  it("shows no reason while Preparing", async () => {
+    installProvider("0x14a34")
+    renderBusyFooter()
+    fireEvent.click(screen.getByTestId("journey-connect"))
+    const preparing = await waitFor(() => screen.getByRole("button", { name: "Preparing…" }))
+    expect(reasonLine().textContent).toBe("")
+    expect(screen.queryByText(FORM_ERRORS.valueZero)).toBeNull()
+    expect(screen.queryByText("This vote is not available yet.")).toBeNull()
+    expect(screen.queryByText(CONNECT)).toBeNull()
+    preparing.focus()
+    expect(document.activeElement).toBe(preparing)
+    fireEvent.click(preparing)
+    expect(screen.queryByTestId("advanced")).toBeNull()
+    expect(screen.getByRole("button", { name: "Preparing…" })).toBe(preparing)
   })
 })

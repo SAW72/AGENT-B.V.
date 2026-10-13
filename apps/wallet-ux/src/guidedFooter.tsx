@@ -1,4 +1,4 @@
-import { useId } from "react"
+import { useEffect, useId, useRef } from "react"
 import { useAccount } from "wagmi"
 import { ActionButton } from "./actionButton"
 import { ConnectWalletButton, SwitchToSepoliaButton } from "./firstRun"
@@ -9,7 +9,6 @@ import { walletReadiness, type WalkthroughWallet } from "./walkthrough"
 
 export const CONNECT_TO_CONTINUE = "Connect a wallet to continue."
 export const SWITCH_TO_CONTINUE = "Switch your wallet to Base Sepolia to continue."
-export const ENTER_AMOUNT_TO_CONTINUE = "Enter an amount to continue."
 
 /** The only wallet check for a guided step. Wrong, unknown, and conflicting chains are the same state. */
 export function useFlowReadiness(): WalkthroughWallet {
@@ -40,9 +39,44 @@ function shownText(value: string | null | undefined): string | null {
 }
 
 /**
+ * The one sentence in the footer. The wallet sentence wins. A busy prepare shows none.
+ * Callers pass an existing step sentence; this function does not invent copy.
+ */
+export function footerReasonText({
+  readiness,
+  busy,
+  nextDisabled,
+  missing = null,
+  reason = null,
+}: {
+  readiness: WalkthroughWallet
+  busy: boolean
+  nextDisabled: boolean
+  missing?: string | null
+  reason?: string | null
+}): string | null {
+  const walletLine = footerBlockReason(readiness)
+  const stepLine = busy ? null : shownText(missing) ?? (nextDisabled ? shownText(reason) : null)
+  return walletLine ?? stepLine
+}
+
+/** Drop a step error when the wallet check changes, so the footer sentence is the only reason. */
+export function useClearOnReadinessChange(clear: () => void): void {
+  const readiness = useFlowReadiness()
+  const clearRef = useRef(clear)
+  clearRef.current = clear
+  const seen = useRef(readiness)
+  useEffect(() => {
+    if (seen.current === readiness) return
+    seen.current = readiness
+    clearRef.current()
+  }, [readiness])
+}
+
+/**
  * The one step footer. Disconnected shows Connect. Any other chain shows Switch.
  * Next is only rendered when the wallet is ready.
- * A hidden or disabled Next always has one plain reason. The wallet sentence wins.
+ * A hidden or unavailable Next always has one plain reason. The wallet sentence wins.
  */
 export function GuidedStepFooter({
   onBack,
@@ -56,24 +90,20 @@ export function GuidedStepFooter({
   onNext: () => void
   nextDisabled?: boolean
   busy?: boolean
-  /** Existing step block, shown when the wallet is ready and Next stays disabled. */
+  /** Existing step block, shown when the wallet is ready and Next stays unavailable. */
   reason?: string | null
-  /** Step-level gap, such as an empty amount. The wallet sentence replaces it. */
+  /** Step-level gap, such as an amount the form will not accept. The wallet sentence replaces it. */
   missing?: string | null
 }) {
   const readiness = useFlowReadiness()
   const reasonId = useId()
-  const walletLine = footerBlockReason(readiness)
-  const stepLine = busy ? null : shownText(missing) ?? (nextDisabled ? shownText(reason) : null)
-  const line = walletLine ?? stepLine
+  const line = footerReasonText({ readiness, busy, nextDisabled, missing, reason })
   const describedBy = line ? reasonId : undefined
   return (
     <div className="guided-footer" data-testid="guided-footer">
-      {line ? (
-        <p id={reasonId} className="footer-reason" role="status" aria-live="polite" data-testid="footer-reason">
-          {line}
-        </p>
-      ) : null}
+      <p id={reasonId} className="footer-reason" role="status" aria-live="polite" data-testid="footer-reason">
+        {line ?? ""}
+      </p>
       <StepFooter onBack={onBack}>
         {readiness === "wrong-network" ? (
           <SwitchToSepoliaButton describedBy={describedBy} />
@@ -82,6 +112,7 @@ export function GuidedStepFooter({
         ) : (
           <ActionButton
             type="button"
+            keepFocusable
             disabled={nextDisabled || shownText(missing) != null}
             aria-describedby={describedBy}
             onClick={() => void onNext()}

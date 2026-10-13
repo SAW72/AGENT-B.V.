@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import { TestEthNote } from "./firstRun"
-import { ENTER_AMOUNT_TO_CONTINUE, GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
+import { GuidedStepFooter, flowMayAdvance, useClearOnReadinessChange, useFlowReadiness } from "./guidedFooter"
 import {
   ActionButton,
   ActionStatus,
@@ -1184,6 +1184,7 @@ function CreateForm({
   useEffect(() => {
     if (problem) setHeldError(problem.message)
   }, [problem?.message])
+  useClearOnReadinessChange(() => setHeldError(null))
   useEffect(() => {
     if (!guided) return
     const id = parseBytes32(escrowId)
@@ -1381,20 +1382,21 @@ function CreateForm({
       return
     }
     if (step === 3) {
-      if (value.trim() === "") return
-      const earlier = firstFundProblem(3, fundFields)
-      if (earlier && earlier.step < 3) {
-        setHeldError(earlier.message)
-        navigate(flowHref("fund", earlier.step, { escrow: parseBytes32(escrowId) }), { allowStep: true })
+      const blocked = firstFundProblem(4, fundFields)
+      if (blocked && blocked.step < 3) {
+        setHeldError(blocked.message)
+        navigate(flowHref("fund", blocked.step, { escrow: parseBytes32(escrowId) }), { allowStep: true })
         return
       }
+      if (blocked) return
       const ok = await onSubmit()
       if (ok) goFund(4)
     }
   }
 
   const step = problem ? problem.step : guided ? flowStep.display : 1
-  const amountMissing = Boolean(guided && step === 3 && value.trim() === "")
+  const amountBlock = guided && step === 3 ? firstFundProblem(4, fundFields) : null
+  const amountMissing = amountBlock?.step === 3 ? amountBlock.message : null
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
 
@@ -1529,7 +1531,7 @@ function CreateForm({
             onBack={backFund}
             onNext={() => void onNext()}
             busy={session.preparing}
-            missing={amountMissing ? ENTER_AMOUNT_TO_CONTINUE : null}
+            missing={amountMissing}
           />
         ) : null}
         {guided && session.error && step < 4 ? (

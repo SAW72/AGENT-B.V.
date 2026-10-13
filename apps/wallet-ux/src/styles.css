@@ -116,7 +116,8 @@ button.link-button {
   width: auto;
 }
 
-button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:disabled,
+button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 form > button { margin: 0 8px 8px 0; }
 
 a { color: #1e4d78; }
@@ -630,6 +631,10 @@ button.task-link.secondary {
   max-width: 100%;
 }
 
+.footer-reason:empty {
+  margin: 0;
+}
+
 .step-actions {
   display: flex;
   align-items: center;
@@ -637,7 +642,7 @@ button.task-link.secondary {
   margin-top: 16px;
 }
 
-.guided-footer .footer-reason + .step-actions {
+.guided-footer .footer-reason:not(:empty) + .step-actions {
   margin-top: 8px;
 }
 

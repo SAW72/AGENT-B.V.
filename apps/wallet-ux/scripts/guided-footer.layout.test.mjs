@@ -14,7 +14,7 @@ const PAYER_BOT = "0x2c2859b9e712890799696d217e9fe2eec1151822ed1b7168785b38991dc
 const PAYEE_BOT = "0xc62c848cf38434b66945ed12b266365ef9390b0281b0ca6bc20ba7ab46a06d2f"
 const CONNECT = "Connect a wallet to continue."
 const SWITCH = "Switch your wallet to Base Sepolia to continue."
-const AMOUNT = "Enter an amount to continue."
+const AMOUNT = "Enter an amount of test ETH, such as 0.001."
 
 function chromePath() {
   if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH
@@ -126,7 +126,12 @@ async function connect(page) {
 async function clickNext(page) {
   await page.waitForFunction(() => {
     const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-    return button instanceof HTMLButtonElement && !button.disabled && button.textContent === "Next"
+    return (
+      button instanceof HTMLButtonElement &&
+      !button.disabled &&
+      button.getAttribute("aria-disabled") !== "true" &&
+      button.textContent === "Next"
+    )
   })
   await page.click("[data-testid=guided-footer] [data-action-button]")
 }
@@ -289,7 +294,11 @@ describe("guided footer reasons at 390x844", () => {
       await page.waitForFunction((text) => document.querySelector("[data-testid=footer-reason]")?.textContent === text, {}, AMOUNT)
       const disabled = await page.$eval(
         "[data-testid=guided-footer] [data-action-button]",
-        (el) => el instanceof HTMLButtonElement && el.disabled && el.textContent === "Next",
+        (el) =>
+          el instanceof HTMLButtonElement &&
+          el.getAttribute("aria-disabled") === "true" &&
+          !el.disabled &&
+          el.textContent === "Next",
       )
       expect(disabled).toBe(true)
       const view = await measure(page)

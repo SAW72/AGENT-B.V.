@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { presentError } from "./format"
+import { useClearOnReadinessChange } from "./guidedFooter"
 
 /** Shown on the clicked Prepare button while its result is still being built. */
 export const PREPARING_LABEL = "Preparing…"
@@ -45,6 +46,7 @@ export function usePrepareSession<T>(slot: string, active: string | null) {
   const [reveal, setReveal] = useState(0)
   const preparingRef = useRef(false)
   const nodeRef = useRef<HTMLElement | null>(null)
+  useClearOnReadinessChange(() => setError(null))
 
   const setNode = useCallback((node: HTMLElement | null) => {
     nodeRef.current = node
