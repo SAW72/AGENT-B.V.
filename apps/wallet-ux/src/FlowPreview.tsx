@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { formatEther, parseEther, type Address, type Hex } from "viem"
 import { useAccount, useBalance, usePublicClient, useSendTransaction, useSwitchChain, useWalletClient } from "wagmi"
 import { TestEthNote } from "./firstRun"
-import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
+import { ENTER_AMOUNT_TO_CONTINUE, GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
 import {
   ActionButton,
   ActionStatus,
@@ -1381,6 +1381,7 @@ function CreateForm({
       return
     }
     if (step === 3) {
+      if (value.trim() === "") return
       const earlier = firstFundProblem(3, fundFields)
       if (earlier && earlier.step < 3) {
         setHeldError(earlier.message)
@@ -1393,6 +1394,7 @@ function CreateForm({
   }
 
   const step = problem ? problem.step : guided ? flowStep.display : 1
+  const amountMissing = Boolean(guided && step === 3 && value.trim() === "")
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
 
@@ -1523,7 +1525,12 @@ function CreateForm({
           </>
         ) : null}
         {guided && step < 4 ? (
-          <GuidedStepFooter onBack={backFund} onNext={() => void onNext()} busy={session.preparing} />
+          <GuidedStepFooter
+            onBack={backFund}
+            onNext={() => void onNext()}
+            busy={session.preparing}
+            missing={amountMissing ? ENTER_AMOUNT_TO_CONTINUE : null}
+          />
         ) : null}
         {guided && session.error && step < 4 ? (
           <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} />

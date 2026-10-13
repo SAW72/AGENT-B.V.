@@ -22,12 +22,13 @@ function connectLabel(name: string): string {
   return name === "Injected" ? "Connect wallet" : `Connect ${name}`
 }
 
-export function SwitchToSepoliaButton() {
+export function SwitchToSepoliaButton({ describedBy }: { describedBy?: string }) {
   const { switchChain, isPending } = useSwitchChain()
   return (
     <button
       type="button"
       data-testid="journey-switch"
+      aria-describedby={describedBy}
       disabled={isPending}
       onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
     >
@@ -36,13 +37,13 @@ export function SwitchToSepoliaButton() {
   )
 }
 
-export function ConnectWalletButton() {
+export function ConnectWalletButton({ describedBy }: { describedBy?: string }) {
   const { connect, connectors, isPending } = useConnect()
   const choices = visibleConnectors(connectors)
   const first = choices[0]
   if (!first) {
     return (
-      <button type="button" data-testid="journey-connect" disabled>
+      <button type="button" data-testid="journey-connect" aria-describedby={describedBy} disabled>
         Connect wallet
       </button>
     )
@@ -52,6 +53,7 @@ export function ConnectWalletButton() {
       <button
         type="button"
         data-testid="journey-connect"
+        aria-describedby={describedBy}
         disabled={isPending}
         onClick={() => connect({ connector: first })}
       >
@@ -62,6 +64,7 @@ export function ConnectWalletButton() {
           key={connector.uid}
           type="button"
           className="secondary"
+          aria-describedby={describedBy}
           disabled={isPending}
           onClick={() => connect({ connector })}
         >

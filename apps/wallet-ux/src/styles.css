@@ -618,11 +618,27 @@ button.task-link.secondary {
 }
 .step-dot.upcoming .step-dot-mark { font-weight: 400; }
 
+.guided-footer {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.footer-reason {
+  margin: 16px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
 .step-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-top: 16px;
+}
+
+.guided-footer .footer-reason + .step-actions {
+  margin-top: 8px;
 }
 
 .back-button {
