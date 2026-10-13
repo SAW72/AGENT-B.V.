@@ -16,6 +16,13 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Test coverage reports (CI uploads these as artifacts)
+coverage/
+lcov.info
 
 # Runner output
 audit_report.json
