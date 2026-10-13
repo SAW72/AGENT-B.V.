@@ -1,7 +1,8 @@
 import { TASKS, navigate, taskHref, useWalletRoute } from "./routes"
 
-export function TaskPicker({ voteReason }: { voteReason: string | null }) {
+export function TaskPicker({ voteReason, secondary = false }: { voteReason: string | null; secondary?: boolean }) {
   const route = useWalletRoute()
+  const linkClass = secondary ? "task-link secondary" : "task-link"
   return (
     <section className="card" aria-label="What do you want to do?" data-testid="task-picker">
       <h2>What do you want to do?</h2>
@@ -15,7 +16,7 @@ export function TaskPicker({ voteReason }: { voteReason: string | null }) {
               <p>{task.text}</p>
               {blocked ? (
                 <>
-                  <button type="button" className="task-link" disabled>
+                  <button type="button" className={linkClass} disabled>
                     {task.title}
                   </button>
                   <p className="action-reason" data-testid="vote-task-reason">
@@ -24,7 +25,7 @@ export function TaskPicker({ voteReason }: { voteReason: string | null }) {
                 </>
               ) : (
                 <a
-                  className="task-link"
+                  className={linkClass}
                   href={href}
                   onClick={(event) => {
                     event.preventDefault()

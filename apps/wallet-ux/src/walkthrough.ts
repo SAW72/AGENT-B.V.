@@ -1,6 +1,7 @@
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import type { WalletChainId } from "./guard"
-import type { FlowId } from "./routes"
+
+export { FLOW_STEP_LABELS } from "./routes"
 
 /** Home walkthrough for someone opening the app for the first time. */
 export const CONNECT_STEP_LABEL = "Connect your wallet"
@@ -15,16 +16,6 @@ export const WRONG_NETWORK_NOTE =
 export const BASE_SEPOLIA_FAUCET_DOCS_URL = "https://docs.base.org/get-started/get-funds"
 export const TEST_ETH_LINK_LABEL = "Base Sepolia faucet"
 export const TEST_ETH_NOTE = "Get free test ETH from a Base Sepolia faucet. It has no real value."
-
-/** Plain names for the fields inside a flow. The state word (Done, Now, Later) stays in front. */
-export const FLOW_STEP_LABELS: Record<FlowId, readonly string[]> = {
-  fund: ["Who is paid", "Which bots", "Amount and time", "Review and send"],
-  release: ["The payment", "Review and send"],
-  refund: ["The payment", "Review and send"],
-  dispute: ["The case", "Review and send"],
-  vote: ["Your vote", "Review and send"],
-  withdraw: ["Your balance", "Review and send"],
-}
 
 export type WalkthroughWallet = "disconnected" | "wrong-network" | "ready"
 export type WalkthroughPlace = "home" | "funding" | "review"

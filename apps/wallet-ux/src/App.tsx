@@ -1,15 +1,14 @@
 import { useMemo, useState } from "react"
 import type { Address } from "viem"
 import { useQuery } from "@tanstack/react-query"
-import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi"
+import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ADDRESSES, addressBook, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { visibleConnectors } from "./connectors"
 import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
-import { FirstRun } from "./firstRun"
 import { PendingStrip, FlowPreview } from "./FlowPreview"
+import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
 import { useWalletRoute, type FlowId } from "./routes"
-import { TaskPicker } from "./taskPicker"
 import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
@@ -31,6 +30,7 @@ import { createSepoliaClient, panelNotSeated, readGateStatus, rpcHost, type Gate
 import { relayerConfigFromEnv } from "./relayer"
 import { ReputationView } from "./reputation/ReputationView"
 import { useConnectorChainId } from "./useWalletChain"
+import { walletReadiness } from "./walkthrough"
 import { AddressRow, NoteList, TextRow } from "./ui"
 import { rpcUrl } from "./wagmi"
 
@@ -244,7 +244,6 @@ export function App() {
   const account = useAccount()
   const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
   const { disconnect } = useDisconnect()
-  const { switchChain, isPending: switchPending, error: switchError } = useSwitchChain()
   const connectorChainId = useConnectorChainId(account.connector, account.isConnected)
   const walletChainId = account.isConnected
     ? resolveWalletChainId(account.chainId, connectorChainId)
@@ -278,7 +277,7 @@ export function App() {
     refetchInterval: 15_000,
   })
 
-  const showSwitch = account.isConnected && walletChainId !== BASE_SEPOLIA_CHAIN_ID
+  const readiness = walletReadiness(account.isConnected, walletChainId)
   const [systemOpen, setSystemOpen] = useState(false)
   const route = useWalletRoute()
   const voteReason = voteTaskReason(useVoteSeat(ADDRESSES.disputePanel), account.address)
@@ -290,27 +289,13 @@ export function App() {
         <span className="pill info" data-testid="page-testnet">
           {TESTNET_LINE}
         </span>
-        <span className={showSwitch ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
+        <span className={readiness === "wrong-network" ? "wallet-chip warn" : "wallet-chip"} data-testid="wallet-chip">
           {account.isConnected && account.address ? (
             <span className="mono">{shortAddress(account.address)}</span>
           ) : (
             <span>No wallet</span>
           )}
-          {account.isConnected ? (
-            showSwitch ? (
-              <button
-                type="button"
-                className="secondary"
-                data-testid="header-switch"
-                onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
-                disabled={switchPending}
-              >
-                {switchPending ? "Switching…" : "Switch to Base Sepolia"}
-              </button>
-            ) : (
-              <span className="chip-network">Base Sepolia</span>
-            )
-          ) : null}
+          <HeaderNetwork connected={account.isConnected} chainId={walletChainId} />
         </span>
       </header>
       <p className="lede">
@@ -328,31 +313,10 @@ export function App() {
           RPC request failed. {errorText(chainQuery.error)} Contract reads are off.
         </p>
       ) : null}
-      {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? (
-        <div className="banner" role="alert" data-testid="chain-banner">
-          <p>{guard.reason}</p>
-          {showSwitch ? (
-            <button
-              type="button"
-              onClick={() => switchChain({ chainId: BASE_SEPOLIA_CHAIN_ID })}
-              disabled={switchPending}
-            >
-              {switchPending ? "Switching…" : "Switch wallet to Base Sepolia"}
-            </button>
-          ) : null}
-          {switchError ? <p>{errorText(switchError)}</p> : null}
-        </div>
-      ) : null}
+      {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? <ChainBanner reason={guard.reason} /> : null}
 
       <PendingStrip />
-      {route.flow == null ? (
-        <>
-          <FirstRun />
-          <TaskPicker voteReason={voteReason} />
-        </>
-      ) : (
-        <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />
-      )}
+      {route.flow == null ? <HomeScreen voteReason={voteReason} /> : <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />}
 
       <details
         className="system-status"

@@ -23,15 +23,15 @@ The connected header at 320px measures 48px tall, on two rows: the Agent-BV name
 | `before-*-home` | Phase 1 long page, before guided flows |
 | `before-320-header` | Phase 1 header at 320px with a wallet connected |
 | `after-*-first-run-disconnected` | Start here, no wallet. Current step is Connect your wallet |
-| `after-*-first-run-wrong-network` | Start here on the wrong chain. Current step is Switch to Base Sepolia |
+| `after-*-first-run-wrong-network` | Start here on the wrong chain. One Switch to Base Sepolia button, on the card. The banner is text and the header pill is a status label |
 | `after-*-first-run-ready` | Start here on Base Sepolia. Current step is Fill in the escrow, with the faucet link |
 | `after-*-task-picker` | Task picker under the walkthrough, wallet on Base Sepolia |
 | `after-390-chip-row` | Fund step 1 chip row at 390. Four named chips, wrapped, none clipped |
-| `after-*-carried-escrow` | `/app/?escrow=` then Release. The escrow id is filled. Nothing is prepared or sent |
+| `after-*-carried-escrow` | `/app/?escrow=` then Release. The escrow id is filled. Release is named once as unavailable. Nothing is prepared or sent |
 | `after-*-fund-step1` | Fund, escrow id and payee |
 | `after-*-fund-step2` | Fund, bot identifiers |
 | `after-*-fund-step3` | Fund, amount and time window |
-| `after-*-fund-review` | Fund review, full escrow id with Copy, nothing sent |
+| `after-*-fund-review` | Fund review. Step 4 of 4 is the only "Now · Review and send" line. Nothing sent |
 | `after-*-release-input` | Release input, live read, action unavailable |
 | `after-*-release-review` | `/app/release?escrow=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-refund-input` | Refund input, live read, action unavailable |

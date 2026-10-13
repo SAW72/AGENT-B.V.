@@ -102,9 +102,21 @@ import {
 } from "./submit"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { useConnectorChainId } from "./useWalletChain"
-import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
+import {
+  FLOW_CATALOG,
+  FLOW_STEP_LABELS,
+  flowHref,
+  flowTitle,
+  historyAllowsStep,
+  navigate,
+  replaceRoute,
+  shownStep,
+  unavailableLine,
+  walletHome,
+  type WalletRoute,
+} from "./routes"
 import { FilledFromLink, IdRow, ReadonlyValue, StepFooter, Stepper } from "./steps"
-import { CONNECT_NOTE, FLOW_STEP_LABELS, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
+import { CONNECT_NOTE, WRONG_NETWORK_NOTE, journeyNow, walletReadiness } from "./walkthrough"
 import { CalldataDetails, ChunkedHex, CopyButton, LabeledChunks } from "./ui"
 import { dismissPending, usePendingReceipt, usePendingViews, type PendingView } from "./usePendingReceipt"
 import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
@@ -996,7 +1008,6 @@ export function FlowPreview({
       <IdForm
         slot="release"
         idPrefix="release"
-        title="Release a payment"
         buttonLabel="Prepare this payout"
         missingId={FORM_ERRORS.releaseId}
         action="payout"
@@ -1007,7 +1018,6 @@ export function FlowPreview({
         active={active}
         onActivate={setActive}
         guided={guidedFor("release", route)}
-        otherFlow="refund"
         build={(escrowId) => previewRelease(escrow, escrowId)}
       />
       ) : null}
@@ -1015,7 +1025,6 @@ export function FlowPreview({
       <IdForm
         slot="refund"
         idPrefix="refund"
-        title="Refund a payment"
         buttonLabel="Prepare this refund"
         missingId={FORM_ERRORS.refundId}
         action="refund"
@@ -1027,7 +1036,6 @@ export function FlowPreview({
         active={active}
         onActivate={setActive}
         guided={guidedFor("refund", route)}
-        otherFlow="release"
         build={(escrowId) => previewRefund(escrow, escrowId)}
       />
       ) : null}
@@ -1390,9 +1398,11 @@ function CreateForm({
   const step = problem ? problem.step : guided ? flowStep.display : 1
   const show = (n: number) => guided == null || step === n
   const plainLead = `You are sending ${value.trim() === "" ? "test ETH" : `${value.trim()} test ETH`} into escrow for the payee below.`
+  const journeyLine = journeyNow(readiness, step < 4 ? "funding" : "review")
+  const currentStepLine = `Now · ${FLOW_STEP_LABELS.fund[step - 1] ?? ""}`
 
   return (
-    <section id="fund-form" className={guided ? "guided-flow" : undefined} aria-label="Fund an escrow">
+    <section id="fund-form" className={guided ? "guided-flow" : undefined} aria-label={flowTitle("fund")}>
       <form
         id="create-claim"
         onSubmit={(event) => {
@@ -1404,7 +1414,7 @@ function CreateForm({
           if (step < 4 && readiness === "ready") void onNext()
         }}
       >
-        {guided ? <p data-testid="journey-now">{journeyNow(readiness, step < 4 ? "funding" : "review")}</p> : null}
+        {guided && journeyLine !== currentStepLine ? <p data-testid="journey-now">{journeyLine}</p> : null}
         {guided && readiness === "wrong-network" && step < 4 ? (
           <p className="banner" role="status" data-testid="wrong-network-note">
             {WRONG_NETWORK_NOTE}
@@ -1416,7 +1426,7 @@ function CreateForm({
           </p>
         ) : null}
         {guided ? <Stepper step={step} total={4} labels={FLOW_STEP_LABELS.fund} /> : null}
-        <ActionTestnet title="Fund an escrow" />
+        <ActionTestnet title={flowTitle("fund")} />
         {heldError ? (
           <p className="warn-note" role="status" data-testid="step-error">
             {heldError}
@@ -1614,7 +1624,6 @@ function PostExpiryRefundOrder() {
 function IdForm({
   slot,
   idPrefix,
-  title,
   buttonLabel,
   missingId,
   action,
@@ -1626,12 +1635,10 @@ function IdForm({
   active,
   onActivate,
   guided = null,
-  otherFlow,
   build,
 }: {
-  slot: PrepareSlot
+  slot: "release" | "refund"
   idPrefix: string
-  title: string
   buttonLabel: string
   missingId: string
   action: string
@@ -1643,7 +1650,6 @@ function IdForm({
   active: PrepareSlot | null
   onActivate: (slot: PrepareSlot) => void
   guided?: GuidedStep | null
-  otherFlow?: "release" | "refund"
   build: (escrowId: Hex) => CallPreview
 }) {
   const carried = useCarriedIds()
@@ -1681,7 +1687,9 @@ function IdForm({
   }, [carried.escrowId, guided?.linkEscrow, setEscrowId, touched])
 
   const step = guided ? flowStep.display : 1
-  const other = otherFlow ? (otherFlow === "release" ? gate.release : gate.refund) : null
+  const title = flowTitle(slot)
+  const otherFlow = FLOW_CATALOG[slot].counterpart
+  const other = otherFlow === "release" ? gate.release : otherFlow === "refund" ? gate.refund : null
   const plainLead =
     slot === "release"
       ? "You are releasing this payment. The payee is credited and can then withdraw the test ETH."
@@ -1790,25 +1798,29 @@ function IdForm({
                 <p className="hint">Read from the escrow.</p>
               </div>
             ) : null}
-            {guided && other && gate.status === "ready" ? (
-              other.allowed ? (
-                <p>
-                  <a
-                    href={flowHref(otherFlow!, 1, { escrow: parseBytes32(escrowId) })}
-                    data-testid="other-action"
-                    onClick={(event) => {
-                      event.preventDefault()
-                      navigate(flowHref(otherFlow!, 1, { escrow: parseBytes32(escrowId) }))
-                    }}
-                  >
-                    {otherFlow === "release" ? "Release a payment" : "Refund a payment"}
-                  </a>
-                </p>
-              ) : (
-                <p className="action-reason" data-testid="other-action">
-                  {otherFlow === "release" ? "Release a payment" : "Refund a payment"} is unavailable. {other.reason}
-                </p>
-              )
+            {guided && otherFlow && other?.allowed && gate.status === "ready" ? (
+              <p>
+                <a
+                  href={flowHref(otherFlow, 1, { escrow: parseBytes32(escrowId) })}
+                  data-testid="other-action"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    navigate(flowHref(otherFlow, 1, { escrow: parseBytes32(escrowId) }))
+                  }}
+                >
+                  {flowTitle(otherFlow)}
+                </a>
+              </p>
+            ) : null}
+            {guided && otherFlow && other && !other.allowed && !gated && gate.status === "ready" && other.reason ? (
+              <p className="action-reason" data-testid="other-action">
+                {unavailableLine(otherFlow, other.reason)}
+              </p>
+            ) : null}
+            {guided && gated && decision.reason ? (
+              <p className="action-reason" data-testid="action-reason">
+                {unavailableLine(slot, decision.reason)}
+              </p>
             ) : null}
           </>
         ) : null}
@@ -1842,7 +1854,6 @@ function IdForm({
               <ActionButton
                 type="button"
                 disabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
-                reason={gated ? decision.reason : gate.status === "reading" ? READING_ESCROW_TEXT : null}
                 onClick={() => void onNext()}
                 state={session.preparing ? { status: "busy", label: "Preparing…" } : { status: "idle", label: "Next" }}
               />
@@ -2101,7 +2112,7 @@ function OpenDisputeForm({
   }
 
   return (
-    <section id="dispute-form" className={guided ? "guided-flow" : undefined} aria-label="Open a dispute">
+    <section id="dispute-form" className={guided ? "guided-flow" : undefined} aria-label={flowTitle("dispute")}>
     <form
       id="open-dispute"
       onSubmit={(event) => {
@@ -2114,7 +2125,7 @@ function OpenDisputeForm({
       }}
     >
       {guided ? <Stepper step={step} total={2} labels={FLOW_STEP_LABELS.dispute} /> : null}
-      <ActionTestnet title="Open a dispute" />
+      <ActionTestnet title={flowTitle("dispute")} />
       {!guided || step === 1 ? (
         <>
       <p className="muted">{FILE_DISPUTE_TEXT}</p>

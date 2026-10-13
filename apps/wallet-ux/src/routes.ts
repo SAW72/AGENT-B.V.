@@ -10,18 +10,81 @@ export function walletHome(): string {
   return `${WALLET_BASE}/`
 }
 
-export const FLOWS = ["fund", "release", "refund", "dispute", "vote", "withdraw"] as const
+type FlowShape = {
+  title: string
+  text: string
+  stepLabels: readonly string[]
+  steps: number
+  /** The other release/refund action. Only those two flows set this. */
+  counterpart?: "release" | "refund"
+}
 
-export type FlowId = (typeof FLOWS)[number]
+function defineFlow(input: {
+  title: string
+  text: string
+  stepLabels: readonly string[]
+  counterpart?: "release" | "refund"
+}): FlowShape {
+  return { ...input, steps: input.stepLabels.length }
+}
+
+/**
+ * The only flow catalog. Task names, step labels, href ids, step headers,
+ * and unavailable sentences all read this object.
+ */
+export const FLOW_CATALOG = {
+  fund: defineFlow({
+    title: "Fund an escrow",
+    text: "Send test ETH into a new escrow for a payee.",
+    stepLabels: ["Who is paid", "Which bots", "Amount and time", "Review and send"],
+  }),
+  release: defineFlow({
+    title: "Release a payment",
+    text: "Pay the payee from an escrow that can be released.",
+    stepLabels: ["The payment", "Review and send"],
+    counterpart: "refund",
+  }),
+  refund: defineFlow({
+    title: "Refund a payment",
+    text: "Send the escrowed test ETH back to the payer.",
+    stepLabels: ["The payment", "Review and send"],
+    counterpart: "release",
+  }),
+  dispute: defineFlow({
+    title: "Open a dispute",
+    text: "Ask the panel to decide who should get the test ETH.",
+    stepLabels: ["The case", "Review and send"],
+  }),
+  vote: defineFlow({
+    title: "Vote (arbitrators)",
+    text: "Cast an arbitrator vote on a dispute.",
+    stepLabels: ["Your vote", "Review and send"],
+  }),
+  withdraw: defineFlow({
+    title: "Withdraw",
+    text: "Move credited test ETH to this connected wallet.",
+    stepLabels: ["Your balance", "Review and send"],
+  }),
+}
+
+export type FlowId = keyof typeof FLOW_CATALOG
+
+export const FLOWS = Object.keys(FLOW_CATALOG) as FlowId[]
 
 /** Input steps plus Review. Sign, pending, and confirmed stay on the Review button. */
-export const FLOW_STEPS: Record<FlowId, number> = {
-  fund: 4,
-  release: 2,
-  refund: 2,
-  dispute: 2,
-  vote: 2,
-  withdraw: 2,
+export const FLOW_STEPS = Object.fromEntries(FLOWS.map((id) => [id, FLOW_CATALOG[id].steps])) as Record<FlowId, number>
+
+export const FLOW_STEP_LABELS = Object.fromEntries(FLOWS.map((id) => [id, FLOW_CATALOG[id].stepLabels])) as {
+  [K in FlowId]: (typeof FLOW_CATALOG)[K]["stepLabels"]
+}
+
+export function flowTitle(flow: FlowId): string {
+  return FLOW_CATALOG[flow].title
+}
+
+/** One sentence. The flow name always comes from the catalog, never from a second copy. */
+export function unavailableLine(flow: FlowId, reason: string): string {
+  return `${flowTitle(flow)} is unavailable. ${reason}`
 }
 
 export const STEP_IGNORED = "That step in the link was ignored."
@@ -219,11 +282,8 @@ export function useWalletRoute(): WalletRoute {
   return useSyncExternalStore(subscribeRoute, routeSnapshot, () => HOME)
 }
 
-export const TASKS: { flow: FlowId; title: string; text: string }[] = [
-  { flow: "fund", title: "Fund an escrow", text: "Send test ETH into a new escrow for a payee." },
-  { flow: "release", title: "Release a payment", text: "Pay the payee from an escrow that can be released." },
-  { flow: "refund", title: "Refund a payment", text: "Send the escrowed test ETH back to the payer." },
-  { flow: "dispute", title: "Open a dispute", text: "Ask the panel to decide who should get the test ETH." },
-  { flow: "vote", title: "Vote (arbitrators)", text: "Cast an arbitrator vote on a dispute." },
-  { flow: "withdraw", title: "Withdraw", text: "Move credited test ETH to this connected wallet." },
-]
+export const TASKS: { flow: FlowId; title: string; text: string }[] = FLOWS.map((flow) => ({
+  flow,
+  title: FLOW_CATALOG[flow].title,
+  text: FLOW_CATALOG[flow].text,
+}))

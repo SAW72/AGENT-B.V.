@@ -556,6 +556,13 @@ a.task-link {
   color: #f7f4ee;
 }
 
+a.task-link.secondary,
+button.task-link.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
 .readonly-card {
   border: 1px dashed var(--line);
   border-radius: 8px;

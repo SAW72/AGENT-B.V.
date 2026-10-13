@@ -3,7 +3,7 @@ import { WRONG_NETWORK_LABEL } from "./actionButton"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { visibleConnectors } from "./connectors"
 import { resolveWalletChainId } from "./guard"
-import { flowHref, navigate } from "./routes"
+import { flowHref, flowTitle, navigate } from "./routes"
 import { Stepper } from "./steps"
 import { useConnectorChainId } from "./useWalletChain"
 import {
@@ -123,7 +123,7 @@ export function FirstRun() {
             navigate(flowHref("fund", 1))
           }}
         >
-          Fund an escrow
+          {flowTitle("fund")}
         </a>
       ) : null}
     </section>

@@ -11,7 +11,23 @@ import { actionProgress, GAS_FEE_TEXT } from "./actionProgress"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
 import { previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
 import { DISPUTE_ZERO_IGNORED, ESCROW_ZERO_IGNORED, resetCarriedIds } from "./carriedIds"
-import { PAGE_IGNORED, STEP_IGNORED, navigate, readWalletRoute, useWalletRoute, walletHome } from "./routes"
+import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
+import {
+  FLOW_CATALOG,
+  FLOW_STEP_LABELS,
+  FLOW_STEPS,
+  FLOWS,
+  PAGE_IGNORED,
+  STEP_IGNORED,
+  TASKS,
+  flowHref,
+  flowTitle,
+  navigate,
+  readWalletRoute,
+  unavailableLine,
+  useWalletRoute,
+  walletHome,
+} from "./routes"
 import { TaskPicker } from "./taskPicker"
 import { pendingSlot, pendingStorageKey, resetPendingStore } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
@@ -19,7 +35,7 @@ import { resetPendingRuntime } from "./usePendingReceipt"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
 import { DEAL_STANDS_LABEL } from "./walletCopy"
-import { CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
+import { FLOW_STEP_LABELS as WALKTHROUGH_STEP_LABELS, CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
 const escrow = "0x3d660502D75f1e97b08c110255921b437A3C4C42" as Address
@@ -50,6 +66,7 @@ const { sendTransactionAsync, world } = vi.hoisted(() => ({
     credit: 10n ** 15n,
     chainId: 84532,
     connected: true,
+    missing: false,
     switchChain: vi.fn(),
   },
 }))
@@ -72,7 +89,8 @@ const publicClient = {
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
     }
     if (functionName === "escrows") {
-      return [escrow, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, `0x${"00".repeat(32)}`, ZERO]
+      const payer = world.missing ? ZERO : escrow
+      return [payer, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, `0x${"00".repeat(32)}`, ZERO]
     }
     return 0n
   },
@@ -139,6 +157,7 @@ beforeEach(() => {
   sendTransactionAsync.mockClear()
   world.chainId = 84532
   world.connected = true
+  world.missing = false
   world.switchChain.mockClear()
   window.history.replaceState(null, "", walletHome())
   navigate(walletHome())
@@ -249,7 +268,11 @@ describe("phase 2 guided flows", () => {
     expect(within(ethNote).getAllByRole("link")).toHaveLength(1)
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const review = await waitFor(() => screen.getByTestId("review-step"))
-    expect(screen.getByTestId("journey-now").textContent).toBe("Now · Review and send")
+    expect(screen.queryByTestId("journey-now")).toBeNull()
+    expect(screen.queryAllByText("Now · Review and send")).toHaveLength(1)
+    expect(within(screen.getByTestId("stepper")).getAllByRole("listitem")[3]?.querySelector(".step-dot-word")?.textContent).toBe(
+      "Now · Review and send",
+    )
     expect(screen.queryByTestId("test-eth-note")).toBeNull()
     expect(screen.getByTestId("step-count").textContent).toBe("Step 4 of 4")
     expect(within(review).getByTestId("review-plain").textContent).toContain("0.001 test ETH")
@@ -568,6 +591,78 @@ describe("phase 2 guided flows", () => {
     await waitFor(() => expect(relayerCalls().some((call) => String(call[0]).includes("/health"))).toBe(true))
     fetchSpy.mockRestore()
     vi.unstubAllEnvs()
+  })
+
+  it("keeps flow names, step labels, hrefs, and unavailable lines on one catalog", () => {
+    expect(WALKTHROUGH_STEP_LABELS).toBe(FLOW_STEP_LABELS)
+    expect(TASKS.map((task) => task.flow)).toEqual(FLOWS)
+    for (const flow of FLOWS) {
+      const defined = FLOW_CATALOG[flow]
+      expect(TASKS.find((task) => task.flow === flow)).toMatchObject({ title: defined.title, text: defined.text })
+      expect(FLOW_STEP_LABELS[flow]).toBe(defined.stepLabels)
+      expect(FLOW_STEPS[flow]).toBe(defined.stepLabels.length)
+      expect(flowHref(flow, 1)).toBe(`/app/${flow}`)
+      expect(flowTitle(flow)).toBe(defined.title)
+      expect(unavailableLine(flow, "Blocked.")).toBe(`${defined.title} is unavailable. Blocked.`)
+    }
+    expect(FLOW_CATALOG.release.counterpart).toBe("refund")
+    expect(FLOW_CATALOG.refund.counterpart).toBe("release")
+  })
+
+  it("names Release once when a carried escrow is not on the contract", async () => {
+    world.missing = true
+    render(<HomeTasks />)
+    navigate(`/app/?escrow=${id}`)
+    fireEvent.click(screen.getByRole("link", { name: flowTitle("release") }))
+    const notice = await waitFor(() => screen.getByTestId("action-reason"))
+    expect(notice.textContent).toBe(unavailableLine("release", "This escrow is not on the contract yet."))
+    expect(screen.getAllByText(/is unavailable/)).toHaveLength(1)
+    expect(screen.queryByText(/Refund a payment is unavailable/)).toBeNull()
+    expect(screen.queryByTestId("other-action")).toBeNull()
+    expect(notice.textContent).not.toContain("\u2013")
+    const next = screen.getByRole("button", { name: "Next" })
+    expect((next as HTMLButtonElement).disabled).toBe(true)
+    expect(next.previousElementSibling?.textContent ?? "").not.toContain("\u2013")
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(flowTitle("release"))
+    expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
+    expect(screen.queryByTestId("calldata-preview")).toBeNull()
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("shows one Switch button on the wrong-network home, with a text banner and a status pill", () => {
+    world.chainId = 1
+    world.connected = true
+    render(
+      <>
+        <HeaderNetwork connected chainId={1} />
+        <ChainBanner reason="Wallet is on Ethereum mainnet (chain id 1). Switch to Base Sepolia (chain id 84532). Reads and writes are refused." />
+        <HomeScreen voteReason={null} />
+      </>,
+    )
+    const switches = screen.getAllByRole("button", { name: "Switch to Base Sepolia" })
+    expect(switches).toHaveLength(1)
+    expect(switches[0]?.getAttribute("data-testid")).toBe("journey-switch")
+    expect(screen.queryByTestId("header-switch")).toBeNull()
+    expect(screen.getByTestId("chain-banner").querySelector("button")).toBeNull()
+    const pill = screen.getByTestId("header-network")
+    expect(pill.tagName).toBe("SPAN")
+    expect(pill.textContent).toBe("Not on Base Sepolia")
+    expect(screen.getByTestId("task-release").querySelector("a")?.classList.contains("secondary")).toBe(true)
+  })
+
+  it("renders task picker controls as secondary while the first-run card shows", () => {
+    render(<HomeScreen voteReason={null} />)
+    expect(screen.getByTestId("first-run")).toBeTruthy()
+    expect(screen.getByTestId("journey-fund").classList.contains("secondary")).toBe(false)
+    for (const flow of FLOWS) {
+      const control = screen.getByTestId(`task-${flow}`).querySelector("a, button")
+      expect(control?.classList.contains("task-link")).toBe(true)
+      expect(control?.classList.contains("secondary")).toBe(true)
+    }
+    cleanup()
+    render(<HomeScreen voteReason="Not seated" />)
+    expect(screen.getByTestId("task-vote").querySelector("button")?.classList.contains("secondary")).toBe(true)
   })
 
   it("carries a valid home escrow id into release, refund, and dispute without preparing", () => {
