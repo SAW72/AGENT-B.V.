@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:coverage": "mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-include=*.mjs --test-coverage-include=reputation/**/*.mjs --test-coverage-exclude=node_modules/** --test-coverage-exclude=test/** --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info test/*.test.mjs",
     "readonly": "node readonlyEscrow.mjs"
   },
   "engines": {
