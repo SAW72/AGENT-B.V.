@@ -116,7 +116,8 @@ button.link-button {
   width: auto;
 }
 
-button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:disabled,
+button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 form > button { margin: 0 8px 8px 0; }
 
 a { color: #1e4d78; }
@@ -618,11 +619,29 @@ button.task-link.secondary {
 }
 .step-dot.upcoming .step-dot-mark { font-weight: 400; }
 
+.guided-footer {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.footer-reason {
+  margin: 16px 0 0;
+  min-height: 1.45em;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
 .step-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-top: 16px;
+}
+
+.guided-footer .footer-reason + .step-actions {
+  margin-top: 8px;
 }
 
 .back-button {

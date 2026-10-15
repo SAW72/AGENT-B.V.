@@ -94,6 +94,7 @@ export function ActionButton({
   testId,
   disabled = false,
   reason,
+  keepFocusable = false,
   ...rest
 }: {
   state: ActionButtonState
@@ -102,6 +103,8 @@ export function ActionButton({
   testId?: string
   disabled?: boolean
   reason?: string | null
+  /** Guided Next stays in the tab order and announces its reason. Other buttons use `disabled`. */
+  keepFocusable?: boolean
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type" | "onClick" | "disabled">) {
   const busy = state.status === "busy" || state.status === "waiting-wallet" || state.status === "pending"
   const locked =
@@ -113,6 +116,7 @@ export function ActionButton({
     state.status === "unconfirmed" ||
     state.status === "confirmed"
   const shownReason = locked ? reason : null
+  const stayFocusable = keepFocusable && locked
   return (
     <>
       {shownReason ? (
@@ -125,9 +129,16 @@ export function ActionButton({
         data-testid={testId}
         {...rest}
         data-action-button={state.status}
-        disabled={locked}
+        disabled={stayFocusable ? false : locked}
+        aria-disabled={stayFocusable ? true : undefined}
         aria-busy={busy || undefined}
-        onClick={onClick}
+        onClick={(event) => {
+          if (locked) {
+            event.preventDefault()
+            return
+          }
+          onClick?.()
+        }}
       >
         {actionButtonLabel(state)}
       </button>

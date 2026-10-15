@@ -42,12 +42,33 @@ async function openFlow(path, ready) {
   await page.setViewport(VIEWPORT)
   await page.goto(`${base}${path}`, { waitUntil: "domcontentloaded", timeout: 30_000 })
   if (ready.click) {
-    await page.waitForSelector(ready.click)
-    await page.click(ready.click)
+    const deadline = Date.now() + 15_000
+    let clicked = false
+    while (Date.now() < deadline && !clicked) {
+      clicked = await page.evaluate((selector) => {
+        const el = document.querySelector(selector)
+        if (!(el instanceof HTMLElement) || !el.isConnected) return false
+        el.click()
+        return true
+      }, ready.click)
+      if (!clicked) await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    if (!clicked) throw new Error(`Could not click ${ready.click}`)
   }
-  await page.waitForSelector(ready.selector)
-  await page.waitForSelector("footer")
-  await page.waitForSelector(".step-actions")
+  await page.waitForFunction((selector) => {
+    const target = document.querySelector(selector)
+    const legal = document.querySelector("footer")
+    const actions = document.querySelector(".step-actions")
+    return Boolean(
+      target instanceof HTMLElement &&
+        target.isConnected &&
+        legal instanceof HTMLElement &&
+        legal.isConnected &&
+        legal.textContent?.includes("is a product of") &&
+        actions instanceof HTMLElement &&
+        actions.isConnected,
+    )
+  }, {}, ready.selector)
   return page
 }
 
@@ -81,7 +102,9 @@ describe("guided step footer at 390x844", () => {
     server = await createServer({
       configFile: join(appRoot, "vite.config.ts"),
       logLevel: "error",
-      server: { host: "127.0.0.1", port: 0, strictPort: false },
+      // Coverage files land while other workers run. A watching dev server
+      // would full-reload this page and destroy the puppeteer context.
+      server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     })
     await server.listen()
     const address = server.httpServer?.address()
@@ -90,7 +113,14 @@ describe("guided step footer at 390x844", () => {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ],
     })
   }, 60_000)
 

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
 import { actionProgress, GAS_FEE_TEXT } from "./actionProgress"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
-import { previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
+import { panelSubject, previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
 import { DISPUTE_ZERO_IGNORED, ESCROW_ZERO_IGNORED, resetCarriedIds } from "./carriedIds"
 import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
 import {
@@ -32,9 +32,18 @@ import { TaskPicker } from "./taskPicker"
 import { pendingSlot, pendingStorageKey, resetPendingStore } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
+import { currentNowSeconds } from "./nowClock"
+import { READING_ESCROW_TEXT } from "./escrowGate"
 import { VoteScreen } from "./VoteScreen"
-import { WithdrawScreen } from "./WithdrawScreen"
-import { DEAL_STANDS_LABEL } from "./walletCopy"
+import { WithdrawScreen, withdrawReadMode } from "./WithdrawScreen"
+import {
+  ALREADY_VOTED_TEXT,
+  CASE_READING_TEXT,
+  DEAL_STANDS_LABEL,
+  NOTHING_TO_WITHDRAW_TEXT,
+  WITHDRAW_HIDDEN_TEXT,
+  WITHDRAW_READING_TEXT,
+} from "./walletCopy"
 import { FLOW_STEP_LABELS as WALKTHROUGH_STEP_LABELS, CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -61,9 +70,23 @@ const { sendTransactionAsync, world } = vi.hoisted(() => ({
   sendTransactionAsync: vi.fn(async () => `0x${"11".repeat(32)}` as Hex),
   world: {
     arbitrator: true,
+    voted: false,
     state: 0,
     expiresAt: 4_000_000_000n,
     credit: 10n ** 15n,
+    creditReads: 0,
+    creditGate: null as Promise<void> | null,
+    withdrawReads: "allowed" as "pending" | "allowed" | "refused",
+    arbitratorReads: 0,
+    caseReads: 0,
+    caseGate: null as Promise<void> | null,
+    escrowReads: 0,
+    escrowGate: null as Promise<void> | null,
+    escrowDispute: `0x${"00".repeat(32)}` as Hex,
+    outcomeExists: false,
+    outcomeResolved: false,
+    outcomeUpheld: false,
+    outcomeSubject: `0x${"00".repeat(32)}` as Hex,
     chainId: 84532,
     connected: true,
     missing: false,
@@ -81,16 +104,30 @@ const publicClient = {
     }),
   }),
   readContract: async ({ functionName }: { functionName: string }) => {
-    if (functionName === "isArbitrator") return world.arbitrator
+    if (functionName === "isArbitrator") {
+      world.arbitratorReads += 1
+      return world.arbitrator
+    }
     if (functionName === "PANEL_SIZE") return 3n
-    if (functionName === "voted") return false
-    if (functionName === "pendingWithdrawals") return world.credit
+    if (functionName === "voted") return world.voted
+    if (functionName === "pendingWithdrawals") {
+      world.creditReads += 1
+      if (world.creditGate) await world.creditGate
+      return world.credit
+    }
     if (functionName === "disputes") {
+      world.caseReads += 1
+      if (world.caseGate) await world.caseGate
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
     }
     if (functionName === "escrows") {
+      world.escrowReads += 1
+      if (world.escrowGate) await world.escrowGate
       const payer = world.missing ? ZERO : escrow
-      return [payer, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, `0x${"00".repeat(32)}`, ZERO]
+      return [payer, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, world.escrowDispute, ZERO]
+    }
+    if (functionName === "outcome") {
+      return [world.outcomeExists, world.outcomeResolved, world.outcomeUpheld, world.outcomeSubject]
     }
     return 0n
   },
@@ -122,7 +159,7 @@ vi.mock("wagmi", () => ({
 function Host() {
   const route = useWalletRoute()
   if (route.flow === "vote") return <VoteScreen panel={panel} route={route} />
-  if (route.flow === "withdraw") return <WithdrawScreen escrow={escrow} readsEnabled route={route} />
+  if (route.flow === "withdraw") return <WithdrawScreen escrow={escrow} reads={world.withdrawReads} route={route} />
   if (route.flow == null) return <p data-testid="flow-home">Home</p>
   return <FlowPreview escrow={escrow} panel={panel} route={route} showStrip />
 }
@@ -132,6 +169,12 @@ function HomeTasks() {
   if (route.flow === "vote") return <VoteScreen panel={panel} route={route} />
   if (route.flow == null) return <TaskPicker voteReason={null} />
   return <FlowPreview escrow={escrow} panel={panel} route={route} showStrip />
+}
+
+function expectGuidedNextReady() {
+  const next = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
+  expect(next.getAttribute("aria-disabled")).not.toBe("true")
+  expect(next.hasAttribute("disabled")).toBe(false)
 }
 
 function compact(text: string | null | undefined): string {
@@ -146,9 +189,23 @@ function calldataOf(scope: HTMLElement): string {
 
 beforeEach(() => {
   world.arbitrator = true
+  world.voted = false
   world.state = 0
   world.expiresAt = 4_000_000_000n
   world.credit = 10n ** 15n
+  world.creditReads = 0
+  world.creditGate = null
+  world.withdrawReads = "allowed"
+  world.arbitratorReads = 0
+  world.caseReads = 0
+  world.caseGate = null
+  world.escrowReads = 0
+  world.escrowGate = null
+  world.escrowDispute = `0x${"00".repeat(32)}`
+  world.outcomeExists = false
+  world.outcomeResolved = false
+  world.outcomeUpheld = false
+  world.outcomeSubject = `0x${"00".repeat(32)}`
   resetCarriedIds()
   resetSubmitLock()
   resetPendingRuntime()
@@ -314,7 +371,7 @@ describe("phase 2 guided flows", () => {
   it("matches release, refund, and dispute calldata and gates the other action", async () => {
     render(<Host />)
     navigate(`/app/release?escrow=${id}`)
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     expect(screen.getByTestId("other-action").textContent).toMatch(/Refund a payment is unavailable/)
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const releaseReview = await waitFor(() => screen.getByTestId("review-step"))
@@ -324,7 +381,7 @@ describe("phase 2 guided flows", () => {
 
     world.expiresAt = 1n
     navigate(`/app/refund?escrow=${id}`)
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     expect(screen.getByTestId("other-action").textContent).toMatch(/Release a payment is unavailable/)
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const refundReview = await waitFor(() => screen.getByTestId("review-step"))
@@ -334,12 +391,22 @@ describe("phase 2 guided flows", () => {
     world.expiresAt = 4_000_000_000n
     navigate(`/app/release?escrow=${id}`)
     await waitFor(() => expect(screen.getByTestId("other-action").textContent).toMatch(/Refund a payment is unavailable/))
-    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false)
+    expectGuidedNextReady()
 
     world.state = 1
     navigate(`/app/refund?escrow=${id}`)
-    await waitFor(() => expect(screen.getByRole("button", { name: "Next" }).getAttribute("disabled")).not.toBeNull())
-    expect(screen.getByTestId("action-reason").textContent).toMatch(/already released/)
+    const released = unavailableLine("refund", "This payment was already released.")
+    const releasedReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(released)
+      return node
+    })
+    const releasedNext = screen.getByRole("button", { name: "Next" })
+    expect(releasedNext.getAttribute("aria-disabled")).toBe("true")
+    expect(releasedNext.hasAttribute("disabled")).toBe(false)
+    expect(releasedNext.getAttribute("aria-describedby")).toBe(releasedReason.id)
+    expect(screen.queryByTestId("action-reason")).toBeNull()
+    expect(screen.getAllByText(released)).toHaveLength(1)
     expect(screen.queryByTestId("calldata-preview")).toBeNull()
 
     world.state = 0
@@ -349,7 +416,7 @@ describe("phase 2 guided flows", () => {
     fireEvent.change(disputeFields[0]!, { target: { value: disputeId } })
     fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: id } })
     fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const disputeReview = await waitFor(() => screen.getByTestId("review-step"))
     expect(within(disputeReview).getByTestId("review-plain").textContent).toMatch(/opening a dispute/)
@@ -369,16 +436,23 @@ describe("phase 2 guided flows", () => {
     render(<Host />)
     world.arbitrator = false
     navigate(`/app/vote?dispute=${disputeId}`)
-    await waitFor(() => expect(screen.getByTestId("vote-seat-reason").textContent).toMatch(/Only seated arbitrators can vote/))
-    expect(screen.getByTestId("vote-seat-reason").textContent).toContain(ACCOUNT.slice(0, 6))
-    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true)
+    const hiddenSeat = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toMatch(/Only seated arbitrators can vote/)
+      return node
+    })
+    expect(hiddenSeat.textContent).toContain(ACCOUNT.slice(0, 6))
+    expect(screen.queryByTestId("vote-seat-reason")).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(hiddenSeat.id)
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(false)
     expect(screen.queryByTestId("relayer-submit")).toBeNull()
     expect(sendTransactionAsync).not.toHaveBeenCalled()
 
     world.arbitrator = true
     navigate(walletHome())
     navigate(`/app/vote?dispute=${disputeId}`)
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const voteReview = await waitFor(() => screen.getByTestId("review-step"))
@@ -387,7 +461,7 @@ describe("phase 2 guided flows", () => {
     expect(within(voteReview).queryByTestId("relayer-submit")).toBeNull()
 
     navigate("/app/withdraw")
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const withdrawReview = await waitFor(() => screen.getByTestId("review-step"))
     expect(within(withdrawReview).getByTestId("review-plain").textContent).toMatch(/test ETH/)
@@ -395,6 +469,289 @@ describe("phase 2 guided flows", () => {
     expect(calldataOf(withdrawReview)).toBe(PINNED.withdraw)
     expect(within(withdrawReview).queryByTestId("relayer-submit")).toBeNull()
     expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("puts the vote and withdraw step reason in the footer only while Next is unavailable", async () => {
+    render(<Host />)
+    world.voted = true
+    navigate(`/app/vote?dispute=${disputeId}`)
+    const voteReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(ALREADY_VOTED_TEXT)
+      return node
+    })
+    const voteNext = screen.getByRole("button", { name: "Next" })
+    expect(voteNext.getAttribute("aria-disabled")).toBe("true")
+    expect(voteNext.hasAttribute("disabled")).toBe(false)
+    expect(voteNext.getAttribute("aria-describedby")).toBe(voteReason.id)
+    expect(screen.getByTestId("vote-tally")).toBeTruthy()
+    expect(screen.queryByTestId("vote-case")).toBeNull()
+    expect(screen.getAllByText(ALREADY_VOTED_TEXT)).toHaveLength(1)
+
+    world.voted = false
+    navigate(walletHome())
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(ALREADY_VOTED_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+
+    world.credit = 0n
+    navigate("/app/withdraw")
+    const withdrawReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(NOTHING_TO_WITHDRAW_TEXT)
+      return node
+    })
+    const withdrawNext = screen.getByRole("button", { name: "Next" })
+    expect(withdrawNext.getAttribute("aria-disabled")).toBe("true")
+    expect(withdrawNext.getAttribute("aria-describedby")).toBe(withdrawReason.id)
+    expect(screen.getAllByText(NOTHING_TO_WITHDRAW_TEXT)).toHaveLength(1)
+
+    world.credit = 10n ** 15n
+    navigate(walletHome())
+    navigate("/app/withdraw")
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(NOTHING_TO_WITHDRAW_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+    expect(screen.getByTestId("withdraw-available").textContent).toMatch(/^Available to withdraw: /)
+    expect(screen.getAllByText(/^Available to withdraw: /)).toHaveLength(1)
+  })
+
+  it("leaves vote Next available for a seated arbitrator with no dispute id", async () => {
+    render(<Host />)
+    navigate("/app/vote")
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+    expect(screen.queryByText(CASE_READING_TEXT)).toBeNull()
+  })
+
+  it("puts the non-arbitrator seat reason in the footer with or without a dispute id", async () => {
+    const seatLine = `Only seated arbitrators can vote. Connected: ${ACCOUNT.slice(0, 6)}…${ACCOUNT.slice(-4)}.`
+    render(<Host />)
+    world.arbitrator = false
+
+    async function expectSeatReason() {
+      const reason = await waitFor(() => {
+        const node = screen.getByTestId("footer-reason")
+        expect(node.textContent).toBe(seatLine)
+        return node
+      })
+      const next = screen.getByRole("button", { name: "Next" })
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+      expect(screen.getAllByText(seatLine)).toHaveLength(1)
+      expect(screen.queryByTestId("vote-seat-reason")).toBeNull()
+    }
+
+    navigate("/app/vote")
+    await expectSeatReason()
+
+    navigate(walletHome())
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await expectSeatReason()
+  })
+
+  it("explains a disabled vote Next while the dispute case is still loading", async () => {
+    let releaseCase: () => void = () => {}
+    world.caseGate = new Promise((resolve) => {
+      releaseCase = resolve
+    })
+    world.arbitrator = true
+    render(<Host />)
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() => {
+      expect(world.arbitratorReads).toBeGreaterThan(0)
+      expect(world.caseReads).toBeGreaterThan(0)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const reason = screen.getByTestId("footer-reason")
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(reason.textContent).toBe(CASE_READING_TEXT)
+    expect(screen.getAllByText(CASE_READING_TEXT)).toHaveLength(1)
+    expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+
+    releaseCase()
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(CASE_READING_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+  })
+
+  it("explains a disabled withdraw Next while the credit is still loading", async () => {
+    let releaseCredit: () => void = () => {}
+    world.creditGate = new Promise((resolve) => {
+      releaseCredit = resolve
+    })
+    render(<Host />)
+    navigate("/app/withdraw")
+    await waitFor(() => expect(world.creditReads).toBeGreaterThan(0))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const reason = screen.getByTestId("footer-reason")
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(reason.textContent).toBe(WITHDRAW_READING_TEXT)
+    expect(screen.getAllByText(WITHDRAW_READING_TEXT)).toHaveLength(1)
+    expect(screen.queryByTestId("withdraw-available")).toBeNull()
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+
+    world.credit = 10n ** 15n
+    releaseCredit()
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(WITHDRAW_READING_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+    expect(screen.getByTestId("withdraw-available").textContent).toMatch(/^Available to withdraw: /)
+  })
+
+  it("keeps the refused withdraw sentence off until the RPC check fails", async () => {
+    world.withdrawReads = withdrawReadMode(true, false)
+    render(<Host />)
+    navigate("/app/withdraw")
+    const pending = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(WITHDRAW_READING_TEXT)
+      return node
+    })
+    expect(screen.queryByText(/refused/i)).toBeNull()
+    expect(screen.getAllByText(WITHDRAW_READING_TEXT)).toHaveLength(1)
+    const pendingNext = screen.getByRole("button", { name: "Next" })
+    expect(pendingNext.getAttribute("aria-disabled")).toBe("true")
+    expect(pendingNext.getAttribute("aria-describedby")).toBe(pending.id)
+    expect(world.creditReads).toBe(0)
+
+    world.withdrawReads = withdrawReadMode(false, false)
+    navigate(walletHome())
+    navigate("/app/withdraw")
+    const refused = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(WITHDRAW_HIDDEN_TEXT)
+      return node
+    })
+    expect(screen.getAllByText(/refused/i)).toHaveLength(1)
+    expect(screen.getAllByText(WITHDRAW_HIDDEN_TEXT)).toHaveLength(1)
+    expect(screen.queryByText(WITHDRAW_READING_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(refused.id)
+    expect(world.creditReads).toBe(0)
+  })
+
+  it("explains a refund Next while the escrow time window is still open", async () => {
+    render(<Host />)
+    navigate(`/app/refund?escrow=${id}`)
+    const line = unavailableLine("refund", "This escrow can't be refunded yet. Its time window is still open.")
+    const reason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(line)
+      return node
+    })
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+    expect(screen.getAllByText(line)).toHaveLength(1)
+    expect(screen.queryByTestId("action-reason")).toBeNull()
+  })
+
+  it("explains a disabled release or refund Next while the escrow is still loading", async () => {
+    let releaseRead: () => void = () => {}
+    world.escrowGate = new Promise((resolve) => {
+      releaseRead = resolve
+    })
+    render(<Host />)
+
+    async function expectReading(flow: "release" | "refund") {
+      navigate(`/app/${flow}?escrow=${id}`)
+      await waitFor(() => expect(world.escrowReads).toBeGreaterThan(0))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const reason = screen.getByTestId("footer-reason")
+      const next = screen.getByRole("button", { name: "Next" })
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      expect(reason.textContent).toBe(READING_ESCROW_TEXT)
+      expect(screen.getAllByText(READING_ESCROW_TEXT)).toHaveLength(1)
+      expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+    }
+
+    await expectReading("release")
+    world.escrowReads = 0
+    navigate(walletHome())
+    await expectReading("refund")
+
+    releaseRead()
+    await waitFor(() => expect(screen.queryByText(READING_ESCROW_TEXT)).toBeNull())
+  })
+
+  it("puts a disputed release and refund block in the footer once", async () => {
+    render(<Host />)
+    world.state = 3
+    const releaseLine = unavailableLine("release", "Release stays blocked until the panel rules that the deal stands.")
+    const refundLine = unavailableLine("refund", "A refund before the escrow ends stays blocked until the panel unwinds the deal.")
+
+    navigate(`/app/release?escrow=${id}`)
+    const releaseReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(releaseLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(releaseReason.id)
+    expect(screen.getAllByText(releaseLine)).toHaveLength(1)
+
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const refundReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(refundLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(refundReason.id)
+    expect(screen.getAllByText(refundLine)).toHaveLength(1)
+
+    world.escrowDispute = disputeId
+    world.outcomeExists = true
+    world.outcomeResolved = true
+    world.outcomeUpheld = true
+    world.outcomeSubject = panelSubject(escrow, id, 1_700_000_000n)
+    const upheldLine = unavailableLine("refund", "A refund stays blocked when the panel ruled that the deal stands.")
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const upheldReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(upheldLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(upheldReason.id)
+    expect(screen.getAllByText(upheldLine)).toHaveLength(1)
+
+    world.outcomeResolved = false
+    world.outcomeUpheld = false
+    world.expiresAt = currentNowSeconds() - 86_400n
+    const pendingLine = unavailableLine(
+      "refund",
+      "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled.",
+    )
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const pendingReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(pendingLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(pendingReason.id)
+    expect(screen.getAllByText(pendingLine)).toHaveLength(1)
   })
 
   it("shows a Copy control on the pending strip escrow row", () => {
@@ -415,7 +772,7 @@ describe("phase 2 guided flows", () => {
 
     async function openRelease(escrowId: Hex) {
       navigate(`/app/release?escrow=${escrowId}`)
-      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      await waitFor(() => expectGuidedNextReady())
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
       const review = await waitFor(() => screen.getByTestId("review-step"))
       expect(calldataOf(review)).toBe(previewRelease(escrow, escrowId).calldata)
@@ -435,7 +792,7 @@ describe("phase 2 guided flows", () => {
     world.expiresAt = 1n
     async function openRefund(escrowId: Hex) {
       navigate(`/app/refund?escrow=${escrowId}`)
-      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      await waitFor(() => expectGuidedNextReady())
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
       const review = await waitFor(() => screen.getByTestId("review-step"))
       expect(calldataOf(review)).toBe(previewRefund(escrow, escrowId).calldata)
@@ -455,7 +812,7 @@ describe("phase 2 guided flows", () => {
       fireEvent.click(screen.getByRole("button", { name: "Use my own" }))
       fireEvent.change(screen.getByLabelText("Dispute ID"), { target: { value: disputeId } })
       fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
-      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      await waitFor(() => expectGuidedNextReady())
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
       const review = await waitFor(() => screen.getByTestId("review-step"))
       expect(calldataOf(review)).toContain(escrowId.slice(2))
@@ -470,7 +827,7 @@ describe("phase 2 guided flows", () => {
     world.arbitrator = true
     async function openVote(dispute: Hex) {
       navigate(`/app/vote?dispute=${dispute}`)
-      await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+      await waitFor(() => expectGuidedNextReady())
       fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
       const review = await waitFor(() => screen.getByTestId("review-step"))
@@ -570,7 +927,7 @@ describe("phase 2 guided flows", () => {
     const relayerCalls = () => fetchSpy.mock.calls.filter((call) => String(call[0]).includes("relayer.example.test"))
     render(<Host />)
     navigate(`/app/release?escrow=${id}`)
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => screen.getByTestId("review-step"))
     expect(relayerCalls()).toEqual([])
@@ -580,14 +937,14 @@ describe("phase 2 guided flows", () => {
     fireEvent.change(screen.getAllByLabelText(/ID/)[0]!, { target: { value: disputeId } })
     fireEvent.change(screen.getByLabelText("Escrow ID"), { target: { value: id } })
     fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => screen.getByTestId("review-step"))
     expect(relayerCalls()).toEqual([])
 
     world.expiresAt = 1n
     navigate(`/app/refund?escrow=${id}`)
-    await waitFor(() => expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expectGuidedNextReady())
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     await waitFor(() => screen.getByTestId("review-step"))
     await waitFor(() => expect(relayerCalls().some((call) => String(call[0]).includes("/health"))).toBe(true))
@@ -616,15 +973,17 @@ describe("phase 2 guided flows", () => {
     render(<HomeTasks />)
     navigate(`/app/?escrow=${id}`)
     fireEvent.click(screen.getByRole("link", { name: flowTitle("release") }))
-    const notice = await waitFor(() => screen.getByTestId("action-reason"))
+    const notice = await waitFor(() => screen.getByTestId("footer-reason"))
     expect(notice.textContent).toBe(unavailableLine("release", "This escrow is not on the contract yet."))
     expect(screen.getAllByText(/is unavailable/)).toHaveLength(1)
     expect(screen.queryByText(/Refund a payment is unavailable/)).toBeNull()
     expect(screen.queryByTestId("other-action")).toBeNull()
+    expect(screen.queryByTestId("action-reason")).toBeNull()
     expect(notice.textContent).not.toContain("\u2013")
     const next = screen.getByRole("button", { name: "Next" })
-    expect((next as HTMLButtonElement).disabled).toBe(true)
-    expect(next.previousElementSibling?.textContent ?? "").not.toContain("\u2013")
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(next.getAttribute("aria-describedby")).toBe(notice.id)
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(flowTitle("release"))
     expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
     expect(screen.queryByTestId("calldata-preview")).toBeNull()
@@ -710,6 +1069,8 @@ describe("phase 2 guided flows", () => {
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(screen.queryByTestId("journey-connect")).toBeNull()
+    expect(screen.getByTestId("footer-reason").textContent).toBe("Switch your wallet to Base Sepolia to continue.")
+    expect(screen.getAllByText("Switch your wallet to Base Sepolia to continue.")).toHaveLength(1)
     const dots = within(screen.getByTestId("stepper")).getAllByRole("listitem")
     expect(dots.map((dot) => dot.getAttribute("data-step-state"))).toEqual(["current", "upcoming", "upcoming", "upcoming"])
     expect(dots[0]?.getAttribute("aria-current")).toBe("step")
@@ -744,6 +1105,47 @@ describe("phase 2 guided flows", () => {
     if (!(form instanceof HTMLFormElement)) throw new Error(`missing form for ${flow}`)
     return form
   }
+
+  it.each(FLOWS)("Enter on chain 1 stays on the %s step", async (flow) => {
+    world.chainId = 1
+    if (flow === "refund") world.expiresAt = 1n
+    render(<Host />)
+    const href =
+      flow === "release" || flow === "refund" || flow === "dispute"
+        ? `/app/${flow}?escrow=${id}`
+        : flow === "vote"
+          ? `/app/vote?dispute=${disputeId}`
+          : `/app/${flow}`
+    navigate(href)
+    if (flow === "fund") {
+      fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
+    }
+    if (flow === "release" || flow === "refund") {
+      await waitFor(() => expect(screen.getByTestId("escrow-face")).toBeTruthy())
+    }
+    if (flow === "dispute") {
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
+      await waitFor(() => expect(screen.getByTestId("dispute-subject").textContent).toMatch(/0x/i))
+    }
+    if (flow === "vote") {
+      await waitFor(() => expect(screen.getByTestId("vote-tally")).toBeTruthy())
+      fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+    }
+    if (flow === "withdraw") {
+      await waitFor(() => expect(screen.getByTestId("withdraw-available").textContent).toMatch(/^Available to withdraw: /))
+    }
+    const reason = screen.getByTestId("footer-reason")
+    expect(reason.textContent).toBe("Switch your wallet to Base Sepolia to continue.")
+    expect(screen.getAllByText("Switch your wallet to Base Sepolia to continue.")).toHaveLength(1)
+    expect(screen.getByTestId("journey-switch").getAttribute("aria-describedby")).toBe(reason.id)
+    await act(async () => {
+      fireEvent.submit(formFor(flow))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
 
   async function expectWalletBlocksFlow(flow: (typeof FLOWS)[number], mode: "disconnected" | "mainnet") {
     world.connected = mode === "mainnet"

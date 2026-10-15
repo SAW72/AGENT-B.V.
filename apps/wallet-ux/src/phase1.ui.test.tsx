@@ -128,7 +128,7 @@ function renderSurfaces() {
     <>
       <FlowPreview escrow={escrow} panel={panel} />
       <VoteScreen panel={panel} />
-      <WithdrawScreen escrow={escrow} readsEnabled />
+      <WithdrawScreen escrow={escrow} reads="allowed" />
     </>,
   )
 }
