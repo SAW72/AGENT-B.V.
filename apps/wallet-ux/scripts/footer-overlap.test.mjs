@@ -102,7 +102,9 @@ describe("guided step footer at 390x844", () => {
     server = await createServer({
       configFile: join(appRoot, "vite.config.ts"),
       logLevel: "error",
-      server: { host: "127.0.0.1", port: 0, strictPort: false },
+      // Coverage files land while other workers run. A watching dev server
+      // would full-reload this page and destroy the puppeteer context.
+      server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     })
     await server.listen()
     const address = server.httpServer?.address()
