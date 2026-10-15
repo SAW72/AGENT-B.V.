@@ -60,6 +60,13 @@ export function footerReasonText({
   return walletLine ?? stepLine
 }
 
+/** Drop an inline sentence that repeats the line the footer is already showing. */
+export function asideFromFooter(aside: string | null, displayed: string | null): string | null {
+  if (aside == null || aside === "") return null
+  if (displayed != null && aside === displayed) return null
+  return aside
+}
+
 /** Drop a step error when the wallet check changes, so the footer sentence is the only reason. */
 export function useClearOnReadinessChange(clear: () => void): void {
   const readiness = useFlowReadiness()

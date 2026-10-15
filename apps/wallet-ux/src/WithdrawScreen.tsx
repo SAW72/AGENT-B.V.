@@ -10,7 +10,7 @@ import { CONTRACT_LABELS, GAS_FEE_TEXT } from "./actionProgress"
 import { preparedMatches } from "./pendingTx"
 import { prepareFailure, usePreparedRouteGuard, usePrepareSession, yieldPrepareTick } from "./prepareFeedback"
 import { previewWithdraw, type CallPreview } from "./preview"
-import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
+import { GuidedStepFooter, asideFromFooter, flowMayAdvance, footerReasonText, useFlowReadiness } from "./guidedFooter"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FLOW_STEP_LABELS } from "./walkthrough"
 import { previewCardCopy } from "./submit"
@@ -28,6 +28,33 @@ import {
 } from "./walletCopy"
 import { WalletOnlySubmit } from "./WalletOnlySubmit"
 
+export type WithdrawReads = "pending" | "allowed" | "refused"
+
+/** Pending is still checking. Refused is a finished check that did not allow reads. */
+export function withdrawReadMode(chainPending: boolean, readsAllowed: boolean): WithdrawReads {
+  if (chainPending) return "pending"
+  return readsAllowed ? "allowed" : "refused"
+}
+
+function withdrawStatusText(
+  state: "idle" | "loading" | "pending" | "ready" | "unreadable" | "hidden" | "disconnected",
+  credit: bigint | null,
+): string {
+  if (state === "disconnected") return WITHDRAW_CONNECT_TEXT
+  if (state === "hidden") return WITHDRAW_HIDDEN_TEXT
+  if (state === "unreadable") return WITHDRAW_UNREADABLE_TEXT
+  if (state === "ready" && credit != null) return availableToWithdrawText(formatEth(credit))
+  return WITHDRAW_READING_TEXT
+}
+
+function withdrawBlockReason(
+  state: "idle" | "loading" | "pending" | "ready" | "unreadable" | "hidden" | "disconnected",
+  credit: bigint | null,
+): string {
+  if (state === "ready" && credit === 0n) return NOTHING_TO_WITHDRAW_TEXT
+  return withdrawStatusText(state, credit)
+}
+
 function TestnetHeading() {
   return (
     <>
@@ -39,11 +66,11 @@ function TestnetHeading() {
 
 export function WithdrawScreen({
   escrow,
-  readsEnabled,
+  reads,
   route = null,
 }: {
   escrow: Address | null
-  readsEnabled: boolean
+  reads: WithdrawReads
   route?: WalletRoute | null
 }) {
   if (escrow == null) {
@@ -75,19 +102,19 @@ export function WithdrawScreen({
       <p className="muted" data-testid="withdraw-gas">
         {WITHDRAW_GAS_TEXT}
       </p>
-      <WithdrawForm escrow={escrow} readsEnabled={readsEnabled} guided={guided} step={route?.step ?? 1} />
+      <WithdrawForm escrow={escrow} reads={reads} guided={guided} step={route?.step ?? 1} />
     </section>
   )
 }
 
 function WithdrawForm({
   escrow,
-  readsEnabled,
+  reads,
   guided,
   step,
 }: {
   escrow: Address
-  readsEnabled: boolean
+  reads: WithdrawReads
   guided: boolean
   step: number
 }) {
@@ -95,9 +122,9 @@ function WithdrawForm({
   const readiness = useFlowReadiness()
   const client = usePublicClient({ chainId: BASE_SEPOLIA_CHAIN_ID })
   const [credit, setCredit] = useState<bigint | null>(null)
-  const [creditState, setCreditState] = useState<"idle" | "loading" | "ready" | "unreadable" | "hidden" | "disconnected">(
-    "idle",
-  )
+  const [creditState, setCreditState] = useState<
+    "idle" | "loading" | "pending" | "ready" | "unreadable" | "hidden" | "disconnected"
+  >("idle")
   const [generation, setGeneration] = useState(0)
   const session = usePrepareSession<CallPreview>("withdraw", null)
   const creditRef = useRef(credit)
@@ -112,7 +139,12 @@ function WithdrawForm({
       setCreditState("disconnected")
       return
     }
-    if (!readsEnabled) {
+    if (reads === "pending") {
+      setCredit(null)
+      setCreditState("pending")
+      return
+    }
+    if (reads !== "allowed") {
       setCredit(null)
       setCreditState("hidden")
       return
@@ -148,7 +180,7 @@ function WithdrawForm({
     return () => {
       cancelled = true
     }
-  }, [account.address, account.isConnected, Boolean(client), escrow, generation, readsEnabled])
+  }, [account.address, account.isConnected, Boolean(client), escrow, generation, reads])
 
   const canPrepare = creditState === "ready" && credit != null && credit > 0n
   const withdrawReady = session.preview != null && preparedMatches(session.preview.calldata, { action: "withdraw" })
@@ -186,27 +218,18 @@ function WithdrawForm({
     }
   }
 
-  const availableText =
-    creditState === "disconnected"
-      ? WITHDRAW_CONNECT_TEXT
-      : creditState === "hidden"
-        ? WITHDRAW_HIDDEN_TEXT
-        : creditState === "unreadable"
-          ? WITHDRAW_UNREADABLE_TEXT
-          : creditState === "ready" && credit != null
-            ? availableToWithdrawText(formatEth(credit))
-            : WITHDRAW_READING_TEXT
-
-  const blockedLabel =
-    creditState === "ready" && credit === 0n
-      ? NOTHING_TO_WITHDRAW_TEXT
-      : creditState === "unreadable"
-        ? WITHDRAW_UNREADABLE_TEXT
-        : creditState === "disconnected"
-          ? WITHDRAW_CONNECT_TEXT
-          : creditState === "hidden"
-            ? WITHDRAW_HIDDEN_TEXT
-            : WITHDRAW_READING_TEXT
+  const availableText = withdrawStatusText(creditState, credit)
+  const blockedLabel = withdrawBlockReason(creditState, credit)
+  const stepReason = canPrepare ? null : blockedLabel
+  const displayedReason = guided
+    ? footerReasonText({
+        readiness,
+        busy: session.preparing,
+        nextDisabled: session.preparing || !canPrepare,
+        reason: stepReason,
+      })
+    : null
+  const inlineText = guided ? asideFromFooter(availableText, displayedReason) : availableText
 
   if (guided && displayStep >= 2 && withdrawReady && session.preview) {
     const lead =
@@ -243,7 +266,7 @@ function WithdrawForm({
     <>
       {guided ? <Stepper step={1} total={2} labels={FLOW_STEP_LABELS.withdraw} /> : null}
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
-      <p data-testid="withdraw-available">{availableText}</p>
+      {inlineText ? <p data-testid="withdraw-available">{inlineText}</p> : null}
       {guided ? (
         <form
           id="withdraw-form"
@@ -258,7 +281,7 @@ function WithdrawForm({
             onNext={() => void onNext()}
             busy={session.preparing}
             nextDisabled={session.preparing || !canPrepare}
-            reason={canPrepare ? null : blockedLabel}
+            reason={stepReason}
           />
           {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
         </form>
@@ -267,7 +290,7 @@ function WithdrawForm({
         <ActionButton
           type="submit"
           disabled={session.preparing || !canPrepare}
-          reason={canPrepare ? null : blockedLabel}
+          reason={stepReason}
           state={
             session.preparing
               ? { status: "busy", label: "Preparing…" }

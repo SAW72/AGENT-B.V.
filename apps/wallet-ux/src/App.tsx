@@ -10,7 +10,7 @@ import { PendingStrip, FlowPreview } from "./FlowPreview"
 import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
 import { useWalletRoute, type FlowId } from "./routes"
 import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
-import { WithdrawScreen } from "./WithdrawScreen"
+import { WithdrawScreen, withdrawReadMode } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
 import { DISPLAY_NAME, OPERATOR_LINE, PAGE_FOOTER, TESTNET_LINE } from "./brand"
 import {
@@ -212,15 +212,15 @@ export function LiveStatus({
 
 function GuidedFlow({
   flow,
-  readsEnabled,
+  reads,
 }: {
   flow: FlowId
-  readsEnabled: boolean
+  reads: ReturnType<typeof withdrawReadMode>
 }) {
   const route = useWalletRoute()
   if (flow === "vote") return <VoteScreen panel={ADDRESSES.disputePanel} route={route} />
   if (flow === "withdraw") {
-    return <WithdrawScreen escrow={ADDRESSES.botAttestationEscrow} readsEnabled={readsEnabled} route={route} />
+    return <WithdrawScreen escrow={ADDRESSES.botAttestationEscrow} reads={reads} route={route} />
   }
   const escrow = ADDRESSES.botAttestationEscrow
   if (escrow == null) {
@@ -316,7 +316,11 @@ export function App() {
       {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? <ChainBanner reason={guard.reason} /> : null}
 
       <PendingStrip />
-      {route.flow == null ? <HomeScreen voteReason={voteReason} /> : <GuidedFlow flow={route.flow} readsEnabled={guard.ok} />}
+      {route.flow == null ? (
+        <HomeScreen voteReason={voteReason} />
+      ) : (
+        <GuidedFlow flow={route.flow} reads={withdrawReadMode(chainQuery.isPending, guard.ok)} />
+      )}
 
       <details
         className="system-status"

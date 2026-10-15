@@ -13,7 +13,7 @@ import { prepareFailure, usePrepareSession, yieldPrepareTick } from "./prepareFe
 import { previewVote, type CallPreview } from "./preview"
 import { preparedMatches } from "./pendingTx"
 import { usePreparedRouteGuard } from "./prepareFeedback"
-import { GuidedStepFooter, flowMayAdvance, useFlowReadiness } from "./guidedFooter"
+import { GuidedStepFooter, flowMayAdvance, footerReasonText, useFlowReadiness } from "./guidedFooter"
 import { flowHref, historyAllowsStep, navigate, replaceRoute, shownStep, walletHome, type WalletRoute } from "./routes"
 import { FLOW_STEP_LABELS } from "./walkthrough"
 import { FORM_ERRORS, previewCardCopy } from "./submit"
@@ -131,6 +131,19 @@ function caseBlockMessage(read: CaseRead): string | null {
   if (read.status === "already-voted") return ALREADY_VOTED_TEXT
   if (read.status === "vote-unreadable") return VOTED_UNREADABLE_TEXT
   return null
+}
+
+/** The one vote sentence for the guided footer. A loading case has its own line. */
+function voteStepReason(
+  seatReason: string | null,
+  caseRead: CaseRead,
+  parsedId: ReturnType<typeof parseBytes32>,
+  canPrepare: boolean,
+): string | null {
+  if (seatReason) return seatReason
+  if (caseRead.status === "loading" && parsedId != null) return CASE_READING_TEXT
+  if (canPrepare) return null
+  return caseBlockMessage(caseRead) ?? "This vote is not available yet."
 }
 
 export function VoteScreen({ panel, route = null }: { panel: Address; route?: WalletRoute | null }) {
@@ -419,7 +432,13 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
         : choice === "payer"
           ? "You are voting to undo the deal. The payer gets refunded."
           : "You are casting an arbitrator vote on this dispute."
-    const nextBlocked = !canPrepare || (caseRead.status === "loading" && parsedId != null)
+    const voteReason = voteStepReason(seatReason, caseRead, parsedId, canPrepare)
+    const displayedReason = footerReasonText({
+      readiness,
+      busy: session.preparing,
+      nextDisabled: session.preparing || voteReason != null,
+      reason: voteReason,
+    })
     return (
       <section className="card guided-flow" aria-labelledby="vote-heading" data-testid="vote-screen">
         <Stepper step={step} total={2} labels={FLOW_STEP_LABELS.vote} />
@@ -451,7 +470,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
                 {arbitratorMessage}
               </p>
             ) : null}
-            <CaseStatus read={caseRead} />
+            <CaseStatus read={caseRead} quiet={displayedReason} />
             {linked && guided.dispute.value ? (
               <>
                 <FilledFromLink label={DISPUTE_ID_LABEL} value={guided.dispute.value} testId="vote-filled" />
@@ -513,8 +532,8 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
               onBack={back}
               onNext={() => void onNext()}
               busy={session.preparing}
-              nextDisabled={session.preparing || nextBlocked}
-              reason={canPrepare ? null : (seatReason ?? caseBlockMessage(caseRead) ?? "This vote is not available yet.")}
+              nextDisabled={session.preparing || voteReason != null}
+              reason={voteReason}
             />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </form>
@@ -663,9 +682,10 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
   )
 }
 
-function CaseStatus({ read }: { read: CaseRead }) {
+function CaseStatus({ read, quiet = null }: { read: CaseRead; quiet?: string | null }) {
   if (read.status === "idle") return null
   if (read.status === "loading") {
+    if (quiet === CASE_READING_TEXT) return null
     return (
       <p role="status" data-testid="vote-case">
         {CASE_READING_TEXT}
@@ -673,6 +693,7 @@ function CaseStatus({ read }: { read: CaseRead }) {
     )
   }
   if (read.status === "unreadable") {
+    if (quiet === CASE_UNREADABLE_TEXT) return null
     return (
       <p role="status" data-testid="vote-case">
         {CASE_UNREADABLE_TEXT}
@@ -680,6 +701,7 @@ function CaseStatus({ read }: { read: CaseRead }) {
     )
   }
   if (read.status === "missing") {
+    if (quiet === NO_DISPUTE_TEXT) return null
     return (
       <p role="status" data-testid="vote-case">
         {NO_DISPUTE_TEXT}
@@ -707,7 +729,7 @@ function CaseStatus({ read }: { read: CaseRead }) {
           {PANEL_SIZE_UNREADABLE_TEXT}
         </p>
       ) : null}
-      {block ? (
+      {block && block !== quiet ? (
         <p role="status" data-testid="vote-case">
           {block}
         </p>
