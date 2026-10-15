@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
 import { actionProgress, GAS_FEE_TEXT } from "./actionProgress"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
-import { previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
+import { panelSubject, previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
 import { DISPUTE_ZERO_IGNORED, ESCROW_ZERO_IGNORED, resetCarriedIds } from "./carriedIds"
 import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
 import {
@@ -32,6 +32,8 @@ import { TaskPicker } from "./taskPicker"
 import { pendingSlot, pendingStorageKey, resetPendingStore } from "./pendingTx"
 import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
+import { currentNowSeconds } from "./nowClock"
+import { READING_ESCROW_TEXT } from "./escrowGate"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen, withdrawReadMode } from "./WithdrawScreen"
 import {
@@ -78,6 +80,13 @@ const { sendTransactionAsync, world } = vi.hoisted(() => ({
     arbitratorReads: 0,
     caseReads: 0,
     caseGate: null as Promise<void> | null,
+    escrowReads: 0,
+    escrowGate: null as Promise<void> | null,
+    escrowDispute: `0x${"00".repeat(32)}` as Hex,
+    outcomeExists: false,
+    outcomeResolved: false,
+    outcomeUpheld: false,
+    outcomeSubject: `0x${"00".repeat(32)}` as Hex,
     chainId: 84532,
     connected: true,
     missing: false,
@@ -112,8 +121,13 @@ const publicClient = {
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
     }
     if (functionName === "escrows") {
+      world.escrowReads += 1
+      if (world.escrowGate) await world.escrowGate
       const payer = world.missing ? ZERO : escrow
-      return [payer, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, `0x${"00".repeat(32)}`, ZERO]
+      return [payer, payee, id, disputeId, 10n ** 15n, 1_700_000_000n, world.expiresAt, world.state, world.escrowDispute, ZERO]
+    }
+    if (functionName === "outcome") {
+      return [world.outcomeExists, world.outcomeResolved, world.outcomeUpheld, world.outcomeSubject]
     }
     return 0n
   },
@@ -185,6 +199,13 @@ beforeEach(() => {
   world.arbitratorReads = 0
   world.caseReads = 0
   world.caseGate = null
+  world.escrowReads = 0
+  world.escrowGate = null
+  world.escrowDispute = `0x${"00".repeat(32)}`
+  world.outcomeExists = false
+  world.outcomeResolved = false
+  world.outcomeUpheld = false
+  world.outcomeSubject = `0x${"00".repeat(32)}`
   resetCarriedIds()
   resetSubmitLock()
   resetPendingRuntime()
@@ -642,6 +663,97 @@ describe("phase 2 guided flows", () => {
     expect(screen.queryByTestId("action-reason")).toBeNull()
   })
 
+  it("explains a disabled release or refund Next while the escrow is still loading", async () => {
+    let releaseRead: () => void = () => {}
+    world.escrowGate = new Promise((resolve) => {
+      releaseRead = resolve
+    })
+    render(<Host />)
+
+    async function expectReading(flow: "release" | "refund") {
+      navigate(`/app/${flow}?escrow=${id}`)
+      await waitFor(() => expect(world.escrowReads).toBeGreaterThan(0))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const reason = screen.getByTestId("footer-reason")
+      const next = screen.getByRole("button", { name: "Next" })
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      expect(reason.textContent).toBe(READING_ESCROW_TEXT)
+      expect(screen.getAllByText(READING_ESCROW_TEXT)).toHaveLength(1)
+      expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+    }
+
+    await expectReading("release")
+    world.escrowReads = 0
+    navigate(walletHome())
+    await expectReading("refund")
+
+    releaseRead()
+    await waitFor(() => expect(screen.queryByText(READING_ESCROW_TEXT)).toBeNull())
+  })
+
+  it("puts a disputed release and refund block in the footer once", async () => {
+    render(<Host />)
+    world.state = 3
+    const releaseLine = unavailableLine("release", "Release stays blocked until the panel rules that the deal stands.")
+    const refundLine = unavailableLine("refund", "A refund before the escrow ends stays blocked until the panel unwinds the deal.")
+
+    navigate(`/app/release?escrow=${id}`)
+    const releaseReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(releaseLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(releaseReason.id)
+    expect(screen.getAllByText(releaseLine)).toHaveLength(1)
+
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const refundReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(refundLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(refundReason.id)
+    expect(screen.getAllByText(refundLine)).toHaveLength(1)
+
+    world.escrowDispute = disputeId
+    world.outcomeExists = true
+    world.outcomeResolved = true
+    world.outcomeUpheld = true
+    world.outcomeSubject = panelSubject(escrow, id, 1_700_000_000n)
+    const upheldLine = unavailableLine("refund", "A refund stays blocked when the panel ruled that the deal stands.")
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const upheldReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(upheldLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(upheldReason.id)
+    expect(screen.getAllByText(upheldLine)).toHaveLength(1)
+
+    world.outcomeResolved = false
+    world.outcomeUpheld = false
+    world.expiresAt = currentNowSeconds() - 86_400n
+    const pendingLine = unavailableLine(
+      "refund",
+      "A dispute ruling is pending. Refund opens 7 days after expiry if the panel has not ruled.",
+    )
+    navigate(walletHome())
+    navigate(`/app/refund?escrow=${id}`)
+    const pendingReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(pendingLine)
+      return node
+    })
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(pendingReason.id)
+    expect(screen.getAllByText(pendingLine)).toHaveLength(1)
+  })
+
   it("shows a Copy control on the pending strip escrow row", () => {
     const hash = `0x${"44".repeat(32)}` as Hex
     localStorage.setItem(
@@ -957,6 +1069,8 @@ describe("phase 2 guided flows", () => {
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(screen.queryByTestId("journey-connect")).toBeNull()
+    expect(screen.getByTestId("footer-reason").textContent).toBe("Switch your wallet to Base Sepolia to continue.")
+    expect(screen.getAllByText("Switch your wallet to Base Sepolia to continue.")).toHaveLength(1)
     const dots = within(screen.getByTestId("stepper")).getAllByRole("listitem")
     expect(dots.map((dot) => dot.getAttribute("data-step-state"))).toEqual(["current", "upcoming", "upcoming", "upcoming"])
     expect(dots[0]?.getAttribute("aria-current")).toBe("step")
@@ -991,6 +1105,47 @@ describe("phase 2 guided flows", () => {
     if (!(form instanceof HTMLFormElement)) throw new Error(`missing form for ${flow}`)
     return form
   }
+
+  it.each(FLOWS)("Enter on chain 1 stays on the %s step", async (flow) => {
+    world.chainId = 1
+    if (flow === "refund") world.expiresAt = 1n
+    render(<Host />)
+    const href =
+      flow === "release" || flow === "refund" || flow === "dispute"
+        ? `/app/${flow}?escrow=${id}`
+        : flow === "vote"
+          ? `/app/vote?dispute=${disputeId}`
+          : `/app/${flow}`
+    navigate(href)
+    if (flow === "fund") {
+      fireEvent.change(screen.getByLabelText("Payee wallet"), { target: { value: payee } })
+    }
+    if (flow === "release" || flow === "refund") {
+      await waitFor(() => expect(screen.getByTestId("escrow-face")).toBeTruthy())
+    }
+    if (flow === "dispute") {
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "late delivery" } })
+      await waitFor(() => expect(screen.getByTestId("dispute-subject").textContent).toMatch(/0x/i))
+    }
+    if (flow === "vote") {
+      await waitFor(() => expect(screen.getByTestId("vote-tally")).toBeTruthy())
+      fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+    }
+    if (flow === "withdraw") {
+      await waitFor(() => expect(screen.getByTestId("withdraw-available").textContent).toMatch(/^Available to withdraw: /))
+    }
+    const reason = screen.getByTestId("footer-reason")
+    expect(reason.textContent).toBe("Switch your wallet to Base Sepolia to continue.")
+    expect(screen.getAllByText("Switch your wallet to Base Sepolia to continue.")).toHaveLength(1)
+    expect(screen.getByTestId("journey-switch").getAttribute("aria-describedby")).toBe(reason.id)
+    await act(async () => {
+      fireEvent.submit(formFor(flow))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+    expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
 
   async function expectWalletBlocksFlow(flow: (typeof FLOWS)[number], mode: "disconnected" | "mainnet") {
     world.connected = mode === "mainnet"

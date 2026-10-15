@@ -10,6 +10,12 @@ import { panelSubject } from "./preview"
 export const READING_ESCROW_TEXT = "Reading this escrow."
 export const ESCROW_UNREAD_TEXT = "This escrow could not be read. The contract still checks the action."
 
+/** The one release/refund sentence. A read still in flight has its own line. */
+export function escrowStepReason(reading: boolean, blocked: string | null): string | null {
+  if (reading) return READING_ESCROW_TEXT
+  return blocked
+}
+
 export type GateDecision = { allowed: boolean; reason: string | null }
 
 const OPEN = 0

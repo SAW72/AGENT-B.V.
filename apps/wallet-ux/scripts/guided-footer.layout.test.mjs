@@ -290,6 +290,11 @@ describe("guided footer reasons at 390x844", () => {
       server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     })
     await server.listen()
+    // Vite 8 keeps a chokidar FSWatcher when server.watch is null. The parallel
+    // build copies src/base-sepolia.json, that watcher full-reloads this page,
+    // and the new document's storage clear drops the connected wallet back to
+    // Connect. The dev engine does not need the watcher after listen.
+    await server.watcher.close()
     const address = server.httpServer?.address()
     const port = address && typeof address === "object" ? address.port : 0
     base = `http://127.0.0.1:${port}/app/`
@@ -377,88 +382,100 @@ describe("guided footer reasons at 390x844", () => {
     const page = await openFund("0x14a34")
     try {
       await connect(page)
-      // Next has to stay up with an empty reason before the silent chain change.
-      // A reconnect can flash Next and then drop the session back to Connect.
-      const deadline = Date.now() + 20_000
-      let held = 0
-      let connectArmed = true
-      while (Date.now() < deadline) {
-        const settled = await page.evaluate(() => {
-          const reason = document.querySelector("[data-testid=footer-reason]")
-          const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-          const connectButton = document.querySelector("[data-testid=journey-connect]")
-          if (
-            reason instanceof HTMLElement &&
-            reason.isConnected &&
-            reason.textContent === "" &&
-            button instanceof HTMLButtonElement &&
-            button.isConnected &&
-            button.textContent === "Next"
-          ) {
-            return "next"
-          }
-          if (
-            connectButton instanceof HTMLButtonElement &&
-            connectButton.isConnected &&
-            !connectButton.disabled &&
-            connectButton.textContent === "Connect wallet"
-          ) {
-            return "connect"
-          }
-          return "waiting"
-        })
-        if (settled === "next") {
-          held += 1
-          connectArmed = true
-        } else {
-          held = 0
-          if (settled === "connect" && connectArmed) {
-            connectArmed = false
-            await page.evaluate(() => {
+      let before = ""
+      let switched = false
+      let lastError = "the silent chain change never showed Switch"
+      // A document reload clears localStorage and the injected accounts, so the
+      // page comes back as Connect after Next was already held. Retry the whole
+      // connect, hold, and arm cycle instead of waiting longer.
+      for (let attempt = 0; attempt < 3 && !switched; attempt += 1) {
+        try {
+          const deadline = Date.now() + 20_000
+          let held = 0
+          let connectArmed = true
+          while (Date.now() < deadline) {
+            const settled = await page.evaluate(() => {
+              const reason = document.querySelector("[data-testid=footer-reason]")
+              const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
               const connectButton = document.querySelector("[data-testid=journey-connect]")
-              if (connectButton instanceof HTMLButtonElement && connectButton.isConnected && !connectButton.disabled) connectButton.click()
+              if (
+                reason instanceof HTMLElement &&
+                reason.isConnected &&
+                reason.textContent === "" &&
+                button instanceof HTMLButtonElement &&
+                button.isConnected &&
+                button.textContent === "Next"
+              ) {
+                return "next"
+              }
+              if (
+                connectButton instanceof HTMLButtonElement &&
+                connectButton.isConnected &&
+                !connectButton.disabled &&
+                connectButton.textContent === "Connect wallet"
+              ) {
+                return "connect"
+              }
+              return "waiting"
             })
+            if (settled === "next") {
+              held += 1
+              connectArmed = true
+            } else {
+              held = 0
+              if (settled === "connect" && connectArmed) {
+                connectArmed = false
+                await page.evaluate(() => {
+                  const connectButton = document.querySelector("[data-testid=journey-connect]")
+                  if (connectButton instanceof HTMLButtonElement && connectButton.isConnected && !connectButton.disabled) {
+                    connectButton.click()
+                  }
+                })
+              }
+            }
+            if (held >= 3) break
+            await new Promise((resolve) => setTimeout(resolve, 200))
           }
-        }
-        if (held >= 3) break
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      }
-      if (held < 3) throw new Error("Next did not stay available before the silent chain change")
-      const before = await reasonId(page)
-      expect(before).not.toBe("")
-      await page.bringToFront()
-      const armed = await page.evaluate(() => {
-        const reason = document.querySelector("[data-testid=footer-reason]")
-        const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-        const ready =
-          reason instanceof HTMLElement &&
-          reason.isConnected &&
-          reason.textContent === "" &&
-          button instanceof HTMLButtonElement &&
-          button.isConnected &&
-          button.textContent === "Next" &&
-          typeof window.__wallet?.setChain === "function"
-        if (!ready) return false
-        window.__wallet.setChain("0x1", false)
-        return true
-      })
-      if (!armed) throw new Error("The wallet dropped before the silent chain change")
-      try {
-        await waitForReason(page, SWITCH)
-      } catch (error) {
-        const snap = await page.evaluate(() => {
-          const primary = document.querySelector(
-            "[data-testid=journey-connect], [data-testid=journey-switch], [data-testid=guided-footer] [data-action-button]",
+          if (held < 3) throw new Error("Next did not stay available before the silent chain change")
+          before = await reasonId(page)
+          if (!before) throw new Error("Footer reason was not mounted")
+          await page.bringToFront()
+          const armed = await page.evaluate(() => {
+            const reason = document.querySelector("[data-testid=footer-reason]")
+            const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
+            const ready =
+              reason instanceof HTMLElement &&
+              reason.isConnected &&
+              reason.textContent === "" &&
+              button instanceof HTMLButtonElement &&
+              button.isConnected &&
+              button.textContent === "Next" &&
+              typeof window.__wallet?.setChain === "function"
+            if (!ready) return false
+            window.__wallet.setChain("0x1", false)
+            return true
+          })
+          if (!armed) throw new Error("The wallet dropped before the silent chain change")
+          const outcome = await page.waitForFunction(
+            (switchText, connectText) => {
+              const reason = document.querySelector("[data-testid=footer-reason]")
+              if (!(reason instanceof HTMLElement) || !reason.isConnected) return ""
+              if (reason.textContent === switchText) return "switch"
+              if (reason.textContent === connectText) return "dropped"
+              return ""
+            },
+            { timeout: 15_000 },
+            SWITCH,
+            CONNECT,
           )
-          return {
-            reason: document.querySelector("[data-testid=footer-reason]")?.textContent ?? "",
-            primary: primary?.textContent ?? "",
-            chip: document.querySelector("[data-testid=wallet-chip]")?.textContent ?? "",
-            hidden: document.hidden,
-          }
-        })
-        throw new Error(`Switch sentence did not appear (${JSON.stringify(snap)})`, { cause: error })
+          const value = await outcome.jsonValue()
+          if (value === "switch") switched = true
+          else throw new Error("Wallet session dropped after the silent chain change")
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error)
+        }
       }
+      if (!switched) throw new Error(`Switch sentence did not appear (${lastError})`)
       expect(await reasonId(page)).toBe(before)
       const view = await measure(page)
       expect(view.reasonText).toBe(SWITCH)

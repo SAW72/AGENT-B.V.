@@ -28,7 +28,7 @@ import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { isZeroBytes32, parseBytes32, randomBytes32 } from "./bytes32"
 import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
-import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, useEscrowActionGate } from "./escrowGate"
+import { ESCROW_UNREAD_TEXT, escrowStepReason, useEscrowActionGate } from "./escrowGate"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
 import { ErrorNotice } from "./ErrorNotice"
 import { chunkHex, formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
@@ -1776,7 +1776,9 @@ function IdForm({
                 }}
               />
             )}
-            {gate.status === "reading" && parseBytes32(escrowId) ? <p className="hint">{READING_ESCROW_TEXT}</p> : null}
+            {!guided && gate.status === "reading" && parseBytes32(escrowId) ? (
+              <p className="hint">{escrowStepReason(true, null)}</p>
+            ) : null}
             {gate.status === "unread" ? (
               <p className="warn-note" role="status">
                 {ESCROW_UNREAD_TEXT}
@@ -1845,7 +1847,10 @@ function IdForm({
               onNext={() => void onNext()}
               busy={session.preparing}
               nextDisabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
-              reason={gated && decision.reason ? unavailableLine(slot, decision.reason) : null}
+              reason={escrowStepReason(
+                gate.status === "reading" && Boolean(parseBytes32(escrowId)),
+                gated && decision.reason ? unavailableLine(slot, decision.reason) : null,
+              )}
             />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </>
