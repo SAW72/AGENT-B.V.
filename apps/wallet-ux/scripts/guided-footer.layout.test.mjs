@@ -379,22 +379,70 @@ describe("guided footer reasons at 390x844", () => {
       await connect(page)
       // Next has to stay up with an empty reason before the silent chain change.
       // A reconnect can flash Next and then drop the session back to Connect.
-      await page.waitForFunction(() => {
+      const deadline = Date.now() + 20_000
+      let held = 0
+      let connectArmed = true
+      while (Date.now() < deadline) {
+        const settled = await page.evaluate(() => {
+          const reason = document.querySelector("[data-testid=footer-reason]")
+          const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
+          const connectButton = document.querySelector("[data-testid=journey-connect]")
+          if (
+            reason instanceof HTMLElement &&
+            reason.isConnected &&
+            reason.textContent === "" &&
+            button instanceof HTMLButtonElement &&
+            button.isConnected &&
+            button.textContent === "Next"
+          ) {
+            return "next"
+          }
+          if (
+            connectButton instanceof HTMLButtonElement &&
+            connectButton.isConnected &&
+            !connectButton.disabled &&
+            connectButton.textContent === "Connect wallet"
+          ) {
+            return "connect"
+          }
+          return "waiting"
+        })
+        if (settled === "next") {
+          held += 1
+          connectArmed = true
+        } else {
+          held = 0
+          if (settled === "connect" && connectArmed) {
+            connectArmed = false
+            await page.evaluate(() => {
+              const connectButton = document.querySelector("[data-testid=journey-connect]")
+              if (connectButton instanceof HTMLButtonElement && connectButton.isConnected && !connectButton.disabled) connectButton.click()
+            })
+          }
+        }
+        if (held >= 3) break
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+      if (held < 3) throw new Error("Next did not stay available before the silent chain change")
+      const before = await reasonId(page)
+      expect(before).not.toBe("")
+      await page.bringToFront()
+      const armed = await page.evaluate(() => {
         const reason = document.querySelector("[data-testid=footer-reason]")
         const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
-        return (
+        const ready =
           reason instanceof HTMLElement &&
           reason.isConnected &&
           reason.textContent === "" &&
           button instanceof HTMLButtonElement &&
           button.isConnected &&
-          button.textContent === "Next"
-        )
+          button.textContent === "Next" &&
+          typeof window.__wallet?.setChain === "function"
+        if (!ready) return false
+        window.__wallet.setChain("0x1", false)
+        return true
       })
-      const before = await reasonId(page)
-      expect(before).not.toBe("")
-      await page.bringToFront()
-      await page.evaluate(() => window.__wallet.setChain("0x1", false))
+      if (!armed) throw new Error("The wallet dropped before the silent chain change")
       try {
         await waitForReason(page, SWITCH)
       } catch (error) {
