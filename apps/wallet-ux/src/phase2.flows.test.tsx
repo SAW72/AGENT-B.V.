@@ -34,7 +34,7 @@ import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
-import { ALREADY_VOTED_TEXT, DEAL_STANDS_LABEL, NOTHING_TO_WITHDRAW_TEXT } from "./walletCopy"
+import { ALREADY_VOTED_TEXT, DEAL_STANDS_LABEL, NOTHING_TO_WITHDRAW_TEXT, WITHDRAW_READING_TEXT } from "./walletCopy"
 import { FLOW_STEP_LABELS as WALKTHROUGH_STEP_LABELS, CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -65,6 +65,8 @@ const { sendTransactionAsync, world } = vi.hoisted(() => ({
     state: 0,
     expiresAt: 4_000_000_000n,
     credit: 10n ** 15n,
+    creditReads: 0,
+    creditGate: null as Promise<void> | null,
     chainId: 84532,
     connected: true,
     missing: false,
@@ -85,7 +87,11 @@ const publicClient = {
     if (functionName === "isArbitrator") return world.arbitrator
     if (functionName === "PANEL_SIZE") return 3n
     if (functionName === "voted") return world.voted
-    if (functionName === "pendingWithdrawals") return world.credit
+    if (functionName === "pendingWithdrawals") {
+      world.creditReads += 1
+      if (world.creditGate) await world.creditGate
+      return world.credit
+    }
     if (functionName === "disputes") {
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
     }
@@ -157,6 +163,8 @@ beforeEach(() => {
   world.state = 0
   world.expiresAt = 4_000_000_000n
   world.credit = 10n ** 15n
+  world.creditReads = 0
+  world.creditGate = null
   resetCarriedIds()
   resetSubmitLock()
   resetPendingRuntime()
@@ -387,8 +395,14 @@ describe("phase 2 guided flows", () => {
     render(<Host />)
     world.arbitrator = false
     navigate(`/app/vote?dispute=${disputeId}`)
-    await waitFor(() => expect(screen.getByTestId("vote-seat-reason").textContent).toMatch(/Only seated arbitrators can vote/))
-    expect(screen.getByTestId("vote-seat-reason").textContent).toContain(ACCOUNT.slice(0, 6))
+    const hiddenSeat = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toMatch(/Only seated arbitrators can vote/)
+      return node
+    })
+    expect(hiddenSeat.textContent).toContain(ACCOUNT.slice(0, 6))
+    expect(screen.queryByTestId("vote-seat-reason")).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBe(hiddenSeat.id)
     expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
     expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(false)
     expect(screen.queryByTestId("relayer-submit")).toBeNull()
@@ -458,6 +472,59 @@ describe("phase 2 guided flows", () => {
     await waitFor(() => expectGuidedNextReady())
     expect(screen.getByTestId("footer-reason").textContent).toBe("")
     expect(screen.queryByText(NOTHING_TO_WITHDRAW_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+  })
+
+  it("puts the non-arbitrator seat reason in the footer with or without a dispute id", async () => {
+    const seatLine = `Only seated arbitrators can vote. Connected: ${ACCOUNT.slice(0, 6)}…${ACCOUNT.slice(-4)}.`
+    render(<Host />)
+    world.arbitrator = false
+
+    async function expectSeatReason() {
+      const reason = await waitFor(() => {
+        const node = screen.getByTestId("footer-reason")
+        expect(node.textContent).toBe(seatLine)
+        return node
+      })
+      const next = screen.getByRole("button", { name: "Next" })
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+      expect(screen.getAllByText(seatLine)).toHaveLength(1)
+      expect(screen.queryByTestId("vote-seat-reason")).toBeNull()
+    }
+
+    navigate("/app/vote")
+    await expectSeatReason()
+
+    navigate(walletHome())
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await expectSeatReason()
+  })
+
+  it("explains a disabled withdraw Next while the credit is still loading", async () => {
+    let releaseCredit: () => void = () => {}
+    world.creditGate = new Promise((resolve) => {
+      releaseCredit = resolve
+    })
+    render(<Host />)
+    navigate("/app/withdraw")
+    await waitFor(() => expect(world.creditReads).toBeGreaterThan(0))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const reason = screen.getByTestId("footer-reason")
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(reason.textContent).toBe(WITHDRAW_READING_TEXT)
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+
+    world.credit = 10n ** 15n
+    releaseCredit()
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(WITHDRAW_READING_TEXT)).toBeNull()
     expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
   })
 

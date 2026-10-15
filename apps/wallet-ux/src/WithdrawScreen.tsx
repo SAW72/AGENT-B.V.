@@ -258,7 +258,7 @@ function WithdrawForm({
             onNext={() => void onNext()}
             busy={session.preparing}
             nextDisabled={session.preparing || !canPrepare}
-            reason={canPrepare || creditState === "loading" ? null : blockedLabel}
+            reason={canPrepare ? null : blockedLabel}
           />
           {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
         </form>

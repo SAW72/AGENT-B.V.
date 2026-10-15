@@ -435,11 +435,6 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
             {guided.dispute.notice}
           </p>
         ) : null}
-        {seatReason ? (
-          <p className="action-reason" role="status" data-testid="vote-seat-reason">
-            {seatReason}
-          </p>
-        ) : null}
         {step === 1 ? (
           <form
             id="vote-form"
@@ -519,7 +514,7 @@ export function VoteScreen({ panel, route = null }: { panel: Address; route?: Wa
               onNext={() => void onNext()}
               busy={session.preparing}
               nextDisabled={session.preparing || nextBlocked}
-              reason={canPrepare || seatReason ? null : (caseBlockMessage(caseRead) ?? "This vote is not available yet.")}
+              reason={canPrepare ? null : (seatReason ?? caseBlockMessage(caseRead) ?? "This vote is not available yet.")}
             />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </form>
