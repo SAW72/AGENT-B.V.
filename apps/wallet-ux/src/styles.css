@@ -626,13 +626,11 @@ button.task-link.secondary {
 
 .footer-reason {
   margin: 16px 0 0;
+  min-height: 1.45em;
+  line-height: 1.45;
   color: var(--muted);
   overflow-wrap: anywhere;
   max-width: 100%;
-}
-
-.footer-reason:empty {
-  margin: 0;
 }
 
 .step-actions {
@@ -642,7 +640,7 @@ button.task-link.secondary {
   margin-top: 16px;
 }
 
-.guided-footer .footer-reason:not(:empty) + .step-actions {
+.guided-footer .footer-reason + .step-actions {
   margin-top: 8px;
 }
 

@@ -34,7 +34,7 @@ import { resetSubmitLock } from "./submitLock"
 import { resetPendingRuntime } from "./usePendingReceipt"
 import { VoteScreen } from "./VoteScreen"
 import { WithdrawScreen } from "./WithdrawScreen"
-import { DEAL_STANDS_LABEL } from "./walletCopy"
+import { ALREADY_VOTED_TEXT, DEAL_STANDS_LABEL, NOTHING_TO_WITHDRAW_TEXT } from "./walletCopy"
 import { FLOW_STEP_LABELS as WALKTHROUGH_STEP_LABELS, CONNECT_NOTE, TEST_ETH_NOTE, WRONG_NETWORK_NOTE } from "./walkthrough"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -61,6 +61,7 @@ const { sendTransactionAsync, world } = vi.hoisted(() => ({
   sendTransactionAsync: vi.fn(async () => `0x${"11".repeat(32)}` as Hex),
   world: {
     arbitrator: true,
+    voted: false,
     state: 0,
     expiresAt: 4_000_000_000n,
     credit: 10n ** 15n,
@@ -83,7 +84,7 @@ const publicClient = {
   readContract: async ({ functionName }: { functionName: string }) => {
     if (functionName === "isArbitrator") return world.arbitrator
     if (functionName === "PANEL_SIZE") return 3n
-    if (functionName === "voted") return false
+    if (functionName === "voted") return world.voted
     if (functionName === "pendingWithdrawals") return world.credit
     if (functionName === "disputes") {
       return [`0x${"11".repeat(32)}`, ZERO, "reason", 1n, 0n, false, false, 10n]
@@ -152,6 +153,7 @@ function calldataOf(scope: HTMLElement): string {
 
 beforeEach(() => {
   world.arbitrator = true
+  world.voted = false
   world.state = 0
   world.expiresAt = 4_000_000_000n
   world.credit = 10n ** 15n
@@ -344,9 +346,18 @@ describe("phase 2 guided flows", () => {
 
     world.state = 1
     navigate(`/app/refund?escrow=${id}`)
-    await waitFor(() => expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true"))
-    expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(false)
-    expect(screen.getByTestId("action-reason").textContent).toMatch(/already released/)
+    const released = unavailableLine("refund", "This payment was already released.")
+    const releasedReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(released)
+      return node
+    })
+    const releasedNext = screen.getByRole("button", { name: "Next" })
+    expect(releasedNext.getAttribute("aria-disabled")).toBe("true")
+    expect(releasedNext.hasAttribute("disabled")).toBe(false)
+    expect(releasedNext.getAttribute("aria-describedby")).toBe(releasedReason.id)
+    expect(screen.queryByTestId("action-reason")).toBeNull()
+    expect(screen.getAllByText(released)).toHaveLength(1)
     expect(screen.queryByTestId("calldata-preview")).toBeNull()
 
     world.state = 0
@@ -403,6 +414,51 @@ describe("phase 2 guided flows", () => {
     expect(calldataOf(withdrawReview)).toBe(PINNED.withdraw)
     expect(within(withdrawReview).queryByTestId("relayer-submit")).toBeNull()
     expect(sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("puts the vote and withdraw step reason in the footer only while Next is unavailable", async () => {
+    render(<Host />)
+    world.voted = true
+    navigate(`/app/vote?dispute=${disputeId}`)
+    const voteReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(ALREADY_VOTED_TEXT)
+      return node
+    })
+    const voteNext = screen.getByRole("button", { name: "Next" })
+    expect(voteNext.getAttribute("aria-disabled")).toBe("true")
+    expect(voteNext.hasAttribute("disabled")).toBe(false)
+    expect(voteNext.getAttribute("aria-describedby")).toBe(voteReason.id)
+    expect(screen.getByTestId("vote-case").textContent).toBe(ALREADY_VOTED_TEXT)
+    expect(screen.getAllByText(ALREADY_VOTED_TEXT)).toHaveLength(2)
+
+    world.voted = false
+    navigate(walletHome())
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(ALREADY_VOTED_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
+
+    world.credit = 0n
+    navigate("/app/withdraw")
+    const withdrawReason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(NOTHING_TO_WITHDRAW_TEXT)
+      return node
+    })
+    const withdrawNext = screen.getByRole("button", { name: "Next" })
+    expect(withdrawNext.getAttribute("aria-disabled")).toBe("true")
+    expect(withdrawNext.getAttribute("aria-describedby")).toBe(withdrawReason.id)
+    expect(screen.getAllByText(NOTHING_TO_WITHDRAW_TEXT)).toHaveLength(1)
+
+    world.credit = 10n ** 15n
+    navigate(walletHome())
+    navigate("/app/withdraw")
+    await waitFor(() => expectGuidedNextReady())
+    expect(screen.getByTestId("footer-reason").textContent).toBe("")
+    expect(screen.queryByText(NOTHING_TO_WITHDRAW_TEXT)).toBeNull()
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-describedby")).toBeNull()
   })
 
   it("shows a Copy control on the pending strip escrow row", () => {
@@ -624,16 +680,17 @@ describe("phase 2 guided flows", () => {
     render(<HomeTasks />)
     navigate(`/app/?escrow=${id}`)
     fireEvent.click(screen.getByRole("link", { name: flowTitle("release") }))
-    const notice = await waitFor(() => screen.getByTestId("action-reason"))
+    const notice = await waitFor(() => screen.getByTestId("footer-reason"))
     expect(notice.textContent).toBe(unavailableLine("release", "This escrow is not on the contract yet."))
     expect(screen.getAllByText(/is unavailable/)).toHaveLength(1)
     expect(screen.queryByText(/Refund a payment is unavailable/)).toBeNull()
     expect(screen.queryByTestId("other-action")).toBeNull()
+    expect(screen.queryByTestId("action-reason")).toBeNull()
     expect(notice.textContent).not.toContain("\u2013")
     const next = screen.getByRole("button", { name: "Next" })
     expect(next.getAttribute("aria-disabled")).toBe("true")
     expect(next.hasAttribute("disabled")).toBe(false)
-    expect(next.previousElementSibling?.textContent ?? "").not.toContain("\u2013")
+    expect(next.getAttribute("aria-describedby")).toBe(notice.id)
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(flowTitle("release"))
     expect(compact(screen.getByTestId("filled-from-link").textContent)).toContain(id)
     expect(screen.queryByTestId("calldata-preview")).toBeNull()

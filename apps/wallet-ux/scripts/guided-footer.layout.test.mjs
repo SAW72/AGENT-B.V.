@@ -218,6 +218,17 @@ async function clickNext(page) {
   })
 }
 
+async function actionOffset(page) {
+  return page.evaluate(() => {
+    const footer = document.querySelector("[data-testid=guided-footer]")
+    const action = document.querySelector(
+      "[data-testid=guided-footer] [data-testid=journey-connect], [data-testid=guided-footer] [data-testid=journey-switch], [data-testid=guided-footer] [data-action-button]",
+    )
+    if (!(footer instanceof HTMLElement) || !(action instanceof HTMLElement)) return null
+    return Math.round(action.getBoundingClientRect().top - footer.getBoundingClientRect().top)
+  })
+}
+
 async function measure(page) {
   await page.evaluate(() => document.querySelector("[data-testid=guided-footer]")?.scrollIntoView({ block: "center" }))
   return page.evaluate(() => {
@@ -298,6 +309,23 @@ describe("guided footer reasons at 390x844", () => {
     await browser?.close()
     await server?.close()
   })
+
+  it("keeps Next in place when the footer reason is empty", async () => {
+    const page = await openFund("0x14a34")
+    try {
+      const withReason = await actionOffset(page)
+      expect(withReason).toBeGreaterThan(0)
+      await connect(page)
+      await page.waitForFunction(() => {
+        const reason = document.querySelector("[data-testid=footer-reason]")
+        const button = document.querySelector("[data-testid=guided-footer] [data-action-button]")
+        return reason instanceof HTMLElement && reason.textContent === "" && button instanceof HTMLButtonElement && button.textContent === "Next"
+      })
+      expect(await actionOffset(page)).toBe(withReason)
+    } finally {
+      await closeFund(page)
+    }
+  }, 30_000)
 
   it("shows Connect and its reason without overlap or overflow", async () => {
     const page = await openFund("0x14a34")

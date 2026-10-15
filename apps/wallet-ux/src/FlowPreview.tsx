@@ -1385,13 +1385,7 @@ function CreateForm({
       return
     }
     if (step === 3) {
-      const blocked = firstFundProblem(4, fundFields)
-      if (blocked && blocked.step < 3) {
-        askedStep.current = 4
-        navigate(flowHref("fund", blocked.step, { escrow: parseBytes32(escrowId) }), { allowStep: true })
-        return
-      }
-      if (blocked) return
+      if (firstFundProblem(4, fundFields)) return
       const ok = await onSubmit()
       if (ok) goFund(4)
     }
@@ -1818,11 +1812,6 @@ function IdForm({
                 {unavailableLine(otherFlow, other.reason)}
               </p>
             ) : null}
-            {guided && gated && decision.reason ? (
-              <p className="action-reason" data-testid="action-reason">
-                {unavailableLine(slot, decision.reason)}
-              </p>
-            ) : null}
           </>
         ) : null}
         {!guided ? (
@@ -1856,6 +1845,7 @@ function IdForm({
               onNext={() => void onNext()}
               busy={session.preparing}
               nextDisabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
+              reason={gated && decision.reason ? unavailableLine(slot, decision.reason) : null}
             />
             {session.error ? <ActionStatus state={{ status: "error", message: session.error }} nodeRef={session.setNode} /> : null}
           </>

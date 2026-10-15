@@ -186,6 +186,35 @@ function BusyFooter() {
   )
 }
 
+const STEP_REASON = "This vote is not available yet."
+
+function StepReasonFooter() {
+  const [disabled, setDisabled] = useState(true)
+  return (
+    <>
+      <button type="button" onClick={() => setDisabled(false)}>
+        Enable next
+      </button>
+      <GuidedStepFooter
+        onBack={() => undefined}
+        onNext={() => undefined}
+        nextDisabled={disabled}
+        reason={STEP_REASON}
+      />
+    </>
+  )
+}
+
+function renderStepReasonFooter() {
+  return render(
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <StepReasonFooter />
+      </QueryClientProvider>
+    </WagmiProvider>,
+  )
+}
+
 function renderBusyFooter() {
   return render(
     <WagmiProvider config={wagmiConfig}>
@@ -518,6 +547,39 @@ describe("guided footer with an injected connector", () => {
     fireEvent.click(preparing)
     expect(screen.queryByTestId("advanced")).toBeNull()
     expect(screen.getByRole("button", { name: "Preparing…" })).toBe(preparing)
+  })
+
+  it("shows a step reason only while Next is unavailable", async () => {
+    installProvider("0x14a34")
+    renderStepReasonFooter()
+    fireEvent.click(screen.getByTestId("journey-connect"))
+    const reason = await waitFor(() => {
+      const node = screen.getByTestId("footer-reason")
+      expect(node.textContent).toBe(STEP_REASON)
+      return node
+    })
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(next.getAttribute("aria-describedby")).toBe(reason.id)
+    fireEvent.click(screen.getByRole("button", { name: "Enable next" }))
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toBe(""))
+    expect(screen.queryByText(STEP_REASON)).toBeNull()
+    const enabled = screen.getByRole("button", { name: "Next" })
+    expect(enabled.getAttribute("aria-disabled")).toBeNull()
+    expect(enabled.getAttribute("aria-describedby")).toBeNull()
+  })
+
+  it("shows the deep-link step notice after the fund page is already open", async () => {
+    installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    expect(screen.queryByTestId("step-error")).toBeNull()
+    navigate(`/app/fund?step=3&escrow=${escrowInUrl()}`)
+    await waitFor(() => expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("step")).toBeNull())
+    expect(screen.getByTestId("step-error").textContent).toBe(FORM_ERRORS.payee)
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.getAllByText(FORM_ERRORS.payee)).toHaveLength(1)
   })
 
   it("shows an invalid amount from ?step=4 once, and only in the footer", async () => {
