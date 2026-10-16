@@ -2,7 +2,7 @@ import { DISPLAY_NAME } from "../brand"
 
 /** Required line beside every reputation balance. */
 export const BALANCE_LINE =
-  "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and may never convert to anything."
+  "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
 
 export const LATER_LABEL = "Testnet reputation (Base Sepolia)"
 

@@ -8,6 +8,7 @@ import { escrowAbi } from "./abi"
 import { App } from "./App"
 import { ADDRESSES, BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { DISPLAY_NAME } from "./brand"
+import { navigate, walletHome } from "./routes"
 import { FORM_ERRORS } from "./submit"
 
 const ACCOUNT = "0x6dBe4B1c56494Ee00d6f97FFE9f853F42299D6Ac" as Address
@@ -133,13 +134,32 @@ function createScope() {
   return within(form)
 }
 
-function fillCreate(values: Record<string, string>) {
-  const scope = createScope()
+function openFund() {
+  navigate("/app/fund")
+  return createScope()
+}
+
+/** Walk the guided fund steps. Custom duration is applied on the amount step when asked. */
+function fillCreate(values: Record<string, string>, options?: { customSeconds?: string; prepare?: boolean }) {
+  let scope = openFund()
   fireEvent.click(scope.getByRole("button", { name: "Use my own" }))
-  for (const [label, value] of Object.entries(values)) {
-    fireEvent.change(scope.getByLabelText(label), { target: { value } })
+  fireEvent.change(scope.getByLabelText("Escrow ID"), { target: { value: values["Escrow ID"] ?? "" } })
+  fireEvent.change(scope.getByLabelText("Payee wallet"), { target: { value: values["Payee wallet"] ?? "" } })
+  fireEvent.click(scope.getByRole("button", { name: "Next" }))
+  scope = createScope()
+  if (scope.queryByLabelText("Payer bot identifier") == null) return scope
+  fireEvent.change(scope.getByLabelText("Payer bot identifier"), { target: { value: values["Payer bot identifier"] ?? "" } })
+  fireEvent.change(scope.getByLabelText("Payee bot identifier"), { target: { value: values["Payee bot identifier"] ?? "" } })
+  fireEvent.click(scope.getByRole("button", { name: "Next" }))
+  scope = createScope()
+  if (scope.queryByLabelText("Amount in ETH") == null) return scope
+  if (options?.customSeconds != null) {
+    fireEvent.click(scope.getByRole("radio", { name: "Custom" }))
+    fireEvent.change(scope.getByLabelText("Time window in seconds"), { target: { value: options.customSeconds } })
   }
-  return scope
+  fireEvent.change(scope.getByLabelText("Amount in ETH"), { target: { value: values["Amount in ETH"] ?? "" } })
+  if (options?.prepare !== false) fireEvent.click(scope.getByRole("button", { name: "Next" }))
+  return createScope()
 }
 
 function duplicateIds(): string[] {
@@ -152,6 +172,7 @@ function duplicateIds(): string[] {
 }
 
 beforeEach(() => {
+  navigate(walletHome())
   world.explode = null
   vi.stubGlobal(
     "fetch",
@@ -167,23 +188,21 @@ afterEach(() => {
 describe("prepare this escrow", () => {
   it("shows a preview under the button for the reported Base Sepolia inputs", async () => {
     renderApp()
-    await waitFor(() => {
-      expect(screen.getByTestId("vote-arbitrator")).toBeTruthy()
-    })
+    await waitFor(() => expect(screen.getByTestId("task-picker")).toBeTruthy())
     expect(duplicateIds()).toEqual([])
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(DISPLAY_NAME)
 
     const scope = fillCreate(EXACT)
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
     const preview = scope.getByTestId("calldata-preview")
-    const button = scope.getByRole("button", { name: "Prepare this escrow" })
-    expect(button.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const button = scope.getByRole("button", { name: "Submit on Base Sepolia" })
+    expect(preview.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(scope.queryByRole("alert")).toBeNull()
     expect(document.querySelectorAll('[data-testid="calldata-preview"]')).toHaveLength(1)
-    expect(preview.textContent).toContain("This prepares a new escrow.")
-    expect(preview.textContent).toContain("0.001 ETH")
+    expect(preview.textContent).toContain("You are sending 0.001 test ETH into escrow for the payee below.")
+    expect(preview.textContent).not.toContain("This prepares a new escrow.")
+    expect(preview.textContent).toContain("0.001 test ETH")
 
     const calldata = preview.querySelector("pre")?.textContent
     if (!calldata) throw new Error("missing calldata")
@@ -204,16 +223,16 @@ describe("prepare this escrow", () => {
       `  0x${PAYEE.slice(2).toUpperCase()}  `,
     ]
     for (const payee of payees) {
-      const scope = fillCreate({
-        "Escrow ID": `  ${CLAIM.toUpperCase()} \n`,
-        "Payee wallet": payee,
-        "Payer bot identifier": `\t${PAYER_BOT} `,
-        "Payee bot identifier": ` ${PAYEE_BOT.toUpperCase()}\n`,
-        "Amount in ETH": " 0.001 ",
-      })
-      fireEvent.click(scope.getByRole("radio", { name: "Custom" }))
-      fireEvent.change(scope.getByLabelText("Time window in seconds"), { target: { value: " 86400 " } })
-      fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
+      const scope = fillCreate(
+        {
+          "Escrow ID": `  ${CLAIM.toUpperCase()} \n`,
+          "Payee wallet": payee,
+          "Payer bot identifier": `\t${PAYER_BOT} `,
+          "Payee bot identifier": ` ${PAYEE_BOT.toUpperCase()}\n`,
+          "Amount in ETH": " 0.001 ",
+        },
+        { customSeconds: " 86400 " },
+      )
       await waitFor(() => expect(scope.getByTestId("calldata-preview")).toBeTruthy())
 
       const preview = scope.getByTestId("calldata-preview")
@@ -225,20 +244,22 @@ describe("prepare this escrow", () => {
       expect(decoded.args?.[0]).toBe(CLAIM)
       expect(getAddress(String(decoded.args?.[1]))).toBe(getAddress(PAYEE))
       expect(decoded.args?.[4]).toBe(86400n)
-      expect(preview.textContent).toContain("0.001 ETH")
+      expect(preview.textContent).toContain("0.001 test ETH")
     }
   })
 
   it("rejects a mixed-case payee with a bad checksum", async () => {
     renderApp()
-    const scope = fillCreate({
-      ...EXACT,
-      "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
-    })
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
+    const scope = fillCreate(
+      {
+        ...EXACT,
+        "Payee wallet": "0x6C756dacfEcEeA12D5D39536d2eCC175f18bc5a4",
+      },
+      { prepare: false },
+    )
     await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payeeChecksum))
     fireEvent.change(scope.getByLabelText("Payee wallet"), { target: { value: "not-an-address" } })
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
+    fireEvent.click(scope.getByRole("button", { name: "Next" }))
     await waitFor(() => expect(scope.getByRole("alert").textContent).toBe(FORM_ERRORS.payee))
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
     expect(scope.queryByTestId("sepolia-submit")).toBeNull()
@@ -249,12 +270,12 @@ describe("prepare this escrow", () => {
 
   it("renders a validation error under the button instead of leaving the form blank", async () => {
     renderApp()
-    const scope = createScope()
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
+    const scope = openFund()
+    fireEvent.click(scope.getByRole("button", { name: "Next" }))
     await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
-    const button = scope.getByRole("button", { name: "Prepare this escrow" })
-    expect(alert.textContent).toBe(FORM_ERRORS.createIds)
+    const button = scope.getByRole("button", { name: "Next" })
+    expect(alert.textContent).toBe(FORM_ERRORS.payee)
     expect(button.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(scope.queryByTestId("calldata-preview")).toBeNull()
   })
@@ -263,7 +284,6 @@ describe("prepare this escrow", () => {
     world.explode = "encoder blew up"
     renderApp()
     const scope = fillCreate(EXACT)
-    fireEvent.click(scope.getByRole("button", { name: "Prepare this escrow" }))
     await waitFor(() => expect(scope.getByRole("alert")).toBeTruthy())
     const alert = scope.getByRole("alert")
     expect(alert.textContent).toBe("Couldn't prepare this escrow: encoder blew up")
@@ -271,13 +291,37 @@ describe("prepare this escrow", () => {
     expect(document.querySelector('[data-testid="calldata-preview"]')).toBeNull()
   })
 
+  it("does not call the relayer from vote or withdraw while system status is closed", async () => {
+    vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId("task-picker")).toBeTruthy())
+    const relayerCalls = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) => String(call[0]).includes("relayer.example.test"))
+    navigate(`/app/vote?dispute=${CLAIM}`)
+    await waitFor(() => expect(screen.getByTestId("step-count")).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(relayerCalls()).toEqual([])
+    navigate("/app/withdraw")
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(relayerCalls()).toEqual([])
+    fireEvent.click(screen.getByText("System status"))
+    await waitFor(() => expect(relayerCalls().length).toBeGreaterThan(0))
+    vi.unstubAllEnvs()
+  })
+
   it("keeps element ids unique across the rendered app", async () => {
     renderApp()
-    await waitFor(() => {
-      expect(document.getElementById("create-claim")).toBeTruthy()
-      expect(document.getElementById("vote-form")).toBeTruthy()
-      expect(document.getElementById("withdraw-form")).toBeTruthy()
-    })
+    expect(document.getElementById("create-claim")).toBeNull()
+    expect(duplicateIds()).toEqual([])
+    navigate("/app/fund")
+    await waitFor(() => expect(document.getElementById("create-claim")).toBeTruthy())
+    expect(duplicateIds()).toEqual([])
+    navigate("/app/vote")
+    await waitFor(() => expect(document.getElementById("vote-form")).toBeTruthy())
+    expect(duplicateIds()).toEqual([])
+    navigate("/app/withdraw")
+    await waitFor(() => expect(document.getElementById("withdraw-form")).toBeTruthy())
     expect(duplicateIds()).toEqual([])
   })
 })

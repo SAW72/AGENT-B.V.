@@ -4,11 +4,11 @@
 
 This file is the single copy inside AGENT B.V. of everything discussed for the points programs and the accountability layer. Partner rubrics also live in their own repos:
 
-- STRANDED: `docs/POINTS-PROGRAM.md` and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/STRANDED
-- RAT Score: `docs/POINTS-PROGRAM.md` and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
-- Agent B.V. detail: `docs/POINTS-PROGRAM.md`, `docs/POINTS-ANNOUNCEMENT-DRAFT.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
+- STRANDED: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/STRANDED
+- RAT Score: points program doc and `docs/POINTS-ANNOUNCEMENT-DRAFT.md` in SAW72/rwa-transparency-score
+- Agent B.V. detail: `docs/AGENT-BV-POINTS-SPEC.md`, `docs/VERIFICATION-LAYER-PITCH.md`, `docs/decision-chain-spec.md`
 
-Counsel should review before any of this is published. The March 2026 SEC/CFTC airdrop interpretation is guidance, not a statute, and it does not bind a court.
+Counsel should review before any of this is published.
 
 ---
 
@@ -17,13 +17,11 @@ Counsel should review before any of this is published. The March 2026 SEC/CFTC a
 1. **Post-facto only.** Points record activity that already happened. Do not announce "use this and you will be rewarded" while the activity is still open.
 2. **No consideration.** No purchase, no referral bonus, no holding requirement.
 3. **No token during the points phase.** No testnet reward token. No dollar amounts. No "your points are worth X."
-4. **Conversion rate set at TGE, never before.** Illustrative only: 5% of a 100M supply = 5M tokens for points. 2M points earned → 2.5 tokens/point. 5M → 1. 10M → 0.5. The real rate is chosen after the snapshot.
-5. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
-6. **Read-only dashboard.** Enter a wallet address. See points by category and rank. No login, no sign-up, no connect-wallet button.
-7. **Freeze.** Announce 14 days ahead. Stop writes at T-zero. Merkle tree of (wallet, total_points). Publish the root. Claim with a Merkle proof plus a wallet signature. Unclaimed after 90 days goes to a community treasury, not the team.
-8. **Illustrative allocation.** Team and investors 20% (4-year vest, 1-year cliff). Treasury 25%. Liquidity 10%. Public sale 15%. Points 5%. Unallocated 25%.
+4. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
+5. **Read-only dashboard.** It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button.
+6. **Freeze.** If the points program ends or pauses, Agent-BV announces it at least 14 days ahead, stops new writes at the stated time, and keeps the off-chain record read-only so anyone can still look up a wallet's activity. There is no snapshot for distribution, no Merkle root, no claim, and nothing is paid out, converted or transferred. The record may be archived or deleted later under the privacy policy.
 
-Points rent users. They do not keep them. Size the points slice modestly. The product has to be worth using after rewards stop.
+Points are a record of activity, not an incentive. The product has to be worth using on its own.
 
 ---
 
@@ -33,14 +31,14 @@ Depth over breadth. One real rescue is worth a lot.
 
 | Action | Points | Notes |
 |---|---|---|
-| Rescue completed (GasRescue) | 100 + 1 per $1 of token value rescued | Core user signal |
+| Rescue completed (GasRescue) | TBD per verified rescue | Core user signal |
 | Relayer job executed | 50 | Registered operator identity required |
 | Registry find posted | 30 | Must be a real stranded balance |
 | Registry find claimed | 50 | Claim must succeed on-chain |
 | Active wallet session | 10 per week | One session per wallet per week |
-| Bug report / security finding | 100–500 by severity | Tx hash or reproducible steps |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 
-Anti-gaming: one rescue is 100 points no matter how many wallets. No referral bonuses. No points for holding or transferring. Relayer jobs need a registered operator.
+Anti-gaming: one rescue counts once no matter how many wallets. No referral bonuses. No points for holding or transferring. Relayer jobs need a registered operator.
 
 Chain of record: Arbitrum Sepolia.
 
@@ -58,7 +56,7 @@ Breadth over depth. Many small scores, not one big rescue. Not part of the CoinM
 | Score attested on-chain | 25 | ScoreAttestation hash on Base Sepolia |
 | Score shared on X | 15 | Distribution |
 | API integration built | 100 | Must be live and publicly documented |
-| Bug report / security finding | 100–500 by severity | Tx hash or reproducible steps |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 
 Same anti-gaming rules. Repeated runs of the same issuer do not multiply.
 
@@ -75,7 +73,7 @@ AI-generated scores count only with an AGENT B.V. attestation. See section 5.
 | Verification run completed | 10 | One run per wallet per day |
 | Attestation issued on-chain | 50 | Hash locked on-chain |
 | Integration built by another project | 100 | Live and publicly documented |
-| Bug report / security finding | 100–500 by severity | Reproducible steps or tx hash |
+| Security report | No points | Security reports go through the security policy and carry no points. |
 | Partner credits a user because of an AGENT B.V. attestation | 1 mirrored point | No attestation, no mirror |
 
 AGENT B.V. does not pay the partner's points. The partner does. AGENT B.V. only records that it did the verification.

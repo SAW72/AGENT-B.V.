@@ -53,7 +53,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          VITE_CLAIM_RELAYER_URL: ${{ vars.VITE_CLAIM_RELAYER_URL }}
         run: |
           missing=0
           if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
@@ -68,21 +67,14 @@ jobs:
             echo "CLOUDFLARE_ACCOUNT_ID is empty. Store it as a secret on the production GitHub environment only, never as a repository secret. Spencer: delete any existing repository-level copy before running Deploy wallet-ux."
             missing=1
           fi
-          relayer_url=$(printf '%s' "$VITE_CLAIM_RELAYER_URL" | tr -d '\r\n')
-          relayer_url="${relayer_url#"${relayer_url%%[![:space:]]*}"}"
-          relayer_url="${relayer_url%"${relayer_url##*[![:space:]]}"}"
-          if [ -z "$relayer_url" ]; then
-            echo "VITE_CLAIM_RELAYER_URL is empty. Set the production environment variable VITE_CLAIM_RELAYER_URL to an https:// URL. It is a production environment variable, never a repository variable. Spencer: delete any existing repository-level copy."
-            missing=1
-          elif [ "${relayer_url#https://}" = "$relayer_url" ]; then
-            echo "VITE_CLAIM_RELAYER_URL does not start with https://. Set the production environment variable VITE_CLAIM_RELAYER_URL to an https:// URL. It is a production environment variable, never a repository variable."
-            missing=1
-          else
-            echo "VITE_CLAIM_RELAYER_URL is set on the production environment and starts with https://."
-          fi
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
+
+      # Same list as npm run build. Do not pass vars.VITE_CLAIM_RELAYER_URL:
+      # an empty GitHub variable is still exported and would override the file.
+      - name: Require checked-in wallet-ux build env
+        run: node scripts/require-build-env.mjs
 
       - name: Install
         run: npm ci
@@ -97,8 +89,6 @@ jobs:
 
       - name: Build
         run: npm run build
-        env:
-          VITE_CLAIM_RELAYER_URL: ${{ vars.VITE_CLAIM_RELAYER_URL }}
 
       - name: Guard escrow addresses in the built bundle
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/guard-escrow-addresses.mjs dist

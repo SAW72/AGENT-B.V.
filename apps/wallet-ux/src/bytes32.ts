@@ -27,12 +27,19 @@ export function randomBytes32(
   return hex as `0x${string}`
 }
 
+export const ZERO_BYTES32 = `0x${"0".repeat(64)}` as `0x${string}`
+
 export function parseBytes32(raw: string): `0x${string}` | null {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return null
   const { body } = normalizeHexPrefix(trimmed)
   if (!HEX_64.test(body)) return null
   return `0x${body.toLowerCase()}`
+}
+
+export function isZeroBytes32(value: string | null | undefined): boolean {
+  if (!value) return false
+  return parseBytes32(value) === ZERO_BYTES32
 }
 
 const MATCH_LEVELS = ["None", "PromptBlock", "SignatureBlock", "ExactBlock"] as const

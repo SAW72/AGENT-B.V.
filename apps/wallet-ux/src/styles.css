@@ -116,7 +116,8 @@ button.link-button {
   width: auto;
 }
 
-button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:disabled,
+button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 form > button { margin: 0 8px 8px 0; }
 
 a { color: #1e4d78; }
@@ -161,7 +162,7 @@ fieldset.choice label {
   gap: 8px;
   align-items: center;
   margin: 2px 0;
-  min-height: 36px;
+  min-height: 44px;
 }
 
 fieldset.choice input { width: auto; }
@@ -520,6 +521,190 @@ footer { color: var(--muted); font-size: 0.92rem; }
     width: auto;
     margin: 0;
   }
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.task-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--card);
+}
+
+.task-card h3 { margin: 0 0 4px; font-size: 1.05rem; }
+.task-card p { margin: 0 0 10px; }
+
+a.task-link,
+button.task-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+a.task-link {
+  background: #243024;
+  color: #f7f4ee;
+}
+
+a.task-link.secondary,
+button.task-link.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.readonly-card {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  background: #f6f3ec;
+}
+
+.first-run {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.first-run > button,
+.first-run > a { align-self: flex-start; }
+.first-run .task-link { margin-top: 0; }
+.stepper { margin: 4px 0 12px; }
+.first-run > * { margin-top: 0; margin-bottom: 0; }
+.step-count { margin: 0 0 8px; font-weight: 700; }
+.step-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.step-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin: 0;
+  padding: 2px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+.step-dot-mark { font-weight: 700; line-height: 1; }
+.step-dot.done {
+  border-style: solid;
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.step-dot.current {
+  border-style: solid;
+  border-width: 2px;
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+}
+.step-dot.upcoming .step-dot-mark { font-weight: 400; }
+
+.guided-footer {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.footer-reason {
+  margin: 16px 0 0;
+  /* Three lines at 390px. Empty, the wrapped switch sentence, and the
+     longest unavailable sentence then occupy the same box, so Next does
+     not move when the reason line appears or disappears. */
+  min-height: 4.35em;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.withdraw-available {
+  margin: 1em 0;
+  /* The amount line is one line. The disconnected sentence wraps to two
+     at 390px. Reserving both keeps Next still when either is shown. */
+  min-height: 2.9em;
+  line-height: 1.45;
+}
+
+.step-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.guided-footer .footer-reason + .step-actions {
+  margin-top: 8px;
+}
+
+.back-button {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 14px;
+  min-height: 44px;
+  width: auto;
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.step-primary { flex: 1; min-width: 0; }
+.step-primary button,
+.step-primary a.next-step { width: 100%; min-height: 44px; margin-top: 0; }
+
+.action-confirmed .kv-row {
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+}
+
+.system-status { margin: 18px 0; }
+.system-status summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .step-actions .back-button { min-height: 44px; width: auto; flex: 0 0 auto; }
+  .action-confirmed .kv-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 360px) {
+  .step-actions { gap: 8px; }
+  .step-actions .back-button,
+  .step-primary button,
+  .step-primary a.next-step {
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
+  .site-header .wordmark {
+    font-size: 0.78rem;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+  .site-header .chip-network { display: none; }
+  .site-header .wallet-chip { max-width: 58%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
