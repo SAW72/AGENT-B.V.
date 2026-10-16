@@ -12,6 +12,7 @@ import { parseBytes32 } from "./bytes32"
 import { DEFAULT_DURATION_SECONDS } from "./duration"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
 import { GuidedStepFooter } from "./guidedFooter"
+import * as guidedFooter from "./guidedFooter"
 import { FORM_ERRORS } from "./submit"
 import { previewCreateEscrow } from "./preview"
 import { navigate, STEP_IGNORED, useWalletRoute, walletHome } from "./routes"
@@ -277,6 +278,7 @@ afterEach(async () => {
   window.localStorage.clear()
   window.sessionStorage.removeItem(FUND_ESCROW_STORAGE_KEY)
   resetMemory()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   Reflect.deleteProperty(window, "ethereum")
 })
@@ -696,5 +698,88 @@ describe("guided footer with an injected connector", () => {
     expect(screen.queryByLabelText("Payer bot identifier")).toBeNull()
     expect(reasonLine().textContent).toBe(SWITCH)
     expect(paragraphCopies(SWITCH)).toHaveLength(1)
+  })
+
+  async function renderFilledWrongChain() {
+    const wallet = installProvider("0x1")
+    renderFund()
+    fireEvent.click(screen.getByTestId("journey-connect"))
+    await waitFor(() => expect(reasonLine().textContent).toBe(SWITCH))
+    fill("Payee wallet", PAYEE)
+    return wallet
+  }
+
+  function expectStillOnWrongChainStep1(wallet: Wallet) {
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.queryByLabelText("Payer bot identifier")).toBeNull()
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    expect(screen.getByTestId("journey-switch").textContent).toBe("Switch to Base Sepolia")
+    expect((screen.getByLabelText("Payee wallet") as HTMLInputElement).value).toBe(PAYEE)
+    expect(wallet.calls.some((method) => SEND_METHODS.includes(method))).toBe(false)
+  }
+
+  it("Enter on a filled wrong-chain fund form stays on step 1", async () => {
+    const wallet = await renderFilledWrongChain()
+    const payee = screen.getByLabelText("Payee wallet")
+    const form = payee.closest("form")
+    if (!(form instanceof HTMLFormElement)) throw new Error("missing fund form")
+    fireEvent.keyDown(payee, { key: "Enter", code: "Enter", keyCode: 13 })
+    form.requestSubmit()
+    expectStillOnWrongChainStep1(wallet)
+  })
+
+  it("submit on a filled wrong-chain fund form stays on step 1", async () => {
+    const wallet = await renderFilledWrongChain()
+    fireEvent.submit(document.getElementById("create-claim")!)
+    expectStillOnWrongChainStep1(wallet)
+  })
+
+  it("Next on a filled fund step does not advance when the wallet check refuses", async () => {
+    const wallet = installProvider("0x14a34")
+    // The footer hides Next on the wrong chain. This leaves Next on screen and makes the wallet check refuse, which is the path onNext guards by itself.
+    const refuse = vi.spyOn(guidedFooter, "flowMayAdvance").mockReturnValue(false)
+    renderFund()
+    await connectWallet()
+    fill("Payee wallet", PAYEE)
+    expect(screen.getByRole("button", { name: "Next" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    expect(screen.getByTestId("step-count").textContent).toBe("Step 1 of 4")
+    expect(screen.queryByLabelText("Payer bot identifier")).toBeNull()
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect((screen.getByLabelText("Payee wallet") as HTMLInputElement).value).toBe(PAYEE)
+    expect(wallet.calls.some((method) => SEND_METHODS.includes(method))).toBe(false)
+    refuse.mockRestore()
+  })
+
+  it("Enter and submit on an empty or blank amount stay on step 3 without a second error", async () => {
+    const wallet = installProvider("0x14a34")
+    renderFund()
+    await connectWallet()
+    await goToAmount()
+    for (const amount of ["", "   "]) {
+      fill("Amount in ETH", amount)
+      expect(reasonLine().textContent).toBe(FORM_ERRORS.valueEmpty)
+      const next = screen.getByRole("button", { name: "Next" }) as HTMLButtonElement
+      expect(next.getAttribute("aria-disabled")).toBe("true")
+      expect(next.hasAttribute("disabled")).toBe(false)
+      const amountField = screen.getByLabelText("Amount in ETH")
+      const form = amountField.closest("form")
+      if (!(form instanceof HTMLFormElement)) throw new Error("missing fund form")
+      fireEvent.keyDown(amountField, { key: "Enter", code: "Enter", keyCode: 13 })
+      form.requestSubmit()
+      fireEvent.click(next)
+      fireEvent.submit(form)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      })
+      expect(screen.getAllByText(FORM_ERRORS.valueEmpty)).toHaveLength(1)
+      expect(screen.queryByRole("alert")).toBeNull()
+      expect(screen.queryByTestId("action-error")).toBeNull()
+      expect(reasonLine().textContent).toBe(FORM_ERRORS.valueEmpty)
+      expect(screen.getByTestId("step-count").textContent).toBe("Step 3 of 4")
+      expect(screen.queryByTestId("review-step")).toBeNull()
+    }
+    expect(wallet.calls.some((method) => SEND_METHODS.includes(method))).toBe(false)
   })
 })
