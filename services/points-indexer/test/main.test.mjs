@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { HttpRequestError, RpcRequestError } from "viem";
 import { ESCROW_START_BLOCK, PANEL } from "../src/constants.mjs";
 import {
   DEFAULT_DB_PATH,
   DEFAULT_ESCROW_ADDRESS,
   DEFAULT_LOG_RANGE,
+  DEFAULT_MAX_WINDOWS,
   DEFAULT_POLL_MS,
   DEFAULT_RPC_URL,
+  createDefaultRpc,
+  isRangeError,
   loadConfig,
+  redact,
   start,
 } from "../src/main.mjs";
 import { account, createdLog, creditCandidate, loadFixture, tempIndexer } from "./support.mjs";
@@ -60,7 +66,9 @@ describe("process entry", () => {
     assert.equal(config.dbPath, DEFAULT_DB_PATH);
     assert.equal(config.pollMs, DEFAULT_POLL_MS);
     assert.equal(config.logRange, DEFAULT_LOG_RANGE);
-    assert.equal(config.logRange, 2000);
+    assert.equal(config.logRange, 200);
+    assert.equal(config.maxWindows, DEFAULT_MAX_WINDOWS);
+    assert.equal(config.maxWindows, 500);
   });
 
   it("overrides rpc, database path, poll interval, and log range from env", () => {
@@ -71,11 +79,13 @@ describe("process entry", () => {
       POINTS_DB_PATH: "/tmp/points-indexer/ledger.sqlite",
       POINTS_POLL_MS: "2500",
       POINTS_LOG_RANGE: "250",
+      POINTS_MAX_WINDOWS_PER_PASS: "12",
     });
     assert.equal(config.rpcUrl, "https://sepolia.base.org/example");
     assert.equal(config.dbPath, "/tmp/points-indexer/ledger.sqlite");
     assert.equal(config.pollMs, 2500);
     assert.equal(config.logRange, 250);
+    assert.equal(config.maxWindows, 12);
     const fromUrl = loadConfig({ DATABASE_URL: "/var/tmp/ledger.sqlite" });
     assert.equal(fromUrl.dbPath, "/var/tmp/ledger.sqlite");
   });
@@ -89,6 +99,12 @@ describe("process entry", () => {
   it("refuses a log range that is not a positive integer", () => {
     for (const range of ["0", "-1", "1.5", "abc"]) {
       assert.throws(() => loadConfig({ POINTS_LOG_RANGE: range }), /POINTS_LOG_RANGE must be a positive integer/);
+    }
+    for (const cap of ["0", "-1", "1.5", "abc"]) {
+      assert.throws(
+        () => loadConfig({ POINTS_MAX_WINDOWS_PER_PASS: cap }),
+        /POINTS_MAX_WINDOWS_PER_PASS must be a positive integer/,
+      );
     }
   });
 
@@ -317,9 +333,11 @@ describe("process entry", () => {
           const span = args.toBlock - args.fromBlock + 1;
           spans.push(span);
           if (span > 2) {
-            const error = new Error("too many results");
-            error.status = 413;
-            throw error;
+            throw new RpcRequestError({
+              body: { method: "eth_getLogs" },
+              error: { code: -32614, message: "eth_getLogs is limited to a 2 range" },
+              url: "https://sepolia.base.org",
+            });
           }
           return [];
         },
@@ -351,9 +369,12 @@ describe("process entry", () => {
           return head;
         },
         async getLogs() {
-          const error = new Error("Payload Too Large");
-          error.status = 413;
-          throw error;
+          throw new HttpRequestError({
+            body: { method: "eth_getLogs" },
+            details: "Payload Too Large",
+            status: 413,
+            url: "https://sepolia.base.org",
+          });
         },
       }),
     });
@@ -555,6 +576,456 @@ describe("process entry", () => {
     } finally {
       if (running) await running.stop();
       else if (health) await health.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies viem range errors without treating a hex 413 as a range limit", () => {
+    const limited = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32614, message: "eth_getLogs is limited to a 200 range" },
+      url: "https://sepolia.base.org",
+    });
+    assert.equal(limited.status, undefined);
+    assert.equal(isRangeError(limited), true);
+    assert.match(limited.details, /limited to a 200 range/);
+
+    const hexBlock = new RpcRequestError({
+      body: { method: "eth_getLogs", params: [{ fromBlock: "0x413000", toBlock: "0x4130c8" }] },
+      error: { code: -32000, message: "header not found" },
+      url: "https://sepolia.base.org",
+    });
+    assert.match(hexBlock.message, /413/);
+    assert.equal(isRangeError(hexBlock), false);
+
+    const rows = [
+      [new HttpRequestError({ status: 413, url: "https://sepolia.base.org", body: {} }), true],
+      [new HttpRequestError({ status: 502, url: "https://sepolia.base.org", body: {} }), false],
+      [Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }), false],
+      [new HttpRequestError({ status: 429, url: "https://sepolia.base.org", body: {} }), false],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32602, message: "block range is too large" },
+        url: "https://sepolia.base.org",
+      }), true],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32602, message: "missing required field" },
+        url: "https://sepolia.base.org",
+      }), false],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32005, message: "too many results" },
+        url: "https://sepolia.base.org",
+      }), true],
+    ];
+    for (const [error, expected] of rows) assert.equal(isRangeError(error), expected);
+  });
+
+  it("completes a pass when a real viem client receives the 200-block HTTP 413", async () => {
+    const dir = dbDir();
+    const head = ESCROW_START_BLOCK + 399;
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+      const send = (status, payload) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, ...payload }));
+      };
+      if (body.method === "eth_chainId") return send(200, { result: "0x14a34" });
+      if (body.method === "eth_getCode") return send(200, { result: "0x60016000" });
+      if (body.method === "eth_blockNumber") return send(200, { result: `0x${head.toString(16)}` });
+      if (body.method === "eth_getLogs") {
+        const params = body.params?.[0] ?? {};
+        const from = Number(BigInt(params.fromBlock));
+        const to = Number(BigInt(params.toBlock));
+        if (to - from > 200) {
+          res.writeHead(413, { "content-type": "application/json" });
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id ?? 1,
+            error: { code: -32614, message: "eth_getLogs is limited to a 200 range" },
+          }));
+          return;
+        }
+        return send(200, { result: [] });
+      }
+      send(200, { error: { code: -32601, message: `unhandled ${body.method}` } });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const url = `http://127.0.0.1:${address.port}`;
+    let running;
+    try {
+      const probe = createDefaultRpc(url);
+      const sample = await probe.getLogs({
+        fromBlock: ESCROW_START_BLOCK,
+        toBlock: ESCROW_START_BLOCK + 2000,
+        address: [DEFAULT_ESCROW_ADDRESS],
+      }).then(() => null, (error) => error);
+      assert.equal(sample.code, -32614);
+      assert.equal(sample.status, undefined);
+      assert.equal(isRangeError(sample), true);
+      running = await start({
+        once: true,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_LOG_RANGE: "1000",
+          BASE_SEPOLIA_RPC_URL: url,
+        },
+      });
+      assert.equal(running.ingested.ok, true);
+      assert.equal(running.indexer.lastScannedBlock(), head);
+      assert.equal(running.ingested.ranges[0].toBlock - running.ingested.ranges[0].fromBlock, 199);
+      assert.ok(running.ingested.ranges.every((range) => range.toBlock - range.fromBlock <= 199));
+    } finally {
+      if (running) await running.stop();
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a keyed RPC URL out of /health and out of console.error", async () => {
+    const dir = dbDir();
+    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
+    const logged = [];
+    const original = console.error;
+    console.error = (...args) => {
+      logged.push(args.map((part) => String(part)).join(" "));
+    };
+    let running;
+    try {
+      const leaked = redact(
+        `RPC Request failed.\n\nURL: ${keyUrl}\nRequest body: {"method":"eth_getLogs"}`,
+        keyUrl,
+      );
+      assert.equal(leaked.includes("FAKE_SECRET_KEY_abc123"), false);
+      assert.equal(leaked.includes(keyUrl), false);
+      assert.equal(leaked.includes("https://"), false);
+      running = await start({
+        serve: true,
+        port: 0,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+          BASE_SEPOLIA_RPC_URL: keyUrl,
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK + 4;
+          },
+          async getLogs() {
+            throw new RpcRequestError({
+              body: { method: "eth_getLogs" },
+              error: { code: -32000, message: "header not found" },
+              url: keyUrl,
+            });
+          },
+        }),
+      });
+      const response = await fetch(running.healthUrl);
+      assert.equal(response.status, 503);
+      const text = await response.text();
+      assert.equal(text.includes("FAKE_SECRET_KEY_abc123"), false);
+      assert.equal(text.includes(keyUrl), false);
+      assert.equal(text.includes("example-rpc.io"), false);
+      const body = JSON.parse(text);
+      assert.equal(body.error, "rpc_error");
+      assert.equal(body.ok, false);
+      const joined = logged.join("\n");
+      assert.match(joined, /rpc_error/);
+      assert.equal(joined.includes("FAKE_SECRET_KEY_abc123"), false);
+      assert.equal(joined.includes(keyUrl), false);
+      assert.equal(joined.includes("example-rpc.io"), false);
+      assert.equal(joined.includes("https://"), false);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes at cursor + 1 after the database is closed and opened again", async () => {
+    const dir = dbDir();
+    const path = join(dir, "ledger.sqlite");
+    const head = ESCROW_START_BLOCK + 40;
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: path,
+      POINTS_LOG_RANGE: "10",
+      POINTS_MAX_WINDOWS_PER_PASS: "1",
+    };
+    const calls = [];
+    const first = await start({
+      once: true,
+      env,
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          calls.push(args.fromBlock);
+          return [];
+        },
+      }),
+    });
+    const cursor = first.indexer.lastScannedBlock();
+    assert.equal(cursor, ESCROW_START_BLOCK + 9);
+    await first.stop();
+    calls.length = 0;
+    const second = await start({
+      once: true,
+      env: { ...env, POINTS_MAX_WINDOWS_PER_PASS: "2" },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          calls.push(args.fromBlock);
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(calls[0], cursor + 1);
+      for (const from of calls) assert.ok(from > cursor);
+      assert.equal(second.indexer.lastScannedBlock(), cursor + 20);
+    } finally {
+      await second.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the next pass after a pass rejects", async () => {
+    const dir = dbDir();
+    let mode = "idle";
+    const running = await start({
+      once: true,
+      env: {
+        CHAIN_ID: "84532",
+        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+        POINTS_LOG_RANGE: "5",
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          if (mode === "idle") return ESCROW_START_BLOCK - 1;
+          return ESCROW_START_BLOCK + 4;
+        },
+        async getLogs() {
+          if (mode === "fail") {
+            const error = new Error("read ECONNRESET");
+            error.code = "ECONNRESET";
+            throw error;
+          }
+          return [];
+        },
+      }),
+    });
+    try {
+      mode = "fail";
+      await assert.rejects(() => running.pass(), /ECONNRESET/);
+      mode = "ok";
+      const again = await running.pass();
+      assert.equal(again.skipped, false);
+      assert.equal(again.ok, true);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
+    } finally {
+      await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds once per pass and retries a rebuild that failed after commit", async () => {
+    const dir = dbDir();
+    let head = ESCROW_START_BLOCK - 1;
+    let rebuilds = 0;
+    let failRebuild = false;
+    const running = await start({
+      once: true,
+      onIndexer(indexer) {
+        const original = indexer.rebuild.bind(indexer);
+        indexer.rebuild = () => {
+          rebuilds += 1;
+          if (failRebuild) {
+            failRebuild = false;
+            throw new Error("rebuild failed");
+          }
+          return original();
+        };
+      },
+      env: {
+        CHAIN_ID: "84532",
+        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+        POINTS_LOG_RANGE: "10",
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(rebuilds, 0);
+      head = ESCROW_START_BLOCK + 2;
+      const scanned = await running.pass();
+      assert.equal(scanned.ranges.length, 1);
+      assert.equal(rebuilds, 1);
+      const idle = await running.pass();
+      assert.equal(idle.ranges.length, 0);
+      assert.equal(rebuilds, 1);
+      failRebuild = true;
+      head = ESCROW_START_BLOCK + 4;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
+      assert.equal(rebuilds, 2);
+      const retried = await running.pass();
+      assert.equal(retried.ranges.length, 0);
+      assert.equal(retried.rebuilds, 1);
+      assert.equal(rebuilds, 3);
+      const quiet = await running.pass();
+      assert.equal(quiet.rebuilds, 0);
+      assert.equal(rebuilds, 3);
+    } finally {
+      await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the learned window across passes and grows it after each success", async () => {
+    const dir = dbDir();
+    const head = ESCROW_START_BLOCK + 5_000;
+    let strict = true;
+    const spans = [];
+    const running = await start({
+      once: true,
+      env: {
+        CHAIN_ID: "84532",
+        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+        POINTS_LOG_RANGE: "800",
+        POINTS_MAX_WINDOWS_PER_PASS: "1",
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          const span = args.toBlock - args.fromBlock + 1;
+          spans.push(span);
+          if (strict && span > 150) {
+            throw new RpcRequestError({
+              body: { method: "eth_getLogs" },
+              error: { code: -32614, message: "eth_getLogs is limited to a 150 range" },
+              url: "https://sepolia.base.org",
+            });
+          }
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.deepEqual(spans, [800, 150]);
+      strict = false;
+      spans.length = 0;
+      await running.pass();
+      assert.equal(spans[0], 300);
+      spans.length = 0;
+      await running.pass();
+      assert.equal(spans[0], 600);
+      spans.length = 0;
+      await running.pass();
+      assert.equal(spans[0], 800);
+    } finally {
+      await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps windows in one pass and reports catching up on /health", async () => {
+    const dir = dbDir();
+    const head = ESCROW_START_BLOCK + 100;
+    let clock = 1_000_000;
+    let calls = 0;
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      now: () => clock,
+      env: {
+        CHAIN_ID: "84532",
+        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+        POINTS_LOG_RANGE: "10",
+        POINTS_MAX_WINDOWS_PER_PASS: "2",
+        POINTS_POLL_MS: "1000",
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          calls += 1;
+          assert.equal(args.toBlock - args.fromBlock + 1, 10);
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(calls, 2);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19);
+      const response = await fetch(running.healthUrl);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.behind, head - (ESCROW_START_BLOCK + 19));
+      assert.equal(JSON.stringify(body).includes("http"), false);
+      assert.equal(body.error, undefined);
+      const again = await running.pass();
+      assert.equal(again.ranges[0].fromBlock, ESCROW_START_BLOCK + 20);
+      assert.equal(calls, 4);
+    } finally {
+      await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps serving 503 when the first pass fails and does not reject start", async () => {
+    const dir = dbDir();
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK + 5;
+          },
+          async getLogs() {
+            throw new Error("boom");
+          },
+        }),
+      });
+      assert.equal(running.ingested.ok, false);
+      assert.equal(running.ingested.error, "rpc_error");
+      const response = await fetch(running.healthUrl);
+      assert.equal(response.status, 503);
+      const body = await response.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rpc_error");
+      assert.equal(JSON.stringify(body).includes("boom"), false);
+    } finally {
+      if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
