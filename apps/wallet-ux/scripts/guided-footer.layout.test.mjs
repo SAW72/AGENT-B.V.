@@ -16,6 +16,31 @@ const CONNECT = "Connect a wallet to continue."
 const SWITCH = "Switch your wallet to Base Sepolia to continue."
 const AMOUNT = "Enter an amount of test ETH, such as 0.001."
 
+/** A layout attempt may run again only after the document itself was replaced. */
+export function layoutAttemptReloaded(startOrigin, currentOrigin) {
+  return currentOrigin !== startOrigin
+}
+
+/** How many attempts a sequence of timeOrigin samples uses. A same-document failure stops. */
+export function layoutAttemptsForOrigins(origins) {
+  let origin = origins[0]
+  let attempts = 0
+  for (let index = 0; index < 3; index += 1) {
+    attempts += 1
+    const current = origins[index + 1] ?? origin
+    if (!layoutAttemptReloaded(origin, current)) break
+    origin = current
+  }
+  return attempts
+}
+
+describe("layout reload retry", () => {
+  it("retries once after a simulated document reload and not after a same-document failure", () => {
+    expect(layoutAttemptsForOrigins([10, 10])).toBe(1)
+    expect(layoutAttemptsForOrigins([10, 20, 20])).toBe(2)
+  })
+})
+
 function chromePath() {
   if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH
   for (const candidate of [
@@ -386,8 +411,9 @@ describe("guided footer reasons at 390x844", () => {
       let switched = false
       let lastError = "the silent chain change never showed Switch"
       // A document reload clears localStorage and the injected accounts, so the
-      // page comes back as Connect after Next was already held. Retry the whole
-      // connect, hold, and arm cycle instead of waiting longer.
+      // page comes back as Connect after Next was already held. Retry only when
+      // performance.timeOrigin changes. A same-document failure stays failed.
+      let documentOrigin = await page.evaluate(() => performance.timeOrigin)
       for (let attempt = 0; attempt < 3 && !switched; attempt += 1) {
         try {
           const deadline = Date.now() + 20_000
@@ -473,6 +499,14 @@ describe("guided footer reasons at 390x844", () => {
           else throw new Error("Wallet session dropped after the silent chain change")
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error)
+          let currentOrigin = documentOrigin
+          try {
+            currentOrigin = await page.evaluate(() => performance.timeOrigin)
+          } catch {
+            currentOrigin = documentOrigin
+          }
+          if (!layoutAttemptReloaded(documentOrigin, currentOrigin)) break
+          documentOrigin = currentOrigin
         }
       }
       if (!switched) throw new Error(`Switch sentence did not appear (${lastError})`)
