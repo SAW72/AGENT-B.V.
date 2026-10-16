@@ -382,7 +382,7 @@ describe("phase 2 guided flows", () => {
     world.expiresAt = 1n
     navigate(`/app/refund?escrow=${id}`)
     await waitFor(() => expectGuidedNextReady())
-    expect(screen.getByTestId("other-action").textContent).toMatch(/Release a payment is unavailable/)
+    expect(screen.getByTestId("other-action").textContent).toMatch(/Releasing a payment is unavailable/)
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     const refundReview = await waitFor(() => screen.getByTestId("review-step"))
     expect(calldataOf(refundReview)).toBe(previewRefund(escrow, id).calldata)
@@ -962,7 +962,9 @@ describe("phase 2 guided flows", () => {
       expect(FLOW_STEPS[flow]).toBe(defined.stepLabels.length)
       expect(flowHref(flow, 1)).toBe(`/app/${flow}`)
       expect(flowTitle(flow)).toBe(defined.title)
-      expect(unavailableLine(flow, "Blocked.")).toBe(`${defined.title} is unavailable. Blocked.`)
+      expect(unavailableLine(flow, "Blocked.")).toBe(
+        flow === "release" ? "Releasing a payment is unavailable. Blocked." : `${defined.title} is unavailable. Blocked.`,
+      )
     }
     expect(FLOW_CATALOG.release.counterpart).toBe("refund")
     expect(FLOW_CATALOG.refund.counterpart).toBe("release")
