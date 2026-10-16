@@ -107,6 +107,8 @@ describe("guided step footer at 390x844", () => {
       server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     })
     await server.listen()
+    // Test-only: server.watcher.close() in the layout and footer-overlap test servers depends on Vite internals. A page reload was observed; QA could not confirm the cause, so this keeps the watcher closed.
+    await server.watcher.close()
     const address = server.httpServer?.address()
     const port = address && typeof address === "object" ? address.port : 0
     base = `http://127.0.0.1:${port}/app/`

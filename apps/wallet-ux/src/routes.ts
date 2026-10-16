@@ -82,9 +82,10 @@ export function flowTitle(flow: FlowId): string {
   return FLOW_CATALOG[flow].title
 }
 
-/** One sentence. The flow name always comes from the catalog, never from a second copy. */
+/** One sentence. Release uses the gerund; every other name comes from the catalog. */
 export function unavailableLine(flow: FlowId, reason: string): string {
-  return `${flowTitle(flow)} is unavailable. ${reason}`
+  const name = flow === "release" ? "Releasing a payment" : flowTitle(flow)
+  return `${name} is unavailable. ${reason}`
 }
 
 export const STEP_IGNORED = "That step in the link was ignored."
