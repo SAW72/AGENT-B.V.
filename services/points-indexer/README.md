@@ -10,7 +10,11 @@ npm test
 npm start
 ```
 
-`src/main.mjs` is the process entry. Importing it does not open a poll loop. `loadConfig` reads environment variables only (`BASE_SEPOLIA_RPC_URL`, `CHAIN_ID`, `ESCROW_ADDRESS`, `POINTS_DB_PATH` or `DATABASE_URL`, `POINTS_POLL_MS`). `start({ rpc, once: true })` takes an injected client, ingests one finalized range, and returns. A chain id other than `84532`, an RPC that reports another chain id, or a missing, zero, or malformed escrow address stops the process before logs are read.
+`src/main.mjs` is the process entry. Importing it does not open a poll loop. `loadConfig` reads environment variables only (`BASE_SEPOLIA_RPC_URL`, `CHAIN_ID`, `ESCROW_ADDRESS`, `POINTS_DB_PATH` or `DATABASE_URL`, `POINTS_POLL_MS`, `POINTS_LOG_RANGE`). `start({ rpc, once: true })` takes an injected client and returns. A chain id other than `84532`, an RPC that reports another chain id, an escrow or panel address with empty contract code, or a missing, zero, or malformed escrow address stops the process before logs are read.
+
+Each pass reads finalized logs in windows of at most `POINTS_LOG_RANGE` blocks (default `2000`), from `max(47715415, last_scanned_block + 1)` through the finalized head. The cursor is `last_scanned_block` in the `meta` table and is written in the same SQLite transaction as that window's raw logs. A crash after the fetch and before commit leaves the cursor where it was, so the window is read again. A `413`, a block-range limit, or a too-many-results error halves the window down to one block. A failure at one block is raised, and the cursor is not moved past it. The finalized head never moves backward. The pass calls `rebuild()` once, and only when a window inserted rows or the head moved forward. A tick that starts while a pass is still running is skipped.
+
+`GET /health` is `200` after a successful pass that is still within three poll intervals. It is `503` when there has not been a successful pass in that window.
 
 `Dockerfile` and `render.yaml` in this directory are reference config for a Node 22 web process with `GET /health`. They are not a repo-root Blueprint. This package does not create or deploy a service. `BASE_SEPOLIA_RPC_URL` is `sync: false` and has no value in git.
 

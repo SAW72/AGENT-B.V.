@@ -205,11 +205,26 @@ export class Indexer {
     this.gates = JSON.parse(this.#metaGet("gates"));
   }
 
-  setFinalizedBlock(finalizedBlock) {
+  /**
+   * The finalized head only moves forward. A lower reading is ignored so a
+   * rebuild cannot withhold rows that were already committed.
+   * Pass `{ rebuild: false }` when the caller will rebuild once for the pass.
+   */
+  setFinalizedBlock(finalizedBlock, options = {}) {
     if (!Number.isInteger(finalizedBlock) || finalizedBlock < 0) throw new PointsError("bad_finalized");
-    this.#metaSet("finalized_block", String(finalizedBlock));
-    this.finalizedBlock = finalizedBlock;
-    this.rebuild();
+    const next = Math.max(this.finalizedBlock, finalizedBlock);
+    if (next === this.finalizedBlock) return { moved: false, finalizedBlock: this.finalizedBlock };
+    this.#metaSet("finalized_block", String(next));
+    this.finalizedBlock = next;
+    if (options.rebuild !== false) this.rebuild();
+    return { moved: true, finalizedBlock: next };
+  }
+
+  lastScannedBlock() {
+    const raw = this.#metaGet("last_scanned_block");
+    if (raw == null || raw === "") return null;
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) ? parsed : null;
   }
 
   setRegister(register) {
@@ -283,6 +298,32 @@ export class Indexer {
       this.db.exec("COMMIT");
       this.rebuild();
       return { ok: true, inserted };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * Insert one scanned window and the cursor in a single transaction.
+   * A throw before COMMIT rolls both back, so a crash cannot skip the window.
+   * This does not rebuild; the pass rebuilds once after the windows.
+   */
+  commitScanWindow(logs, scannedThrough, { chainId = CHAIN_ID, beforeCommit = null } = {}) {
+    if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
+    if (!Number.isInteger(scannedThrough) || scannedThrough < 0) throw new PointsError("bad_cursor");
+    if (!Array.isArray(logs)) throw new PointsError("unverifiable_log");
+    const previous = this.lastScannedBlock();
+    if (previous != null && scannedThrough < previous) throw new PointsError("cursor_backwards");
+    const normalized = logs.map((log) => normalizeLog(log));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      let inserted = 0;
+      for (const log of normalized) inserted += this.#upsertRaw(log);
+      this.#metaSet("last_scanned_block", String(scannedThrough));
+      if (beforeCommit) beforeCommit();
+      this.db.exec("COMMIT");
+      return { ok: true, inserted, scannedThrough };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

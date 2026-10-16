@@ -27,5 +27,7 @@ services:
         value: /tmp/points-indexer/ledger.sqlite
       - key: POINTS_POLL_MS
         value: "15000"
+      - key: POINTS_LOG_RANGE
+        value: "2000"
       - key: BASE_SEPOLIA_RPC_URL
         sync: false
