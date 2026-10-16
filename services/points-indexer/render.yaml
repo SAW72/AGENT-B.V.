@@ -1,0 +1,31 @@
+# Reference Blueprint only. This file is services/points-indexer/render.yaml, not
+# repo-root render.yaml, so a merge does not register a Render Blueprint and does
+# not create a service. Do not apply this file. Nothing here is deployed.
+#
+# The process polls Base Sepolia (chain id 84532) and serves GET /health on
+# 0.0.0.0:$PORT. The filesystem is ephemeral. The sqlite file under /tmp is lost
+# on restart or spin-down. Free web services spin down after about 15 minutes idle.
+#
+# BASE_SEPOLIA_RPC_URL is a URL that may carry a key. It is dashboard-only
+# (sync: false) and has no value in this file. No signing key is read.
+
+services:
+  - type: web
+    name: points-indexer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    numInstances: 1
+    healthCheckPath: /health
+    envVars:
+      - key: CHAIN_ID
+        value: "84532"
+      - key: ESCROW_ADDRESS
+        value: "0x3d660502D75f1e97b08c110255921b437A3C4C42"
+      - key: POINTS_DB_PATH
+        value: /tmp/points-indexer/ledger.sqlite
+      - key: POINTS_POLL_MS
+        value: "15000"
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false

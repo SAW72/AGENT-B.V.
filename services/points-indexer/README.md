@@ -7,7 +7,12 @@ The rules implemented here are the ones in `docs/AGENT-BV-POINTS-SPEC.md` and `d
 ```bash
 cd services/points-indexer
 npm test
+npm start
 ```
+
+`src/main.mjs` is the process entry. Importing it does not open a poll loop. `loadConfig` reads environment variables only (`BASE_SEPOLIA_RPC_URL`, `CHAIN_ID`, `ESCROW_ADDRESS`, `POINTS_DB_PATH` or `DATABASE_URL`, `POINTS_POLL_MS`). `start({ rpc, once: true })` takes an injected client, ingests one finalized range, and returns. A chain id other than `84532`, an RPC that reports another chain id, or a missing, zero, or malformed escrow address stops the process before logs are read.
+
+`Dockerfile` and `render.yaml` in this directory are reference config for a Node 22 web process with `GET /health`. They are not a repo-root Blueprint. This package does not create or deploy a service. `BASE_SEPOLIA_RPC_URL` is `sync: false` and has no value in git.
 
 Tests use `fixtures/base-sepolia-logs.json`, a read-only `eth_getLogs` capture. They do not dial a network and they sign only with keys generated inside the test process.
 
