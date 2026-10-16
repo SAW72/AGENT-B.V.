@@ -8,6 +8,7 @@ import { encodeFunctionResult, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { escrowAbi } from "./abi"
 import { actionProgress, GAS_FEE_TEXT } from "./actionProgress"
+import { ESCROW_ID_LABEL } from "./actionButton"
 import { FlowPreview, FUND_ESCROW_STORAGE_KEY } from "./FlowPreview"
 import { panelSubject, previewCreateEscrow, previewDispute, previewRefund, previewRelease, previewVote, previewWithdraw } from "./preview"
 import { DISPUTE_ZERO_IGNORED, ESCROW_ZERO_IGNORED, resetCarriedIds } from "./carriedIds"
@@ -41,6 +42,7 @@ import {
   CASE_READING_TEXT,
   DEAL_STANDS_LABEL,
   NOTHING_TO_WITHDRAW_TEXT,
+  VOTED_UNREADABLE_TEXT,
   WITHDRAW_HIDDEN_TEXT,
   WITHDRAW_READING_TEXT,
 } from "./walletCopy"
@@ -680,8 +682,9 @@ describe("phase 2 guided flows", () => {
       const next = screen.getByRole("button", { name: "Next" })
       expect(next.getAttribute("aria-disabled")).toBe("true")
       expect(next.hasAttribute("disabled")).toBe(false)
-      expect(reason.textContent).toBe(READING_ESCROW_TEXT)
-      expect(screen.getAllByText(READING_ESCROW_TEXT)).toHaveLength(1)
+      expect(reason.textContent).toBe("Reading this escrow.")
+      expect(READING_ESCROW_TEXT).toBe("Reading this escrow.")
+      expect(screen.getAllByText("Reading this escrow.")).toHaveLength(1)
       expect(next.getAttribute("aria-describedby")).toBe(reason.id)
     }
 
@@ -691,7 +694,24 @@ describe("phase 2 guided flows", () => {
     await expectReading("refund")
 
     releaseRead()
-    await waitFor(() => expect(screen.queryByText(READING_ESCROW_TEXT)).toBeNull())
+    await waitFor(() => expect(screen.queryByText("Reading this escrow.")).toBeNull())
+  })
+
+  it("shows the unguided reading hint while a release or refund escrow read is in flight", async () => {
+    world.escrowGate = new Promise(() => {})
+    render(<FlowPreview escrow={escrow} panel={panel} showStrip={false} />)
+    for (const slot of ["release", "refund"] as const) {
+      const root = document.getElementById(`${slot}-form`)
+      if (!(root instanceof HTMLElement)) throw new Error(`missing ${slot} form`)
+      fireEvent.change(within(root).getByLabelText(ESCROW_ID_LABEL), { target: { value: id } })
+      const hint = await waitFor(() => {
+        const node = within(root).getByText("Reading this escrow.")
+        expect(node.classList.contains("hint")).toBe(true)
+        return node
+      })
+      expect(hint.closest(`#${slot}-form`)).toBe(root)
+    }
+    expect(screen.getAllByText("Reading this escrow.")).toHaveLength(2)
   })
 
   it("puts a disputed release and refund block in the footer once", async () => {
@@ -1209,5 +1229,92 @@ describe("phase 2 guided flows", () => {
   it("serves client routes from the Pages SPA fallback", () => {
     const file = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../landing/_redirects"), "utf8")
     expect(file).toMatch(/^\/app\/\* +\/app\/ +200$/m)
+  })
+
+  it("pins the unreadable voted sentence in the vote footer", async () => {
+    expect(VOTED_UNREADABLE_TEXT).toBe("Whether this wallet already voted could not be read.")
+    ;(world as { voted: unknown }).voted = "not-a-bool"
+    render(<Host />)
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() =>
+      expect(screen.getByTestId("footer-reason").textContent).toBe("Whether this wallet already voted could not be read."),
+    )
+    expect(screen.getAllByText("Whether this wallet already voted could not be read.")).toHaveLength(1)
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).toBe("true")
+  })
+
+  async function submitForm(id_: string) {
+    await act(async () => {
+      fireEvent.submit(document.getElementById(id_) as HTMLFormElement)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+  }
+  it("GATE-EXTRA non-arbitrator Enter on vote stays on step 1", async () => {
+    world.arbitrator = false
+    render(<Host />)
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toMatch(/Only seated arbitrators/))
+    fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+    await submitForm("vote-form")
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+  })
+  it("GATE-EXTRA already-voted Enter on vote stays on step 1", async () => {
+    world.voted = true
+    render(<Host />)
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toBe(ALREADY_VOTED_TEXT))
+    fireEvent.click(screen.getByLabelText(DEAL_STANDS_LABEL))
+    await submitForm("vote-form")
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+  })
+  it("GATE-EXTRA gated refund Enter stays on step 1", async () => {
+    world.state = 1
+    render(<Host />)
+    navigate(`/app/refund?escrow=${id}`)
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toMatch(/already released/))
+    const form = document.getElementById("refund-form")!.querySelector("form") as HTMLFormElement
+    await act(async () => {
+      fireEvent.submit(form)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+  })
+  it("GATE-EXTRA zero-credit submit on withdraw stays on step 1", async () => {
+    world.credit = 0n
+    render(<Host />)
+    navigate("/app/withdraw")
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toBe(NOTHING_TO_WITHDRAW_TEXT))
+    await submitForm("withdraw-form")
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(screen.getByTestId("step-count").textContent).toMatch(/^Step 1 of /)
+  })
+  it("GATE-EXTRA RPC-pending submit on withdraw does not read credit or advance", async () => {
+    world.withdrawReads = "pending"
+    render(<Host />)
+    navigate("/app/withdraw")
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toBe(WITHDRAW_READING_TEXT))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(screen.getByTestId("footer-reason").textContent).toBe(WITHDRAW_READING_TEXT)
+    expect(screen.queryByText(WITHDRAW_HIDDEN_TEXT)).toBeNull()
+    await submitForm("withdraw-form")
+    expect(screen.queryByTestId("review-step")).toBeNull()
+    expect(world.creditReads).toBe(0)
+  })
+
+  it("GATE-EXTRA unreadable voted() read blocks vote Next with its own reason", async () => {
+    ;(world as { voted: unknown }).voted = "not-a-bool"
+    render(<Host />)
+    navigate(`/app/vote?dispute=${disputeId}`)
+    await waitFor(() =>
+      expect(screen.getByTestId("footer-reason").textContent).toBe("Whether this wallet already voted could not be read."),
+    )
+    const next = screen.getByRole("button", { name: "Next" })
+    expect(next.getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getAllByText("Whether this wallet already voted could not be read.")).toHaveLength(1)
   })
 })

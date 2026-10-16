@@ -122,4 +122,20 @@ describe("App withdraw reads", () => {
     expect(screen.queryByText(WITHDRAW_READING_TEXT)).toBeNull()
     expect(world.creditReads).toBe(0)
   })
+
+  it("reads the credit and enables Next once the chain check allows reads", async () => {
+    navigate("/app/withdraw")
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId("footer-reason").textContent).toBe(WITHDRAW_READING_TEXT))
+    await act(async () => {
+      world.releaseChain(BASE_SEPOLIA_CHAIN_ID)
+      await world.gate
+    })
+    await waitFor(() => {
+      expect(world.creditReads).toBeGreaterThan(0)
+      expect(screen.getByTestId("footer-reason").textContent).toBe("")
+      expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-disabled")).not.toBe("true")
+    })
+    expect(screen.queryByText(WITHDRAW_HIDDEN_TEXT)).toBeNull()
+  })
 })
