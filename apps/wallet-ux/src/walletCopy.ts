@@ -29,7 +29,7 @@ export const VOTE_SENDER_NOTE =
 
 export const CASE_UNREADABLE_TEXT = "This dispute could not be read."
 
-export const ARBITRATOR_UNREADABLE_TEXT = "This wallet's place on the Agent-BV dispute panel could not be read."
+export const ARBITRATOR_UNREADABLE_TEXT = "Your arbitrator seat could not be read."
 
 export const PANEL_SIZE_UNREADABLE_TEXT = "The number of votes that resolve the case could not be read."
 

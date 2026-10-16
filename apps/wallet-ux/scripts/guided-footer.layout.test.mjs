@@ -315,10 +315,7 @@ describe("guided footer reasons at 390x844", () => {
       server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     })
     await server.listen()
-    // Vite 8 keeps a chokidar FSWatcher when server.watch is null. The parallel
-    // build copies src/base-sepolia.json, that watcher full-reloads this page,
-    // and the new document's storage clear drops the connected wallet back to
-    // Connect. The dev engine does not need the watcher after listen.
+    // Test-only: server.watcher.close() in the layout and footer-overlap test servers depends on Vite internals. A page reload was observed; QA could not confirm the cause, so this keeps the watcher closed.
     await server.watcher.close()
     const address = server.httpServer?.address()
     const port = address && typeof address === "object" ? address.port : 0

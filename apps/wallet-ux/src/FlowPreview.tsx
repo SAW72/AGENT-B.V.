@@ -28,7 +28,7 @@ import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { isZeroBytes32, parseBytes32, randomBytes32 } from "./bytes32"
 import { readUrlBytes32, useCarriedIds, useSyncedPrefill } from "./carriedIds"
 import { DEFAULT_DURATION_SECONDS, DURATION_PRESETS, parseWholeSeconds } from "./duration"
-import { ESCROW_UNREAD_TEXT, escrowStepReason, useEscrowActionGate } from "./escrowGate"
+import { ESCROW_UNREAD_TEXT, READING_ESCROW_TEXT, escrowStepReason, useEscrowActionGate } from "./escrowGate"
 import { disputeWindowMessage, readDisputeSubject, type DisputeSubjectResult } from "./disputeSubject"
 import { ErrorNotice } from "./ErrorNotice"
 import { chunkHex, formatLocalTimestamp, isZeroAddress, presentError, sameAddress, type ErrorPresentation } from "./format"
@@ -1674,6 +1674,7 @@ function IdForm({
   const gate = useEscrowActionGate(client, escrow, panel, escrowId)
   const decision = slot === "release" ? gate.release : gate.refund
   const gated = gate.status === "ready" && !decision.allowed
+  const readingEscrow = gate.status === "reading" && Boolean(parseBytes32(escrowId))
 
   useEffect(() => {
     if (touched || guided?.linkEscrow || !carried.escrowId) return
@@ -1776,8 +1777,8 @@ function IdForm({
                 }}
               />
             )}
-            {!guided && gate.status === "reading" && parseBytes32(escrowId) ? (
-              <p className="hint">{escrowStepReason(true, null)}</p>
+            {!guided && readingEscrow ? (
+              <p className="hint">{READING_ESCROW_TEXT}</p>
             ) : null}
             {gate.status === "unread" ? (
               <p className="warn-note" role="status">
@@ -1846,9 +1847,9 @@ function IdForm({
               onBack={() => guided.back()}
               onNext={() => void onNext()}
               busy={session.preparing}
-              nextDisabled={gated || (gate.status === "reading" && Boolean(parseBytes32(escrowId)))}
+              nextDisabled={gated || readingEscrow}
               reason={escrowStepReason(
-                gate.status === "reading" && Boolean(parseBytes32(escrowId)),
+                readingEscrow,
                 gated && decision.reason ? unavailableLine(slot, decision.reason) : null,
               )}
             />

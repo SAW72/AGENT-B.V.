@@ -626,11 +626,22 @@ button.task-link.secondary {
 
 .footer-reason {
   margin: 16px 0 0;
-  min-height: 1.45em;
+  /* Three lines at 390px. Empty, the wrapped switch sentence, and the
+     longest unavailable sentence then occupy the same box, so Next does
+     not move when the reason line appears or disappears. */
+  min-height: 4.35em;
   line-height: 1.45;
   color: var(--muted);
   overflow-wrap: anywhere;
   max-width: 100%;
+}
+
+.withdraw-available {
+  margin: 1em 0;
+  /* The amount line is one line. The disconnected sentence wraps to two
+     at 390px. Reserving both keeps Next still when either is shown. */
+  min-height: 2.9em;
+  line-height: 1.45;
 }
 
 .step-actions {

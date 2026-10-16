@@ -81,6 +81,7 @@ export type VoteSeat = "loading" | "yes" | "no" | "unreadable"
 
 export function voteTaskReason(seat: VoteSeat, address?: Address): string | null {
   if (seat === "yes" || seat === "loading") return null
+  if (seat === "unreadable") return ARBITRATOR_UNREADABLE_TEXT
   const who = address ? `Connected: ${shortAddress(address)}.` : "No wallet is connected."
   return `${VOTE_SEAT_REASON} ${who}`
 }

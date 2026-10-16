@@ -266,7 +266,9 @@ function WithdrawForm({
     <>
       {guided ? <Stepper step={1} total={2} labels={FLOW_STEP_LABELS.withdraw} /> : null}
       <AddressRow label="Agent-BV escrow" value={escrow} testId="withdraw-escrow" />
-      {inlineText ? <p data-testid="withdraw-available">{inlineText}</p> : null}
+      <p className="withdraw-available" data-testid={inlineText ? "withdraw-available" : undefined}>
+        {inlineText}
+      </p>
       {guided ? (
         <form
           id="withdraw-form"
