@@ -200,6 +200,7 @@ describe("reputation config", () => {
     ]);
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const claimDomainName = "Agent-BV Relayer";
+    const pointsDomainName = "Agent-BV Points";
     for (const label of [raw.product.name, raw.product.title]) {
       const hits = filesContaining(root, label).filter((file) => {
         if (allowed.has(file)) return false;
@@ -208,10 +209,13 @@ describe("reputation config", () => {
         // Any other file that hardcodes the title still fails this check.
         if (label === raw.product.name && /\.(md|yml|yaml|sol)$/.test(file)) return false;
         if (label === raw.product.title && /\.md$/.test(file)) return false;
-        // The off-chain EIP-712 domain name contains the product name. That string is
-        // not a scorer hardcode. A file that mentions the product name only inside it stays allowed.
-        if (label === raw.product.name && !readFileSync(file, "utf8").split(claimDomainName).join("").includes(label)) {
-          return false;
+        // Off-chain EIP-712 domain names contain the product name. That string is
+        // not a scorer hardcode. A file that mentions the product name only inside
+        // those domain names stays allowed.
+        if (label === raw.product.name) {
+          let body = readFileSync(file, "utf8");
+          for (const domainName of [claimDomainName, pointsDomainName]) body = body.split(domainName).join("");
+          if (!body.includes(label)) return false;
         }
         return true;
       });

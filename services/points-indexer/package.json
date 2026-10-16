@@ -1,0 +1,17 @@
+{
+  "name": "agent-bv-points-indexer",
+  "private": true,
+  "type": "module",
+  "description": "Internal off-chain indexer for the testnet points ledger. Chain 84532 only. No token.",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.1",
+    "viem": "^2.56.9"
+  }
+}

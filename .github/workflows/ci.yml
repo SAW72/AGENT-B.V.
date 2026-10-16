@@ -96,6 +96,22 @@ jobs:
           path: claim-relayer/coverage/
           if-no-files-found: error
 
+  points-indexer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/points-indexer/package-lock.json
+      - name: Install points indexer deps
+        working-directory: services/points-indexer
+        run: npm ci
+      - name: Points indexer tests (offline fixtures, no network)
+        working-directory: services/points-indexer
+        run: npm test
+
   # Public Base Sepolia fork of LiveDenylistVaultTest. continue-on-error so an RPC
   # failure cannot fail the required CI checks. No keys, no broadcast.
   fork-test-base-sepolia:
