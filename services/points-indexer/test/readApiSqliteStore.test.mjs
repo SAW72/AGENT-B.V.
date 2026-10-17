@@ -158,6 +158,46 @@ async function committedLedger() {
   return { indexer, wallet };
 }
 
+/**
+ * Same direct INSERT as insertPage. Points are non-zero on purpose.
+ * The public credit path rebuilds ledger_rows and rowFrom stores 0, so
+ * this seed does not go through that writer.
+ */
+function insertCommitted(db, row) {
+  db.prepare(
+    `INSERT INTO ledger_rows(
+       seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
+       wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
+       rule_weight, counts_for_return_day, register_status, dispute_id, support,
+       source_action, source_tx_hash, source_log_index
+     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.seq,
+    84532,
+    ESCROW,
+    row.txHash,
+    row.seq,
+    ESCROW_START_BLOCK + row.seq,
+    1_700_000_000 + row.seq,
+    row.utcDay,
+    row.wallet,
+    row.action,
+    `0x${"11".repeat(32)}`,
+    row.points,
+    "unverified",
+    "ofac_unconfigured",
+    1,
+    null,
+    0,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+  );
+}
+
 describe("points read sqlite adapter", { concurrency: false }, () => {
   it("reads draft config from the points file", () => {
     const file = JSON.parse(readFileSync(POINTS_FILE, "utf8"));
@@ -266,6 +306,50 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         last_scanned_block: ESCROW_START_BLOCK + 25,
         finalized_block: ESCROW_START_BLOCK + 1000,
         pass_completed: true,
+      });
+    } finally {
+      indexer.close();
+    }
+  });
+
+  it("keeps one wallet's points, first activity, and history off the other wallet", async () => {
+    const walletA = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const walletB = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const indexer = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 200 });
+    const rows = [
+      { seq: 1, wallet: walletA, action: "fund", points: 3, utcDay: 20_001, txHash: txHash(1) },
+      { seq: 2, wallet: walletA, action: "first_activity", points: 5, utcDay: 20_002, txHash: txHash(2) },
+      { seq: 3, wallet: walletB, action: "fund", points: 7, utcDay: 20_010, txHash: txHash(3) },
+      { seq: 4, wallet: walletB, action: "first_activity", points: 11, utcDay: 20_011, txHash: txHash(4) },
+    ];
+    for (const row of rows) insertCommitted(indexer.db, row);
+    try {
+      const store = createReadApiSqliteStore(sourceFrom(indexer, true));
+      const summaryA = store.getLedgerSummary(walletA);
+      const summaryB = store.getLedgerSummary(walletB);
+      assert.equal(summaryA.points_total, 8);
+      assert.equal(summaryA.rows_count, 2);
+      assert.equal(summaryA.first_activity_utc_day, 20_002);
+      assert.equal(summaryB.points_total, 18);
+      assert.equal(summaryB.rows_count, 2);
+      assert.equal(summaryB.first_activity_utc_day, 20_011);
+      const historyA = store.listLedgerRows(walletA, { limit: 25, afterSeq: 0 }).map((row) => row.tx_hash);
+      const historyB = store.listLedgerRows(walletB, { limit: 25, afterSeq: 0 }).map((row) => row.tx_hash);
+      assert.deepEqual(historyA, [txHash(1), txHash(2)]);
+      assert.deepEqual(historyB, [txHash(3), txHash(4)]);
+      await withServer(store, async (base) => {
+        const bodyA = await request(base, `/v1/points/${walletA}?chainId=84532`);
+        const bodyB = await request(base, `/v1/points/${walletB}?chainId=84532`);
+        assert.equal(bodyA.json.points_total, 8);
+        assert.equal(bodyA.json.rows_count, 2);
+        assert.equal(bodyA.json.first_activity_utc_day, 20_002);
+        assert.equal(bodyB.json.points_total, 18);
+        assert.equal(bodyB.json.rows_count, 2);
+        assert.equal(bodyB.json.first_activity_utc_day, 20_011);
+        const pageA = await request(base, `/v1/points/${walletA}/history?chainId=84532`);
+        const pageB = await request(base, `/v1/points/${walletB}/history?chainId=84532`);
+        assert.deepEqual(pageA.json.items.map((item) => item.tx_hash), [txHash(1), txHash(2)]);
+        assert.deepEqual(pageB.json.items.map((item) => item.tx_hash), [txHash(3), txHash(4)]);
       });
     } finally {
       indexer.close();
