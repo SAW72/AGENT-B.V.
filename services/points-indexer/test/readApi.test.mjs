@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
@@ -208,7 +210,9 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(settings.trustedProxyHops, 1);
     assert.equal(settings.breakerFailures, 5);
     assert.equal(settings.breakerCooldownMs, 30_000);
-    assert.deepEqual(settings.corsOrigins, ["https://agent-bv.pages.dev"]);
+    assert.deepEqual(settings.corsOrigins, []);
+    assert.deepEqual(readSettings({ POINTS_CORS_ORIGINS: "" }).corsOrigins, []);
+    assert.deepEqual(readSettings({ POINTS_CORS_ORIGINS: "   " }).corsOrigins, []);
     assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops, 0);
     assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops, 2);
     assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "nope" }).trustedProxyHops, 1);
@@ -302,7 +306,10 @@ describe("points read API", { concurrency: false }, () => {
   });
 
   it("rejects a method other than GET or OPTIONS", async () => {
-    await withServer({ enabled: () => true, config: { ratePerMinute: 20 } }, async (base) => {
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 20, corsOrigins: ["https://agent-bv.pages.dev"] },
+    }, async (base) => {
       const posted = await request(base, "/v1/points/config", { method: "POST" });
       assert.equal(posted.response.status, 405);
       assert.deepEqual(posted.json, { ok: false, error: "method_not_allowed" });
@@ -323,6 +330,24 @@ describe("points read API", { concurrency: false }, () => {
       });
       assert.equal(denied.response.status, 204);
       assert.equal(denied.response.headers.get("access-control-allow-origin"), null);
+    });
+  });
+
+  it("sends no access-control-allow-origin when the allowlist is empty", async () => {
+    await withServer({ enabled: () => true, config: { ratePerMinute: 20 } }, async (base) => {
+      const read = await request(base, "/v1/points/config", {
+        headers: { origin: "https://agent-bv.pages.dev" },
+      });
+      assert.equal(read.response.status, 200);
+      assert.equal(read.response.headers.get("access-control-allow-origin"), null);
+      assert.equal(read.response.headers.get("vary"), "Origin");
+      const preflight = await request(base, "/v1/points/config", {
+        method: "OPTIONS",
+        headers: { origin: "https://agent-bv.pages.dev" },
+      });
+      assert.equal(preflight.response.status, 204);
+      assert.equal(preflight.response.headers.get("access-control-allow-origin"), null);
+      assert.equal(preflight.response.headers.get("vary"), "Origin");
     });
   });
 
@@ -546,7 +571,7 @@ describe("points read API", { concurrency: false }, () => {
     await withServer({
       enabled: () => true,
       store,
-      config: { ratePerMinute: 10 },
+      config: { ratePerMinute: 10, corsOrigins: ["https://agent-bv.pages.dev"] },
     }, async (base) => {
       const failed = await request(base, `/v1/points/${ADDRESS}?chainId=84532`, {
         headers: { origin: "https://agent-bv.pages.dev" },
@@ -772,7 +797,7 @@ describe("points read API", { concurrency: false }, () => {
         config: { weights: { fund: null }, gates: {}, rule_version: null },
       }),
       enabled: () => true,
-      config: { ratePerMinute: 5 },
+      config: { ratePerMinute: 5, corsOrigins: ["https://agent-bv.pages.dev"] },
     });
     try {
       const result = api.handle({
@@ -1134,7 +1159,8 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(config.response.status, 200);
       assert.equal(config.json.status, "draft");
       assert.equal(config.json.chainId, 84532);
-      assert.equal(config.response.headers.get("access-control-allow-origin"), "https://agent-bv.pages.dev");
+      assert.equal(config.response.headers.get("access-control-allow-origin"), null);
+      assert.equal(config.response.headers.get("vary"), "Origin");
       const caughtUp = await request(origin, `/v1/points/${ADDRESS}?chainId=84532`);
       assert.equal(caughtUp.json.syncing, false);
       assert.equal(caughtUp.json.behind, 0);
@@ -1181,6 +1207,102 @@ describe("points read API", { concurrency: false }, () => {
       }
       if (running) await running.stop();
       else if (health) await health.close();
+    }
+  });
+
+  it("reports the live head while a restarted file database is still catching up", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "abv-restart-"));
+    const dbPath = join(dir, "points.sqlite");
+    const caughtUp = ESCROW_START_BLOCK + 50;
+    const logRange = 200;
+    const liveHead = caughtUp + 1_000_000;
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: dbPath,
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: String(logRange),
+      POINTS_MAX_WINDOWS_PER_PASS: "2",
+      POINTS_ENABLED: "1",
+    };
+    const codeRpc = (head, getLogs) => ({
+      async chainId() {
+        return 84532;
+      },
+      async getCode() {
+        return "0x6001600055";
+      },
+      async finalizedBlockNumber() {
+        return head;
+      },
+      getLogs,
+    });
+    let running = null;
+    let releaseSecond = null;
+    try {
+      const first = await start({
+        once: true,
+        serve: false,
+        env,
+        rpc: codeRpc(caughtUp, async () => []),
+      });
+      try {
+        assert.equal(first.ingested.scannedThrough, caughtUp);
+        assert.equal(first.indexer.lastScannedBlock(), caughtUp);
+        assert.equal(first.indexer.finalizedBlock, caughtUp);
+      } finally {
+        await first.stop();
+      }
+
+      let calls = 0;
+      let health = null;
+      let opened = null;
+      const pending = start({
+        once: true,
+        serve: true,
+        port: 0,
+        env,
+        onListening(info) {
+          health = info;
+        },
+        onIndexer(indexer) {
+          opened = indexer;
+        },
+        rpc: codeRpc(liveHead, async () => {
+          calls += 1;
+          if (calls === 2) await new Promise((resolve) => { releaseSecond = resolve; });
+          return [];
+        }),
+      });
+      try {
+        for (let attempt = 0; attempt < 200 && (calls < 2 || !health); attempt += 1) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        assert.equal(calls, 2);
+        assert.ok(health);
+        assert.ok(opened);
+        const stored = Number(opened.db.prepare("SELECT value FROM meta WHERE key = 'finalized_block'").get().value);
+        assert.equal(stored, caughtUp);
+        const origin = health.url.replace(/\/health$/, "");
+        const body = await request(origin, `/v1/points/${ADDRESS}?chainId=84532`);
+        const cursor = caughtUp + logRange;
+        assert.equal(body.response.status, 200);
+        assert.equal(body.json.syncing, true);
+        assert.equal(body.json.indexed_to_block, cursor);
+        assert.equal(body.json.behind, liveHead - cursor);
+        assert.ok(body.json.finalized_block >= body.json.indexed_to_block);
+        assert.equal(body.json.finalized_block, liveHead);
+      } finally {
+        if (releaseSecond) releaseSecond();
+        try {
+          running = await pending;
+        } catch {
+          running = null;
+        }
+        if (running) await running.stop();
+        else if (health) await health.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

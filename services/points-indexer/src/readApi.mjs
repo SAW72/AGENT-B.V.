@@ -9,7 +9,6 @@
 import { isIP } from "node:net";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
 
-export const DEFAULT_CORS_ORIGIN = "https://agent-bv.pages.dev";
 export const DEFAULT_RATE_PER_MINUTE = 60;
 export const DEFAULT_PROXY_HOPS = 1;
 export const DEFAULT_WINDOW_MS = 60_000;
@@ -117,12 +116,12 @@ export function parseExactHttpsOrigin(raw) {
 }
 
 /**
- * Blank means the default origin. A set value replaces that default.
+ * Unset or blank is an empty allowlist. No origin is allowed.
  * Entries that are not an exact https origin are dropped.
  * @param {unknown} value
  */
 export function parseCorsList(value) {
-  if (value == null || String(value).trim() === "") return [DEFAULT_CORS_ORIGIN];
+  if (value == null || String(value).trim() === "") return [];
   const out = [];
   for (const part of String(value).split(",")) {
     const parsed = parseExactHttpsOrigin(part);
