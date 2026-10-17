@@ -5,7 +5,7 @@
   "description": "Internal off-chain indexer for the testnet points ledger. Chain 84532 only. No token.",
   "scripts": {
     "start": "node src/main.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.mjs"
+    "test": "node --disable-warning=ExperimentalWarning --test --test-reporter=spec --test-timeout=60000 test/*.test.mjs"
   },
   "engines": {
     "node": ">=22.13"
