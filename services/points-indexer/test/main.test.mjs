@@ -999,41 +999,60 @@ describe("process entry", () => {
     }
   });
 
-  it("runs the next pass after a pass rejects", async () => {
+  it("ends a network-error pass early and runs the next pass", async () => {
     const dir = dbDir();
     let mode = "idle";
-    const running = await start({
-      once: true,
-      env: {
-        CHAIN_ID: "84532",
-        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
-        POINTS_LOG_RANGE: "5",
-      },
-      rpc: withCode({
-        async finalizedBlockNumber() {
-          if (mode === "idle") return ESCROW_START_BLOCK - 1;
-          return ESCROW_START_BLOCK + 4;
-        },
-        async getLogs() {
-          if (mode === "fail") {
-            const error = new Error("read ECONNRESET");
-            error.code = "ECONNRESET";
-            throw error;
-          }
-          return [];
-        },
-      }),
-    });
+    let current = 0;
+    const sleeps = [];
+    const paceNow = () => current;
+    const sleep = async (ms) => {
+      sleeps.push(ms);
+      current += ms;
+    };
+    const original = console.error;
+    console.error = () => {};
+    let running;
     try {
+      running = await start({
+        once: true,
+        paceNow,
+        sleep,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_LOG_RANGE: "5",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            if (mode === "idle") return ESCROW_START_BLOCK - 1;
+            return ESCROW_START_BLOCK + 4;
+          },
+          async getLogs() {
+            if (mode === "fail") {
+              const error = new Error("read ECONNRESET");
+              error.code = "ECONNRESET";
+              throw error;
+            }
+            return [];
+          },
+        }),
+      });
       mode = "fail";
-      await assert.rejects(() => running.pass(), /ECONNRESET/);
+      const failed = await running.pass();
+      assert.equal(failed.endedEarly, true);
+      assert.equal(failed.reason, "network_error");
+      assert.equal(failed.ok, true);
+      assert.equal(running.indexer.lastScannedBlock(), null);
+      assert.deepEqual(sleeps.filter((ms) => ms >= 1000), [1000, 2000, 4000]);
       mode = "ok";
       const again = await running.pass();
       assert.equal(again.skipped, false);
+      assert.equal(again.endedEarly, false);
       assert.equal(again.ok, true);
       assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
     } finally {
-      await running.stop();
+      console.error = original;
+      if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
