@@ -716,6 +716,7 @@ export async function start(options = {}) {
     earlyReason: null,
     ledgerStale: false,
     behind: 0,
+    head: null,
     now,
   };
 
@@ -911,6 +912,7 @@ export async function start(options = {}) {
       };
     }
     const head = reported;
+    status.head = head;
     const cursor = indexer.lastScannedBlock();
     let from = cursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, cursor + 1);
     let window = learnedWindow;
@@ -1105,7 +1107,7 @@ export async function start(options = {}) {
             store: stores.createReadApiSqliteStore({
               db: () => indexer?.db ?? null,
               lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
-              finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
+              finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
               passCompleted: () => status.lastPassAt != null,
             }),
             config: mod.readSettings(env),
