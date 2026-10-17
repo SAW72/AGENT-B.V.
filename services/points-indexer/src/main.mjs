@@ -74,6 +74,28 @@ export function assertConfig(cfg) {
 }
 
 /**
+ * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
+ * Checked on each request so the read module stays unloaded while this is off.
+ * @param {{ POINTS_ENABLED?: unknown } | undefined} env
+ */
+function pointsGate(env) {
+  const raw = env?.POINTS_ENABLED;
+  if (raw == null || String(raw).trim() === "") return false;
+  const text = String(raw).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "on" || text === "yes";
+}
+
+function writeJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
+}
+
+/**
  * Pure env loader. Does not open a database or dial a network.
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -101,7 +123,9 @@ export function loadConfig(env = process.env) {
     ? DEFAULT_MAX_WINDOWS
     : positiveInt(env.POINTS_MAX_WINDOWS_PER_PASS, "POINTS_MAX_WINDOWS_PER_PASS");
 
-  return assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
+  const cfg = assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
+  cfg.pointsEnabled = pointsGate(env);
+  return cfg;
 }
 
 function rangeText(error) {
@@ -240,7 +264,7 @@ export function createDefaultRpc(rpcUrl) {
   };
 }
 
-function listenHealth(port, status) {
+function listenHealth(port, status, onPoints) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
@@ -256,6 +280,19 @@ function listenHealth(port, status) {
         if (!decision.ok && status.lastError) body.error = status.lastError;
         res.writeHead(decision.statusCode, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
+        return;
+      }
+      if (path === "/v1/points" || path.startsWith("/v1/points/")) {
+        Promise.resolve()
+          .then(() => onPoints(req, res))
+          .catch(() => {
+            if (res.headersSent) return;
+            try {
+              writeJson(res, 500, { ok: false, error: "internal" });
+            } catch {
+              // The request callback must not throw.
+            }
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -318,6 +355,7 @@ export async function start(options = {}) {
     lastPassAt: null,
     lastError: null,
     behind: 0,
+    head: null,
     now,
   };
 
@@ -329,6 +367,7 @@ export async function start(options = {}) {
       if (typeof options.onIndexer === "function") options.onIndexer(indexer);
     }
     const head = Math.max(indexer.finalizedBlock, reported);
+    status.head = head;
     const cursor = indexer.lastScannedBlock();
     let from = cursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, cursor + 1);
     let window = learnedWindow;
@@ -403,9 +442,46 @@ export async function start(options = {}) {
     }
   };
 
+  let readApi = null;
+  let readApiLoading = null;
+  const env = options.env ?? process.env;
+
+  async function handlePoints(req, res) {
+    if (!pointsGate(env)) {
+      writeJson(res, 503, { ok: false, error: "points_disabled" });
+      return;
+    }
+    if (!readApi) {
+      if (!readApiLoading) {
+        readApiLoading = Promise.all([
+          import("./readApi.mjs"),
+          import("./readApiSqliteStore.mjs"),
+        ]).then(([mod, stores]) => {
+          readApi = mod.createReadApi({
+            store: stores.createReadApiSqliteStore({
+              db: () => indexer?.db ?? null,
+              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+              finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
+              passCompleted: () => status.lastPassAt != null,
+            }),
+            config: mod.readSettings(env),
+            now: () => Date.now(),
+            enabled: () => mod.pointsEnabled(env),
+          });
+          return readApi;
+        }).catch((error) => {
+          readApiLoading = null;
+          throw error;
+        });
+      }
+      await readApiLoading;
+    }
+    readApi(req, res);
+  }
+
   if (options.serve) {
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status);
+    const health = await listenHealth(port, status, handlePoints);
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);
@@ -456,6 +532,14 @@ export async function start(options = {}) {
       stopped = true;
       if (timer) clearTimeout(timer);
       if (closing) await closing();
+      if (readApiLoading) {
+        try {
+          const api = await readApiLoading;
+          api?.close();
+        } catch {
+          // The module never finished loading.
+        }
+      }
       indexer?.close();
     },
   };
