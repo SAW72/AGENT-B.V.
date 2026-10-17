@@ -20,7 +20,6 @@ import {
   textIsHeadLag,
   textIsRateLimit,
 } from "./pace.mjs";
-import { createReadApi, parseCorsList, parseProxyHops, parseRatePerMinute, readApiEnabled } from "./readApi.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -106,6 +105,24 @@ function numericCode(value) {
   return null;
 }
 
+function isMethodMissing(error) {
+  const queue = [error];
+  const seen = new Set();
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (!item || typeof item !== "object" || seen.has(item)) continue;
+    seen.add(item);
+    const code = numericCode(item.code);
+    if (code === -32601) return true;
+    const text = `${item.details ?? ""} ${item.shortMessage ?? ""} ${item.message ?? ""}`.toLowerCase();
+    if (text.includes("method") && (text.includes("not found") || text.includes("not available") || text.includes("does not exist"))) {
+      return true;
+    }
+    if (item.cause) queue.push(item.cause);
+  }
+  return false;
+}
+
 /**
  * Chain and escrow checks shared by loadConfig and start({ config }).
  * Does not dial a network.
@@ -131,6 +148,28 @@ export function assertConfig(cfg) {
     throw new Error("POINTS_MAX_WINDOWS_PER_PASS must be a positive integer");
   }
   return { ...cfg, escrowAddress: escrow, chainId: CHAIN_ID, logRange, pollMs, maxWindows };
+}
+
+/**
+ * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
+ * Checked on each request so the read module stays unloaded while this is off.
+ * @param {{ POINTS_ENABLED?: unknown } | undefined} env
+ */
+function pointsGate(env) {
+  const raw = env?.POINTS_ENABLED;
+  if (raw == null || String(raw).trim() === "") return false;
+  const text = String(raw).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "on" || text === "yes";
+}
+
+function writeJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
 }
 
 /**
@@ -162,10 +201,7 @@ export function loadConfig(env = process.env) {
     : positiveInt(env.POINTS_MAX_WINDOWS_PER_PASS, "POINTS_MAX_WINDOWS_PER_PASS");
 
   const cfg = assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
-  cfg.corsOrigins = parseCorsList(blank(env.POINTS_CORS_ORIGINS) ? undefined : env.POINTS_CORS_ORIGINS);
-  cfg.trustedProxyHops = parseProxyHops(env.POINTS_TRUSTED_PROXY_HOPS);
-  cfg.ratePerMinute = parseRatePerMinute(env.POINTS_READ_RATE_PER_MINUTE);
-  cfg.readApiEnabled = readApiEnabled(env);
+  cfg.pointsEnabled = pointsGate(env);
   return cfg;
 }
 
@@ -540,25 +576,7 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   };
 }
 
-function isMethodMissing(error) {
-  const queue = [error];
-  const seen = new Set();
-  while (queue.length > 0) {
-    const item = queue.shift();
-    if (!item || typeof item !== "object" || seen.has(item)) continue;
-    seen.add(item);
-    const code = numericCode(item.code);
-    if (code === -32601) return true;
-    const text = `${item.details ?? ""} ${item.shortMessage ?? ""} ${item.message ?? ""}`.toLowerCase();
-    if (text.includes("method") && (text.includes("not found") || text.includes("not available") || text.includes("does not exist"))) {
-      return true;
-    }
-    if (item.cause) queue.push(item.cause);
-  }
-  return false;
-}
-
-function listenHealth(port, status, readApi) {
+function listenHealth(port, status, onPoints) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
@@ -580,19 +598,16 @@ function listenHealth(port, status, readApi) {
         return;
       }
       if (path === "/v1/points" || path.startsWith("/v1/points/")) {
-        try {
-          readApi(req, res);
-        } catch {
-          if (!res.headersSent) {
-            const payload = JSON.stringify({ ok: false, error: "internal" });
-            res.writeHead(500, {
-              "content-type": "application/json; charset=utf-8",
-              "cache-control": "no-store",
-              "content-length": Buffer.byteLength(payload),
-            });
-            res.end(payload);
-          }
-        }
+        Promise.resolve()
+          .then(() => onPoints(req, res))
+          .catch(() => {
+            if (res.headersSent) return;
+            try {
+              writeJson(res, 500, { ok: false, error: "internal" });
+            } catch {
+              // The request callback must not throw.
+            }
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -1072,25 +1087,42 @@ export async function start(options = {}) {
   };
 
   let readApi = null;
+  let readApiLoading = null;
+  const env = options.env ?? process.env;
+
+  async function handlePoints(req, res) {
+    if (!pointsGate(env)) {
+      writeJson(res, 503, { ok: false, error: "points_disabled" });
+      return;
+    }
+    if (!readApi) {
+      if (!readApiLoading) {
+        readApiLoading = import("./readApi.mjs").then((mod) => {
+          readApi = mod.createReadApi({
+            store: {
+              db: () => indexer?.db ?? null,
+              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+              finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
+              passCompleted: () => status.lastPassAt != null,
+            },
+            config: mod.readSettings(env),
+            now: () => Date.now(),
+            enabled: () => mod.pointsEnabled(env),
+          });
+          return readApi;
+        }).catch((error) => {
+          readApiLoading = null;
+          throw error;
+        });
+      }
+      await readApiLoading;
+    }
+    readApi(req, res);
+  }
+
   if (options.serve) {
-    const env = options.env ?? process.env;
-    readApi = createReadApi({
-      store: {
-        db: () => indexer?.db ?? null,
-        lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
-        finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
-        passCompleted: () => status.lastPassAt != null,
-      },
-      config: {
-        corsOrigins: cfg.corsOrigins,
-        trustedProxyHops: cfg.trustedProxyHops,
-        ratePerMinute: cfg.ratePerMinute,
-      },
-      now: () => Date.now(),
-      enabled: () => readApiEnabled(env),
-    });
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status, readApi);
+    const health = await listenHealth(port, status, handlePoints);
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);
@@ -1143,7 +1175,14 @@ export async function start(options = {}) {
       if (cancelCarry) cancelCarry();
       if (timer) clearTimeout(timer);
       if (closing) await closing();
-      readApi?.close();
+      if (readApiLoading) {
+        try {
+          const api = await readApiLoading;
+          api?.close();
+        } catch {
+          // The module never finished loading.
+        }
+      }
       indexer?.close();
     },
   };

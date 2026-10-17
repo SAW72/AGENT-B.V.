@@ -10,12 +10,15 @@ import {
   bucketClientAddress,
   createRateLimiter,
   createReadApi,
-  readApiEnabled,
+  pointsEnabled,
+  READ_ENV_ALLOWLIST,
+  readSettings,
 } from "../src/readApi.mjs";
 import { account, createdLog, creditCandidate } from "./support.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
 const READ_SOURCE = fileURLToPath(new URL("../src/readApi.mjs", import.meta.url));
+const MAIN_SOURCE = fileURLToPath(new URL("../src/main.mjs", import.meta.url));
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 const PAGE_WALLET = "0x00000000000000000000000000000000000000a1";
 
@@ -83,7 +86,7 @@ async function withServer(options, fn) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await fn(base);
+    await fn(base, api);
   } finally {
     api.close();
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -230,42 +233,58 @@ describe("points read API", { concurrency: false }, () => {
     const config = loadConfig({});
     assert.equal(config.chainId, 84532);
     assert.equal(config.dbPath, "points-indexer.sqlite");
-    assert.equal(config.readApiEnabled, false);
-    assert.equal(config.ratePerMinute, 60);
-    assert.equal(config.trustedProxyHops, 1);
-    assert.deepEqual(config.corsOrigins, ["https://agent-bv.pages.dev"]);
-    assert.equal(readApiEnabled({}), false);
-    assert.equal(readApiEnabled({ POINTS_READ_API_ENABLED: "1" }), true);
-    assert.equal(readApiEnabled({ POINTS_READ_API_ENABLED: "true" }), true);
-    assert.equal(readApiEnabled({ POINTS_READ_API_ENABLED: "0" }), false);
-    assert.equal(loadConfig({ POINTS_TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops, 0);
-    assert.equal(loadConfig({ POINTS_TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops, 2);
-    assert.equal(loadConfig({ POINTS_TRUSTED_PROXY_HOPS: "nope" }).trustedProxyHops, 1);
-    assert.equal(loadConfig({ POINTS_READ_RATE_PER_MINUTE: "15" }).ratePerMinute, 15);
-    assert.equal(loadConfig({ POINTS_READ_RATE_PER_MINUTE: "0" }).ratePerMinute, 60);
+    assert.equal(config.pointsEnabled, false);
+    assert.equal(loadConfig({ POINTS_ENABLED: "1" }).pointsEnabled, true);
+    assert.equal(loadConfig({ POINTS_ENABLED: "true" }).pointsEnabled, true);
+    assert.equal(loadConfig({ POINTS_ENABLED: "" }).pointsEnabled, false);
+    assert.equal(loadConfig({ POINTS_ENABLED: "0" }).pointsEnabled, false);
+    assert.equal(pointsEnabled({}), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "1" }), true);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "true" }), true);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "on" }), true);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "yes" }), true);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "0" }), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "false" }), false);
+    assert.equal(pointsEnabled({ POINTS_READ_API_ENABLED: "1" }), false);
+    const settings = readSettings({});
+    assert.equal(settings.ratePerMinute, 60);
+    assert.equal(settings.trustedProxyHops, 1);
+    assert.equal(settings.breakerFailures, 5);
+    assert.equal(settings.breakerCooldownMs, 30_000);
+    assert.deepEqual(settings.corsOrigins, ["https://agent-bv.pages.dev"]);
+    assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops, 0);
+    assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops, 2);
+    assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "nope" }).trustedProxyHops, 1);
+    assert.equal(readSettings({ POINTS_READ_RATE_PER_MINUTE: "15" }).ratePerMinute, 15);
+    assert.equal(readSettings({ POINTS_READ_RATE_PER_MINUTE: "0" }).ratePerMinute, 60);
+    assert.equal(readSettings({ POINTS_BREAKER_FAILURES: "3" }).breakerFailures, 3);
+    assert.equal(readSettings({ POINTS_BREAKER_FAILURES: "0" }).breakerFailures, 5);
+    assert.equal(readSettings({ POINTS_BREAKER_COOLDOWN_MS: "0" }).breakerCooldownMs, 0);
+    assert.equal(readSettings({ POINTS_BREAKER_COOLDOWN_MS: "nope" }).breakerCooldownMs, 30_000);
     assert.deepEqual(
-      loadConfig({ POINTS_CORS_ORIGINS: "*,https://agent-bv.pages.dev/,https://example.com" }).corsOrigins,
+      readSettings({ POINTS_CORS_ORIGINS: "*,https://agent-bv.pages.dev/,https://example.com" }).corsOrigins,
       ["https://agent-bv.pages.dev", "https://example.com"],
     );
   });
 
-  it("returns 404 for points routes when the read API flag is off", async () => {
+  it("returns 503 points_disabled for points routes when the flag is off", async () => {
     let on = false;
     await withServer({ enabled: () => on, config: { ratePerMinute: 1 } }, async (base) => {
       const hidden = await request(base, "/v1/points/config");
-      assert.equal(hidden.response.status, 404);
-      assert.deepEqual(hidden.json, { ok: false, error: "not_found" });
+      assert.equal(hidden.response.status, 503);
+      assert.deepEqual(hidden.json, { ok: false, error: "points_disabled" });
       assertJsonNoStore(hidden.response);
       const posted = await request(base, "/v1/points/config", { method: "POST" });
-      assert.equal(posted.response.status, 404);
+      assert.equal(posted.response.status, 503);
+      assert.equal(posted.json.error, "points_disabled");
       on = true;
       const shown = await request(base, "/v1/points/config");
       assert.equal(shown.response.status, 200);
     });
     await withServer({ config: { ratePerMinute: 10 } }, async (base) => {
       const hidden = await request(base, `/v1/points/${ADDRESS}`);
-      assert.equal(hidden.response.status, 404);
-      assert.equal(hidden.json.error, "not_found");
+      assert.equal(hidden.response.status, 503);
+      assert.deepEqual(hidden.json, { ok: false, error: "points_disabled" });
     });
   });
 
@@ -787,6 +806,243 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(source.includes("raw_logs"), false);
   });
 
+  it("does not read a relayer key or process.env outside the allowlist", () => {
+    const source = readFileSync(READ_SOURCE, "utf8");
+    assert.equal(source.includes("RELAYER_PRIVATE_KEY"), false);
+    assert.equal(source.includes("privateKey"), false);
+    assert.equal(source.includes("signer"), false);
+    assert.equal(source.includes("claim-relayer"), false);
+    assert.deepEqual([...READ_ENV_ALLOWLIST], [
+      "POINTS_ENABLED",
+      "POINTS_CORS_ORIGINS",
+      "POINTS_TRUSTED_PROXY_HOPS",
+      "POINTS_READ_RATE_PER_MINUTE",
+      "POINTS_BREAKER_FAILURES",
+      "POINTS_BREAKER_COOLDOWN_MS",
+    ]);
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const allow = new Set(READ_ENV_ALLOWLIST);
+    const accesses = [...code.matchAll(/process\.env(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])?/g)];
+    for (const match of accesses) {
+      const name = match[1] || match[2];
+      assert.ok(name && allow.has(name), match[0]);
+    }
+    assert.equal(/process\.env\s*\[/.test(code), false);
+  });
+
+  it("loads the read module from main only with a dynamic import", () => {
+    const source = readFileSync(MAIN_SOURCE, "utf8");
+    assert.equal(source.includes('from "./readApi.mjs"'), false);
+    assert.equal(source.includes('import("./readApi.mjs")'), true);
+    const gateAt = source.indexOf("if (!pointsGate(env))");
+    const importAt = source.indexOf('import("./readApi.mjs")');
+    assert.ok(gateAt !== -1 && importAt !== -1);
+    assert.ok(gateAt < importAt);
+  });
+
+  it("opens after five internal failures and closes on a probe after 30 seconds", async () => {
+    let now = 5_000;
+    let broken = true;
+    let calls = 0;
+    let during = null;
+    let api;
+    const store = {
+      db() {
+        calls += 1;
+        during = api.breakerState();
+        if (broken) throw new Error("db down");
+        return null;
+      },
+      lastScannedBlock: () => 10,
+      finalizedBlock: () => 10,
+      passCompleted: () => true,
+    };
+    await withServer({
+      store,
+      now: () => now,
+      enabled: () => true,
+      config: { ratePerMinute: 100, trustedProxyHops: 0 },
+    }, async (base, handler) => {
+      api = handler;
+      for (let index = 0; index < 5; index += 1) {
+        const failed = await request(base, `/v1/points/${ADDRESS}`);
+        assert.equal(failed.response.status, 500, `failure ${index}`);
+        assert.deepEqual(failed.json, { ok: false, error: "internal" });
+        assert.equal(failed.text.includes("db down"), false);
+      }
+      assert.equal(calls, 5);
+      assert.equal(api.breakerState(), "open");
+      const blocked = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(blocked.response.status, 503);
+      assert.deepEqual(blocked.json, { ok: false, error: "points_unavailable" });
+      assertJsonNoStore(blocked.response);
+      assert.equal(calls, 5);
+      now += 29_999;
+      const early = await request(base, "/v1/points/config");
+      assert.equal(early.response.status, 503);
+      assert.equal(early.json.error, "points_unavailable");
+      assert.equal(calls, 5);
+      now += 1;
+      broken = false;
+      during = null;
+      const probe = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(probe.response.status, 200);
+      assert.equal(during, "half_open");
+      assert.equal(api.breakerState(), "closed");
+      assert.equal(calls, 6);
+      const again = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(again.response.status, 200);
+      assert.equal(again.json.points_total, 0);
+      assert.equal(api.breakerState(), "closed");
+      assert.equal(calls, 7);
+    });
+  });
+
+  it("reopens when the half-open probe throws", async () => {
+    let now = 0;
+    let calls = 0;
+    let during = null;
+    let api;
+    const store = {
+      db() {
+        calls += 1;
+        during = api.breakerState();
+        throw new Error("still down");
+      },
+      lastScannedBlock: () => null,
+      finalizedBlock: () => null,
+      passCompleted: () => false,
+    };
+    await withServer({
+      store,
+      now: () => now,
+      enabled: () => true,
+      config: {
+        ratePerMinute: 100,
+        breakerFailures: 2,
+        breakerCooldownMs: 30_000,
+        trustedProxyHops: 0,
+      },
+    }, async (base, handler) => {
+      api = handler;
+      assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      assert.equal(api.breakerState(), "closed");
+      assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      assert.equal(api.breakerState(), "open");
+      assert.equal(calls, 2);
+      const blocked = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(blocked.response.status, 503);
+      assert.equal(blocked.json.error, "points_unavailable");
+      assert.equal(calls, 2);
+      now = 30_000;
+      during = null;
+      const probe = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(probe.response.status, 500);
+      assert.equal(probe.json.error, "internal");
+      assert.equal(during, "half_open");
+      assert.equal(api.breakerState(), "open");
+      assert.equal(calls, 3);
+      const again = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(again.response.status, 503);
+      assert.equal(again.json.error, "points_unavailable");
+      assert.equal(calls, 3);
+    });
+  });
+
+  it("clears the failure streak after a completed read or a rejected query", async () => {
+    let broken = true;
+    let calls = 0;
+    const store = {
+      db() {
+        calls += 1;
+        if (broken) throw new Error("db down");
+        return null;
+      },
+      lastScannedBlock: () => null,
+      finalizedBlock: () => null,
+      passCompleted: () => true,
+    };
+    await withServer({
+      store,
+      enabled: () => true,
+      config: { ratePerMinute: 100, trustedProxyHops: 0 },
+    }, async (base, api) => {
+      for (let index = 0; index < 4; index += 1) {
+        assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      }
+      broken = false;
+      assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 200);
+      assert.equal(api.breakerState(), "closed");
+      broken = true;
+      for (let index = 0; index < 4; index += 1) {
+        assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      }
+      assert.equal(api.breakerState(), "closed");
+      const next = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(next.response.status, 500);
+      assert.equal(next.json.error, "internal");
+      assert.equal(calls, 10);
+      assert.equal(api.breakerState(), "open");
+    });
+    calls = 0;
+    await withServer({
+      store,
+      enabled: () => true,
+      config: { ratePerMinute: 100, trustedProxyHops: 0 },
+    }, async (base, api) => {
+      for (let index = 0; index < 4; index += 1) {
+        assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      }
+      const rejected = await request(base, "/v1/points/config?chainId=1");
+      assert.equal(rejected.response.status, 400);
+      assert.equal(rejected.json.error, "wrong_chain");
+      assert.equal(api.breakerState(), "closed");
+      for (let index = 0; index < 4; index += 1) {
+        assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
+      }
+      assert.equal(calls, 8);
+      assert.equal(api.breakerState(), "closed");
+    });
+  });
+
+  it("does not throw out of the request handler", () => {
+    const api = createReadApi({
+      store: {
+        db() {
+          throw new Error("db down");
+        },
+        lastScannedBlock: () => null,
+        finalizedBlock: () => null,
+        passCompleted: () => true,
+      },
+      enabled: () => true,
+      config: { ratePerMinute: 10 },
+    });
+    const req = {
+      method: "GET",
+      url: `/v1/points/${ADDRESS}`,
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1" },
+    };
+    const res = {
+      headersSent: false,
+      writableEnded: false,
+      writeHead() {
+        throw new Error("cannot write");
+      },
+      end() {
+        throw new Error("cannot end");
+      },
+    };
+    try {
+      assert.doesNotThrow(() => api(req, res));
+    } finally {
+      api.close();
+    }
+  });
+
   it("serves the read API from main with the flag on and off", async () => {
     const env = {
       CHAIN_ID: "84532",
@@ -837,10 +1093,15 @@ describe("points read API", { concurrency: false }, () => {
       assert.deepEqual(earlyHealth.json, { ok: false, chainId: 84532 });
       assert.equal(earlyHealth.response.headers.get("content-type"), "application/json");
       assert.equal(earlyHealth.response.headers.get("cache-control"), null);
-      const hidden = await request(origin, "/v1/points/config");
-      assert.equal(hidden.response.status, 404);
-      assert.deepEqual(hidden.json, { ok: false, error: "not_found" });
-      env.POINTS_READ_API_ENABLED = "1";
+      const hidden = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://agent-bv.pages.dev" },
+      });
+      assert.equal(hidden.response.status, 503);
+      assert.deepEqual(hidden.json, { ok: false, error: "points_disabled" });
+      assert.equal(hidden.response.headers.get("content-type"), "application/json; charset=utf-8");
+      assert.equal(hidden.response.headers.get("cache-control"), "no-store");
+      assert.equal(hidden.response.headers.get("access-control-allow-origin"), null);
+      env.POINTS_ENABLED = "1";
       const syncing = await request(origin, `/v1/points/${ADDRESS}`);
       assert.equal(syncing.response.status, 200);
       assert.equal(syncing.json.syncing, true);
@@ -855,10 +1116,13 @@ describe("points read API", { concurrency: false }, () => {
       assert.deepEqual(fresh.json, { ok: true, chainId: 84532 });
       assert.equal(fresh.response.headers.get("content-type"), "application/json");
       assert.equal(fresh.response.headers.get("cache-control"), null);
-      const config = await request(origin, "/v1/points/config?chainId=84532");
+      const config = await request(origin, "/v1/points/config?chainId=84532", {
+        headers: { origin: "https://agent-bv.pages.dev" },
+      });
       assert.equal(config.response.status, 200);
       assert.equal(config.json.status, "draft");
       assert.equal(config.json.chainId, 84532);
+      assert.equal(config.response.headers.get("access-control-allow-origin"), "https://agent-bv.pages.dev");
       const caughtUp = await request(origin, `/v1/points/${ADDRESS}?chainId=84532`);
       assert.equal(caughtUp.json.syncing, false);
       assert.equal(caughtUp.json.behind, 0);
@@ -868,13 +1132,16 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(missing.response.status, 404);
       assert.equal(missing.response.headers.get("content-type"), "text/plain");
       assert.equal(missing.text, "not found");
-      env.POINTS_READ_API_ENABLED = "0";
-      const off = await request(origin, "/v1/points/config");
-      assert.equal(off.response.status, 404);
-      assert.equal(off.json.error, "not_found");
+      env.POINTS_ENABLED = "0";
+      const off = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://agent-bv.pages.dev" },
+      });
+      assert.equal(off.response.status, 503);
+      assert.equal(off.json.error, "points_disabled");
+      assert.equal(off.response.headers.get("access-control-allow-origin"), null);
       const stillHealthy = await request(origin, "/health");
       assert.deepEqual(stillHealthy.json, { ok: true, chainId: 84532 });
-      env.POINTS_READ_API_ENABLED = "1";
+      env.POINTS_ENABLED = "1";
       const secret = "SECRET https://evil.example/x /tmp/ledger.sqlite";
       running.indexer.db.prepare = () => {
         const error = new Error(secret);

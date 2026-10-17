@@ -3,6 +3,7 @@
  * Importing this module does not open a database, a socket, or a timer.
  * The handler reads the ledger through the injected store and does not
  * assume the sqlite file is still on disk after a restart.
+ * This file does not read process.env. The host passes an env object in.
  */
 
 import { readFileSync } from "node:fs";
@@ -19,6 +20,18 @@ export const DEFAULT_SWEEP_MS = 60_000;
 export const HISTORY_DEFAULT_LIMIT = 25;
 export const HISTORY_MAX_LIMIT = 100;
 export const MAX_FORWARDED_CHARS = 2048;
+export const DEFAULT_BREAKER_FAILURES = 5;
+export const DEFAULT_BREAKER_COOLDOWN_MS = 30_000;
+
+/** Names the host may pass on the env object. This module does not read process.env. */
+export const READ_ENV_ALLOWLIST = Object.freeze([
+  "POINTS_ENABLED",
+  "POINTS_CORS_ORIGINS",
+  "POINTS_TRUSTED_PROXY_HOPS",
+  "POINTS_READ_RATE_PER_MINUTE",
+  "POINTS_BREAKER_FAILURES",
+  "POINTS_BREAKER_COOLDOWN_MS",
+]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const EXACT_HTTPS_ORIGIN =
@@ -66,11 +79,12 @@ export function blocksBehind(head, cursor) {
 }
 
 /**
- * POINTS_READ_API_ENABLED is off unless the value is 1, true, on, or yes.
- * @param {NodeJS.ProcessEnv | { POINTS_READ_API_ENABLED?: unknown } | undefined} env
+ * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
+ * An unset or blank value stays off.
+ * @param {{ POINTS_ENABLED?: unknown } | undefined} env
  */
-export function readApiEnabled(env) {
-  const raw = env?.POINTS_READ_API_ENABLED;
+export function pointsEnabled(env) {
+  const raw = env?.POINTS_ENABLED;
   if (raw == null || String(raw).trim() === "") return false;
   const text = String(raw).trim().toLowerCase();
   return text === "1" || text === "true" || text === "on" || text === "yes";
@@ -159,6 +173,47 @@ export function parseRatePerMinute(value) {
   const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) return DEFAULT_RATE_PER_MINUTE;
   return parsed;
+}
+
+/**
+ * Positive integer. Blank or malformed falls back to 5.
+ * @param {unknown} value
+ */
+export function parseBreakerFailures(value) {
+  if (value == null || String(value).trim() === "") return DEFAULT_BREAKER_FAILURES;
+  const text = String(value).trim();
+  if (!/^[1-9][0-9]*$/.test(text)) return DEFAULT_BREAKER_FAILURES;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) return DEFAULT_BREAKER_FAILURES;
+  return parsed;
+}
+
+/**
+ * Non-negative integer milliseconds. Blank or malformed falls back to 30000.
+ * @param {unknown} value
+ */
+export function parseBreakerCooldownMs(value) {
+  if (value == null || String(value).trim() === "") return DEFAULT_BREAKER_COOLDOWN_MS;
+  const text = String(value).trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(text)) return DEFAULT_BREAKER_COOLDOWN_MS;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) return DEFAULT_BREAKER_COOLDOWN_MS;
+  return parsed;
+}
+
+/**
+ * Settings the host reads off an env object. This does not touch process.env.
+ * @param {object | undefined} env
+ */
+export function readSettings(env) {
+  const source = env ?? {};
+  return {
+    corsOrigins: parseCorsList(source.POINTS_CORS_ORIGINS),
+    trustedProxyHops: parseProxyHops(source.POINTS_TRUSTED_PROXY_HOPS),
+    ratePerMinute: parseRatePerMinute(source.POINTS_READ_RATE_PER_MINUTE),
+    breakerFailures: parseBreakerFailures(source.POINTS_BREAKER_FAILURES),
+    breakerCooldownMs: parseBreakerCooldownMs(source.POINTS_BREAKER_COOLDOWN_MS),
+  };
 }
 
 function expandIPv6(input) {
@@ -477,8 +532,53 @@ function routeOf(pathname) {
 }
 
 /**
+ * Consecutive thrown reads open the breaker. A cool-down then rejects
+ * with points_unavailable. One probe after the cool-down closes it again
+ * when that probe finishes, or opens it again when the probe throws.
+ * @param {number} limit
+ * @param {number} cooldownMs
+ * @param {() => number} clock
+ */
+function createBreaker(limit, cooldownMs, clock) {
+  let state = "closed";
+  let consecutive = 0;
+  let openedAt = 0;
+
+  return {
+    state() {
+      return state;
+    },
+    admit() {
+      if (state === "closed") return true;
+      if (state === "half_open") return false;
+      if (clock() - openedAt < cooldownMs) return false;
+      state = "half_open";
+      return true;
+    },
+    success() {
+      consecutive = 0;
+      state = "closed";
+    },
+    failure() {
+      if (state === "half_open") {
+        state = "open";
+        openedAt = clock();
+        consecutive = 0;
+        return;
+      }
+      consecutive += 1;
+      if (consecutive >= limit) {
+        state = "open";
+        openedAt = clock();
+        consecutive = 0;
+      }
+    },
+  };
+}
+
+/**
  * @param {{ store?: object, config?: object, now?: () => number, enabled?: boolean | (() => boolean) }} [options]
- * @returns {((req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void) & { close: () => void }}
+ * @returns {((req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void) & { close: () => void, breakerState: () => string }}
  */
 export function createReadApi(options = {}) {
   const config = options.config ?? {};
@@ -499,9 +599,16 @@ export function createReadApi(options = {}) {
     clock,
     sweepMs: config.sweepMs,
   });
+  const breakerFailures = Number.isInteger(config.breakerFailures) && config.breakerFailures > 0
+    ? config.breakerFailures
+    : DEFAULT_BREAKER_FAILURES;
+  const breakerCooldownMs = Number.isInteger(config.breakerCooldownMs) && config.breakerCooldownMs >= 0
+    ? config.breakerCooldownMs
+    : DEFAULT_BREAKER_COOLDOWN_MS;
+  const breaker = createBreaker(breakerFailures, breakerCooldownMs, clock);
   const enabledFn = typeof options.enabled === "function"
     ? options.enabled
-    : () => readApiEnabled(options.enabled === true ? { POINTS_READ_API_ENABLED: "1" } : {});
+    : () => pointsEnabled(options.enabled === true ? { POINTS_ENABLED: "1" } : {});
   let pointsCache = config.points ?? null;
 
   function pointsView() {
@@ -547,98 +654,121 @@ export function createReadApi(options = {}) {
     send(res, req, status, { ok: false, error: code }, extra);
   }
 
+  function serveRequest(req, res) {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    const route = routeOf(pathname);
+    if (req.method === "OPTIONS" && route) {
+      send(res, req, 204, null, { allow: "GET, OPTIONS" });
+      return;
+    }
+    if (req.method !== "OPTIONS") {
+      const decision = limiter.allow(clientIp(req, hops));
+      if (!decision.ok) {
+        fail(res, req, 429, "rate_limited", { "retry-after": String(decision.retryAfterSec) });
+        return;
+      }
+    }
+    if (!route) {
+      fail(res, req, 404, "not_found");
+      return;
+    }
+    if (req.method !== "GET") {
+      fail(res, req, 405, "method_not_allowed", { allow: "GET, OPTIONS" });
+      return;
+    }
+    if (!parseChain(url.searchParams.get("chainId")).ok) {
+      fail(res, req, 400, "wrong_chain");
+      return;
+    }
+    if (route.kind === "config") {
+      const points = pointsView();
+      send(res, req, 200, {
+        chainId: CHAIN_ID,
+        status: "draft",
+        weights: points.weights,
+        gates: points.gates,
+        rule_version: points.rule_version,
+      });
+      return;
+    }
+    let addressText;
+    try {
+      addressText = decodeURIComponent(route.address);
+    } catch {
+      fail(res, req, 400, "invalid_address");
+      return;
+    }
+    if (!ADDRESS.test(addressText)) {
+      fail(res, req, 400, "invalid_address");
+      return;
+    }
+    const wallet = addressText.toLowerCase();
+    const sync = readSync(options.store);
+    if (route.kind === "address") {
+      send(res, req, 200, addressBody(sync, wallet));
+      return;
+    }
+    const limit = parseLimit(url.searchParams.get("limit"));
+    if (!limit.ok) {
+      fail(res, req, 400, "invalid_limit");
+      return;
+    }
+    const cursor = parseCursor(url.searchParams.get("cursor"));
+    if (!cursor.ok) {
+      fail(res, req, 400, "invalid_cursor");
+      return;
+    }
+    send(res, req, 200, historyBody(sync, wallet, limit.limit, cursor.seq));
+  }
+
   function handler(req, res) {
     try {
       if (enabledFn() !== true) {
-        fail(res, req, 404, "not_found");
+        fail(res, req, 503, "points_disabled");
         return;
       }
-      const url = new URL(req.url || "/", "http://127.0.0.1");
-      const pathname = url.pathname.replace(/\/+$/, "") || "/";
-      const route = routeOf(pathname);
-      if (req.method === "OPTIONS" && route) {
-        send(res, req, 204, null, { allow: "GET, OPTIONS" });
+      if (!breaker.admit()) {
+        fail(res, req, 503, "points_unavailable");
         return;
       }
-      if (req.method !== "OPTIONS") {
-        const decision = limiter.allow(clientIp(req, hops));
-        if (!decision.ok) {
-          fail(res, req, 429, "rate_limited", { "retry-after": String(decision.retryAfterSec) });
+      try {
+        serveRequest(req, res);
+        breaker.success();
+      } catch (error) {
+        breaker.failure();
+        throw error;
+      }
+    } catch {
+      try {
+        if (res.headersSent) {
+          res.end();
           return;
         }
-      }
-      if (!route) {
-        fail(res, req, 404, "not_found");
-        return;
-      }
-      if (req.method !== "GET") {
-        fail(res, req, 405, "method_not_allowed", { allow: "GET, OPTIONS" });
-        return;
-      }
-      if (!parseChain(url.searchParams.get("chainId")).ok) {
-        fail(res, req, 400, "wrong_chain");
-        return;
-      }
-      if (route.kind === "config") {
-        const points = pointsView();
-        send(res, req, 200, {
-          chainId: CHAIN_ID,
-          status: "draft",
-          weights: points.weights,
-          gates: points.gates,
-          rule_version: points.rule_version,
-        });
-        return;
-      }
-      let addressText;
-      try {
-        addressText = decodeURIComponent(route.address);
+        const payload = JSON.stringify({ ok: false, error: "internal" });
+        const headers = {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "content-length": Buffer.byteLength(payload),
+        };
+        try {
+          Object.assign(headers, corsHeaders(req));
+        } catch {
+          // The body stays the generic code.
+        }
+        res.writeHead(500, headers);
+        res.end(payload);
       } catch {
-        fail(res, req, 400, "invalid_address");
-        return;
+        try {
+          if (typeof res.end === "function" && !res.writableEnded) res.end();
+        } catch {
+          // The request callback must not throw.
+        }
       }
-      if (!ADDRESS.test(addressText)) {
-        fail(res, req, 400, "invalid_address");
-        return;
-      }
-      const wallet = addressText.toLowerCase();
-      const sync = readSync(options.store);
-      if (route.kind === "address") {
-        send(res, req, 200, addressBody(sync, wallet));
-        return;
-      }
-      const limit = parseLimit(url.searchParams.get("limit"));
-      if (!limit.ok) {
-        fail(res, req, 400, "invalid_limit");
-        return;
-      }
-      const cursor = parseCursor(url.searchParams.get("cursor"));
-      if (!cursor.ok) {
-        fail(res, req, 400, "invalid_cursor");
-        return;
-      }
-      send(res, req, 200, historyBody(sync, wallet, limit.limit, cursor.seq));
-    } catch {
-      if (res.headersSent) {
-        res.end();
-        return;
-      }
-      const payload = JSON.stringify({ ok: false, error: "internal" });
-      const headers = {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store",
-        "content-length": Buffer.byteLength(payload),
-      };
-      try {
-        Object.assign(headers, corsHeaders(req));
-      } catch {
-        // The body stays the generic code.
-      }
-      res.writeHead(500, headers);
-      res.end(payload);
     }
   }
 
   handler.close = () => limiter.close();
+  handler.breakerState = () => breaker.state();
   return handler;
 }
