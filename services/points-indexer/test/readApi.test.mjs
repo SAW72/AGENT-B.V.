@@ -3,8 +3,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { ESCROW, ESCROW_START_BLOCK } from "../src/constants.mjs";
-import { openIndexer } from "../src/indexer.mjs";
+import { ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { loadConfig, start } from "../src/main.mjs";
 import {
   bucketClientAddress,
@@ -14,7 +13,6 @@ import {
   READ_ENV_ALLOWLIST,
   readSettings,
 } from "../src/readApi.mjs";
-import { account, createdLog, creditCandidate } from "./support.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
 const READ_SOURCE = fileURLToPath(new URL("../src/readApi.mjs", import.meta.url));
@@ -57,27 +55,46 @@ const FORBIDDEN_KEYS = new Set([
   "data",
 ]);
 
-function storeFrom(indexer, passCompleted = true) {
-  return {
-    db: () => indexer.db,
-    lastScannedBlock: () => indexer.lastScannedBlock(),
-    finalizedBlock: () => indexer.finalizedBlock,
-    passCompleted: () => passCompleted,
+function fakeStore(overrides = {}) {
+  const cursor = overrides.cursor ?? {
+    last_scanned_block: null,
+    finalized_block: null,
+    pass_completed: false,
   };
-}
-
-function nullStore() {
+  const summary = overrides.summary ?? {
+    points_total: 0,
+    rows_count: 0,
+    first_activity_utc_day: null,
+  };
+  const rows = overrides.rows ?? [];
+  const config = overrides.config ?? { weights: {}, gates: {}, rule_version: null };
   return {
-    db: () => null,
-    lastScannedBlock: () => null,
-    finalizedBlock: () => null,
-    passCompleted: () => false,
+    getCursor() {
+      if (overrides.throwOn === "cursor") throw overrides.error ?? new Error("store down");
+      return typeof overrides.cursor === "function" ? overrides.cursor() : cursor;
+    },
+    getLedgerSummary() {
+      if (overrides.throwOn === "summary") throw overrides.error ?? new Error("store down");
+      return summary;
+    },
+    listLedgerRows(address, query) {
+      if (overrides.throwOn === "rows") throw overrides.error ?? new Error("store down");
+      const afterSeq = query?.afterSeq ?? 0;
+      const limit = Number.isInteger(query?.limit) ? query.limit : rows.length;
+      return rows
+        .filter((row) => (row.wallet == null || row.wallet === address) && row.seq > afterSeq)
+        .slice(0, limit);
+    },
+    getConfig() {
+      if (overrides.throwOn === "config") throw overrides.error ?? new Error("store down");
+      return config;
+    },
   };
 }
 
 async function withServer(options, fn) {
   const api = createReadApi({
-    store: options.store ?? nullStore(),
+    store: options.store ?? fakeStore(),
     config: options.config,
     now: options.now,
     enabled: options.enabled,
@@ -135,82 +152,22 @@ function txHash(index) {
   return `0x${index.toString(16).padStart(64, "0")}`;
 }
 
-/**
- * Direct inserts. The public link path rewrites ledger_rows on each rebuild
- * and rowFrom stores points 0, so a 101-row page and a non-zero points sum
- * cannot be produced through that path without the writer replacing them.
- */
-function insertPage(db, wallet, count) {
-  const insert = db.prepare(
-    `INSERT INTO ledger_rows(
-       seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
-       wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
-       rule_weight, counts_for_return_day, register_status, dispute_id, support,
-       source_action, source_tx_hash, source_log_index
-     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (let index = 1; index <= count; index += 1) {
-    insert.run(
-      index,
-      84532,
-      ESCROW,
-      txHash(index),
-      index,
-      ESCROW_START_BLOCK + index,
-      1_700_000_000 + index,
-      19000 + index,
-      wallet,
-      "fund",
-      `0x${"11".repeat(32)}`,
-      0,
-      "unverified",
-      "ofac_unconfigured",
-      1,
-      null,
-      0,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-    );
-  }
-}
-
-async function committedLedger() {
-  const payer = account();
-  const payee = account();
-  const indexer = openIndexer({ path: ":memory:", finalizedBlock: 100_000_000 });
-  const timestamp = 20_000 * 86400;
-  const log = createdLog({
-    escrowId: `0x${"ab".repeat(32)}`,
-    payer: payer.address,
-    payee: payee.address,
-    expiresAt: timestamp + 10_000,
-    blockNumber: 50_000_000,
-    logIndex: 4,
-    txHash: `0x${"cd".repeat(32)}`,
-    timestamp,
-  });
-  indexer.ingestLogs([log]);
-  const wallet = payer.address.toLowerCase();
-  const candidate = indexer.attribute().candidates.find((item) => item.wallet === wallet && item.action === "fund");
-  assert.ok(candidate, "public attribute path produced a fund candidate");
-  const result = await creditCandidate(indexer, payer, candidate);
-  assert.equal(result.link?.ok, true, result.link?.reason || result.issued?.reason);
-  indexer.commitScanWindow([], indexer.finalizedBlock);
-  const rows = indexer.ledger().filter((row) => row.wallet === wallet).sort((left, right) => left.seq - right.seq);
-  assert.equal(rows.length, 2);
-  const setPoints = indexer.db.prepare("UPDATE ledger_rows SET points = ? WHERE seq = ?");
-  setPoints.run(3, rows[0].seq);
-  setPoints.run(5, rows[1].seq);
-  indexer.db.prepare("UPDATE ledger_rows SET source_tx_hash = ? WHERE seq = ?").run("sentinel-source-77ab", rows[0].seq);
-  indexer.db.prepare("UPDATE origins SET model_version = ?").run("sentinel-model-9c2e");
-  indexer.db.prepare("UPDATE chains SET entries_json = entries_json || ?").run("sentinel-chain-b31d");
-  indexer.db.prepare("UPDATE raw_logs SET block_hash = ?").run("sentinel-rawlog-4e8b");
-  indexer.db.prepare("UPDATE links SET signature = signature || ?").run("sentinel-link-55d0");
-  return { indexer, wallet, payer };
+function ledgerRow(index, wallet, extra = {}) {
+  return {
+    seq: index,
+    wallet,
+    action: extra.action ?? "fund",
+    utc_day: extra.utc_day ?? 19000 + index,
+    tx_hash: extra.tx_hash ?? txHash(index),
+    log_index: index,
+    block_number: ESCROW_START_BLOCK + index,
+    escrow_id: `0x${"11".repeat(32)}`,
+    points: extra.points ?? 0,
+    points_withheld: extra.points_withheld ?? 1,
+    eligibility_reason: "ofac_unconfigured",
+    register_status: null,
+    ...extra,
+  };
 }
 
 function expectedItem(row) {
@@ -290,7 +247,10 @@ describe("points read API", { concurrency: false }, () => {
 
   it("returns draft config for chain 84532 and rejects every other chain id", async () => {
     const file = JSON.parse(readFileSync(POINTS_FILE, "utf8"));
-    await withServer({ enabled: () => true, config: { ratePerMinute: 100 } }, async (base) => {
+    const store = fakeStore({
+      config: { weights: file.weights, gates: file.gates, rule_version: null, model_version: "sentinel-model-9c2e" },
+    });
+    await withServer({ enabled: () => true, store, config: { ratePerMinute: 100 } }, async (base) => {
       const missing = await request(base, "/v1/points/config");
       assert.equal(missing.response.status, 200);
       assertJsonNoStore(missing.response);
@@ -386,96 +346,106 @@ describe("points read API", { concurrency: false }, () => {
   });
 
   it("sums points_total from committed rows", async () => {
-    const ctx = await committedLedger();
-    try {
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(ctx.indexer, true),
-        config: { ratePerMinute: 20 },
-      }, async (base) => {
-        const mixed = ctx.payer.address.slice(0, 2) + ctx.payer.address.slice(2).toUpperCase();
-        const body = await request(base, `/v1/points/${mixed}?chainId=84532`);
-        assert.equal(body.response.status, 200);
-        assert.equal(body.json.address, ctx.wallet);
-        assert.equal(body.json.points_total, 8);
-        assert.equal(body.json.points_withheld, true);
-        assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "ofac_unconfigured" });
-        assert.equal(body.json.rows_count, 2);
-        assert.equal(body.json.first_activity_utc_day, 20_000);
-        assert.equal(body.json.indexed_to_block, 100_000_000);
-        assert.equal(body.json.finalized_block, 100_000_000);
-        assert.equal(body.json.behind, 0);
-        assert.equal(body.json.syncing, false);
-        assert.equal(body.json.disclaimer.links.master_disclaimer, null);
-        assert.ok(Object.values(body.json.disclaimer.links).every((value) => value === null));
-        const history = await request(base, `/v1/points/${ctx.wallet}/history?chainId=84532`);
-        const expected = ctx.indexer.ledger()
-          .filter((row) => row.wallet === ctx.wallet)
-          .sort((left, right) => left.seq - right.seq)
-          .map(expectedItem);
-        assert.deepEqual(history.json.items, expected);
-        assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 8);
-        assert.equal(history.json.next_cursor, null);
-      });
-    } finally {
-      ctx.indexer.close();
-    }
+    const wallet = ADDRESS;
+    const mixed = `0x${ADDRESS.slice(2).toUpperCase()}`;
+    const rows = [
+      ledgerRow(1, wallet, { action: "fund", points: 3, utc_day: 20_000 }),
+      ledgerRow(2, wallet, { action: "first_activity", points: 5, utc_day: 20_000 }),
+    ];
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: 100_000_000, finalized_block: 100_000_000, pass_completed: true },
+        summary: { points_total: 8, rows_count: 2, first_activity_utc_day: 20_000 },
+        rows,
+      }),
+      config: { ratePerMinute: 20 },
+    }, async (base) => {
+      const body = await request(base, `/v1/points/${mixed}?chainId=84532`);
+      assert.equal(body.response.status, 200);
+      assert.equal(body.json.address, wallet);
+      assert.equal(body.json.points_total, 8);
+      assert.equal(body.json.points_withheld, true);
+      assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "ofac_unconfigured" });
+      assert.equal(body.json.rows_count, 2);
+      assert.equal(body.json.first_activity_utc_day, 20_000);
+      assert.equal(body.json.indexed_to_block, 100_000_000);
+      assert.equal(body.json.finalized_block, 100_000_000);
+      assert.equal(body.json.behind, 0);
+      assert.equal(body.json.syncing, false);
+      assert.equal(body.json.disclaimer.links.master_disclaimer, null);
+      assert.ok(Object.values(body.json.disclaimer.links).every((value) => value === null));
+      const history = await request(base, `/v1/points/${wallet}/history?chainId=84532`);
+      assert.deepEqual(history.json.items, rows.map(expectedItem));
+      assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 8);
+      assert.equal(history.json.next_cursor, null);
+    });
   });
 
   it("private fields never appear in a read response", async () => {
-    const ctx = await committedLedger();
-    try {
-      const signature = ctx.indexer.db.prepare("SELECT signature FROM links").get().signature;
-      const nonce = ctx.indexer.db.prepare("SELECT nonce FROM nonces").get().nonce;
-      const sentinels = [
-        "sentinel-source-77ab",
-        "sentinel-model-9c2e",
-        "sentinel-chain-b31d",
-        "sentinel-rawlog-4e8b",
-        "sentinel-link-55d0",
-        signature,
-        nonce,
-      ];
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(ctx.indexer, true),
-        config: { ratePerMinute: 20 },
-      }, async (base) => {
-        const bodies = [];
-        for (const path of [
-          "/v1/points/config?chainId=84532",
-          `/v1/points/${ctx.wallet}?chainId=84532`,
-          `/v1/points/${ctx.wallet}/history?chainId=84532&limit=25`,
-        ]) {
-          const result = await request(base, path);
-          assert.equal(result.response.status, 200, path);
-          bodies.push(result.text);
-          const found = [];
-          walkKeys(result.json, found);
-          assert.deepEqual(found, [], path);
-        }
-        const joined = bodies.join("\n");
-        for (const sentinel of sentinels) {
-          assert.equal(joined.includes(sentinel), false, sentinel);
-        }
-        for (const key of ["identity_anchor", "behavioral_signals", "model_version", "source_tx_hash", "entries_json"]) {
-          assert.equal(joined.includes(`"${key}"`), false, key);
-        }
-      });
-    } finally {
-      ctx.indexer.close();
-    }
+    const sentinels = [
+      "sentinel-source-77ab",
+      "sentinel-model-9c2e",
+      "sentinel-chain-b31d",
+      "sentinel-rawlog-4e8b",
+      "sentinel-link-55d0",
+    ];
+    const rows = [
+      ledgerRow(1, ADDRESS, {
+        source_tx_hash: sentinels[0],
+        model_version: sentinels[1],
+        entries_json: sentinels[2],
+        block_hash: sentinels[3],
+        signature: sentinels[4],
+        identity_anchor: "anchor",
+        behavioral_signals: "signals",
+        nonce: "99",
+      }),
+    ];
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: 10, finalized_block: 10, pass_completed: true },
+        summary: { points_total: 0, rows_count: 1, first_activity_utc_day: null },
+        rows,
+        config: { weights: {}, gates: {}, rule_version: null, model_version: sentinels[1] },
+      }),
+      config: { ratePerMinute: 20 },
+    }, async (base) => {
+      const bodies = [];
+      for (const path of [
+        "/v1/points/config?chainId=84532",
+        `/v1/points/${ADDRESS}?chainId=84532`,
+        `/v1/points/${ADDRESS}/history?chainId=84532&limit=25`,
+      ]) {
+        const result = await request(base, path);
+        assert.equal(result.response.status, 200, path);
+        bodies.push(result.text);
+        const found = [];
+        walkKeys(result.json, found);
+        assert.deepEqual(found, [], path);
+      }
+      const joined = bodies.join("\n");
+      for (const sentinel of sentinels) {
+        assert.equal(joined.includes(sentinel), false, sentinel);
+      }
+      for (const key of ["identity_anchor", "behavioral_signals", "model_version", "source_tx_hash", "entries_json"]) {
+        assert.equal(joined.includes(`"${key}"`), false, key);
+      }
+    });
   });
 
   it("clamps a limit above 100 and rejects 0, negative, and non-numeric limits", async () => {
-    const indexer = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 200 });
-    insertPage(indexer.db, PAGE_WALLET, 101);
-    try {
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(indexer, true),
-        config: { ratePerMinute: 30 },
-      }, async (base) => {
+    const rows = [];
+    for (let index = 1; index <= 101; index += 1) rows.push(ledgerRow(index, PAGE_WALLET));
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: ESCROW_START_BLOCK + 200, finalized_block: ESCROW_START_BLOCK + 200, pass_completed: true },
+        rows,
+      }),
+      config: { ratePerMinute: 30 },
+    }, async (base) => {
         const clamped = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=101`);
         assert.equal(clamped.response.status, 200);
         assert.equal(clamped.json.limit, 100);
@@ -498,22 +468,21 @@ describe("points read API", { concurrency: false }, () => {
         const cursor = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&cursor=abc`);
         assert.equal(cursor.response.status, 400);
         assert.equal(cursor.json.error, "invalid_cursor");
-      });
-    } finally {
-      indexer.close();
-    }
+    });
   });
 
   it("indexed_to_block follows the scan cursor", async () => {
-    const behind = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 1000 });
-    behind.commitScanWindow([], ESCROW_START_BLOCK + 25);
-    const idle = openIndexer({ path: ":memory:", finalizedBlock: 10 });
-    try {
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(behind, true),
-        config: { ratePerMinute: 20 },
-      }, async (base) => {
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: {
+          last_scanned_block: ESCROW_START_BLOCK + 25,
+          finalized_block: ESCROW_START_BLOCK + 1000,
+          pass_completed: true,
+        },
+      }),
+      config: { ratePerMinute: 20 },
+    }, async (base) => {
         const body = await request(base, `/v1/points/${ADDRESS}?chainId=84532`);
         assert.equal(body.response.status, 200);
         assert.equal(body.json.indexed_to_block, ESCROW_START_BLOCK + 25);
@@ -525,12 +494,14 @@ describe("points read API", { concurrency: false }, () => {
         const history = await request(base, `/v1/points/${ADDRESS}/history?chainId=84532`);
         assert.equal(history.json.indexed_to_block, ESCROW_START_BLOCK + 25);
         assert.equal(history.json.syncing, true);
-      });
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(idle, false),
-        config: { ratePerMinute: 10 },
-      }, async (base) => {
+    });
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: null, finalized_block: 10, pass_completed: false },
+      }),
+      config: { ratePerMinute: 10 },
+    }, async (base) => {
         const body = await request(base, `/v1/points/${ADDRESS}`);
         assert.equal(body.json.indexed_to_block, null);
         assert.equal(body.json.finalized_block, 10);
@@ -539,22 +510,24 @@ describe("points read API", { concurrency: false }, () => {
         assert.equal(body.json.points_total, 0);
         assert.equal(body.json.rows_count, 0);
         assert.equal(body.json.first_activity_utc_day, null);
-      });
-      await withServer({
-        enabled: () => true,
-        store: storeFrom(idle, true),
-        config: { ratePerMinute: 10 },
-      }, async (base) => {
+    });
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: null, finalized_block: 10, pass_completed: true },
+      }),
+      config: { ratePerMinute: 10 },
+    }, async (base) => {
         const body = await request(base, `/v1/points/${ADDRESS}`);
         assert.equal(body.json.syncing, false);
         assert.equal(body.json.behind, 0);
         assert.equal(body.json.indexed_to_block, null);
-      });
-      await withServer({
-        enabled: () => true,
-        store: nullStore(),
-        config: { ratePerMinute: 10 },
-      }, async (base) => {
+    });
+    await withServer({
+      enabled: () => true,
+      store: fakeStore(),
+      config: { ratePerMinute: 10 },
+    }, async (base) => {
         const body = await request(base, `/v1/points/${ADDRESS}`);
         assert.equal(body.response.status, 200);
         assert.equal(body.json.syncing, true);
@@ -562,31 +535,14 @@ describe("points read API", { concurrency: false }, () => {
         assert.equal(body.json.finalized_block, null);
         assert.equal(body.json.behind, null);
         assert.equal(body.json.points_total, 0);
-      });
-    } finally {
-      behind.close();
-      idle.close();
-    }
+    });
   });
 
   it("returns 500 from an injected failing store without the thrown detail", async () => {
     const secret = "SECRET https://evil.example/x /tmp/ledger.sqlite";
-    const store = {
-      db() {
-        const error = new Error(secret);
-        error.stack = `Error: ${secret}\n    at Object.prepare (/tmp/ledger.sqlite:10:1)`;
-        throw error;
-      },
-      lastScannedBlock() {
-        return 4;
-      },
-      finalizedBlock() {
-        return 9;
-      },
-      passCompleted() {
-        return true;
-      },
-    };
+    const error = new Error(secret);
+    error.stack = `Error: ${secret}\n    at Object.prepare (/tmp/ledger.sqlite:10:1)`;
+    const store = fakeStore({ throwOn: "cursor", error });
     await withServer({
       enabled: () => true,
       store,
@@ -801,9 +757,41 @@ describe("points read API", { concurrency: false }, () => {
     }
   });
 
-  it("does not query raw logs from the read module", () => {
+  it("does not call sqlite from the read core", () => {
     const source = readFileSync(READ_SOURCE, "utf8");
     assert.equal(source.includes("raw_logs"), false);
+    assert.equal(source.includes("node:sqlite"), false);
+    assert.equal(source.includes("SELECT"), false);
+    assert.equal(source.includes(".prepare"), false);
+    assert.equal(source.includes("readApiSqliteStore"), false);
+  });
+
+  it("answers a plain object from handle without a node response", () => {
+    const api = createReadApi({
+      store: fakeStore({
+        config: { weights: { fund: null }, gates: {}, rule_version: null },
+      }),
+      enabled: () => true,
+      config: { ratePerMinute: 5 },
+    });
+    try {
+      const result = api.handle({
+        method: "GET",
+        path: "/v1/points/config",
+        query: { chainId: "84532" },
+        headers: { origin: "https://agent-bv.pages.dev" },
+        remoteAddress: "127.0.0.1",
+        origin: "https://agent-bv.pages.dev",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body.status, "draft");
+      assert.equal(result.body.chainId, 84532);
+      assert.equal(result.headers["cache-control"], "no-store");
+      assert.equal(result.headers["access-control-allow-origin"], "https://agent-bv.pages.dev");
+      assert.equal(result.headers["content-type"], "application/json; charset=utf-8");
+    } finally {
+      api.close();
+    }
   });
 
   it("does not read a relayer key or process.env outside the allowlist", () => {
@@ -835,11 +823,15 @@ describe("points read API", { concurrency: false }, () => {
   it("loads the read module from main only with a dynamic import", () => {
     const source = readFileSync(MAIN_SOURCE, "utf8");
     assert.equal(source.includes('from "./readApi.mjs"'), false);
+    assert.equal(source.includes('from "./readApiSqliteStore.mjs"'), false);
     assert.equal(source.includes('import("./readApi.mjs")'), true);
+    assert.equal(source.includes('import("./readApiSqliteStore.mjs")'), true);
     const gateAt = source.indexOf("if (!pointsGate(env))");
     const importAt = source.indexOf('import("./readApi.mjs")');
-    assert.ok(gateAt !== -1 && importAt !== -1);
+    const storeAt = source.indexOf('import("./readApiSqliteStore.mjs")');
+    assert.ok(gateAt !== -1 && importAt !== -1 && storeAt !== -1);
     assert.ok(gateAt < importAt);
+    assert.ok(gateAt < storeAt);
   });
 
   it("opens after five internal failures and closes on a probe after 30 seconds", async () => {
@@ -849,15 +841,21 @@ describe("points read API", { concurrency: false }, () => {
     let during = null;
     let api;
     const store = {
-      db() {
+      getCursor() {
         calls += 1;
         during = api.breakerState();
         if (broken) throw new Error("db down");
-        return null;
+        return { last_scanned_block: 10, finalized_block: 10, pass_completed: true };
       },
-      lastScannedBlock: () => 10,
-      finalizedBlock: () => 10,
-      passCompleted: () => true,
+      getLedgerSummary() {
+        return { points_total: 0, rows_count: 0, first_activity_utc_day: null };
+      },
+      listLedgerRows() {
+        return [];
+      },
+      getConfig() {
+        return { weights: {}, gates: {}, rule_version: null };
+      },
     };
     await withServer({
       store,
@@ -906,14 +904,20 @@ describe("points read API", { concurrency: false }, () => {
     let during = null;
     let api;
     const store = {
-      db() {
+      getCursor() {
         calls += 1;
         during = api.breakerState();
         throw new Error("still down");
       },
-      lastScannedBlock: () => null,
-      finalizedBlock: () => null,
-      passCompleted: () => false,
+      getLedgerSummary() {
+        return { points_total: 0, rows_count: 0, first_activity_utc_day: null };
+      },
+      listLedgerRows() {
+        return [];
+      },
+      getConfig() {
+        return { weights: {}, gates: {}, rule_version: null };
+      },
     };
     await withServer({
       store,
@@ -955,14 +959,20 @@ describe("points read API", { concurrency: false }, () => {
     let broken = true;
     let calls = 0;
     const store = {
-      db() {
+      getCursor() {
         calls += 1;
         if (broken) throw new Error("db down");
-        return null;
+        return { last_scanned_block: null, finalized_block: null, pass_completed: true };
       },
-      lastScannedBlock: () => null,
-      finalizedBlock: () => null,
-      passCompleted: () => true,
+      getLedgerSummary() {
+        return { points_total: 0, rows_count: 0, first_activity_utc_day: null };
+      },
+      listLedgerRows() {
+        return [];
+      },
+      getConfig() {
+        return { weights: {}, gates: {}, rule_version: null };
+      },
     };
     await withServer({
       store,
@@ -1009,14 +1019,7 @@ describe("points read API", { concurrency: false }, () => {
 
   it("does not throw out of the request handler", () => {
     const api = createReadApi({
-      store: {
-        db() {
-          throw new Error("db down");
-        },
-        lastScannedBlock: () => null,
-        finalizedBlock: () => null,
-        passCompleted: () => true,
-      },
+      store: fakeStore({ throwOn: "cursor", error: new Error("db down") }),
       enabled: () => true,
       config: { ratePerMinute: 10 },
     });
@@ -1038,6 +1041,15 @@ describe("points read API", { concurrency: false }, () => {
     };
     try {
       assert.doesNotThrow(() => api(req, res));
+      const direct = api.handle({
+        method: "GET",
+        path: `/v1/points/${ADDRESS}`,
+        query: {},
+        headers: {},
+        remoteAddress: "127.0.0.1",
+      });
+      assert.equal(direct.status, 500);
+      assert.deepEqual(direct.body, { ok: false, error: "internal" });
     } finally {
       api.close();
     }

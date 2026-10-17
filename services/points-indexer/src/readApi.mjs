@@ -1,14 +1,12 @@
 /**
- * Read-only HTTP routes for committed ledger rows.
+ * Read-only preview routes for committed ledger rows.
  * Importing this module does not open a database, a socket, or a timer.
- * The handler reads the ledger through the injected store and does not
- * assume the sqlite file is still on disk after a restart.
- * This file does not read process.env. The host passes an env object in.
+ * The core calls the injected store and does not read process.env.
+ * The host passes an env object in. A node listener is a thin wrapper
+ * around handle().
  */
 
-import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { fileURLToPath } from "node:url";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
 
 export const DEFAULT_CORS_ORIGIN = "https://agent-bv.pages.dev";
@@ -45,21 +43,6 @@ const DISCLAIMER_LINK_SLOTS = [
   "not_investment",
   "eligibility_notice",
   "abuse_policy",
-];
-
-const WEIGHT_KEYS = [
-  "first_activity",
-  "fund",
-  "release_or_refund",
-  "dispute_open_or_vote",
-  "vote",
-  "return_day",
-];
-const GATE_KEYS = [
-  "same_pair_per_day",
-  "same_pair_lifetime",
-  "min_escrow_amount_wei",
-  "min_escrow_duration_seconds",
 ];
 
 /**
@@ -284,23 +267,24 @@ export function bucketClientAddress(address) {
   return `${prefix}::/64`;
 }
 
-function socketBucket(req) {
-  return bucketClientAddress(req.socket?.remoteAddress) || "unknown";
+function socketBucket(input) {
+  const address = input?.remoteAddress ?? input?.socket?.remoteAddress;
+  return bucketClientAddress(address) || "unknown";
 }
 
 /**
  * Trusted proxy hops are counted from the right of X-Forwarded-For.
  * Hop 1 is the rightmost entry (the address a single appending proxy adds).
- * Hop 0 uses the socket. A missing, empty, too-short, or malformed header
- * uses the socket as well. The leftmost entry is never selected on its own.
- * @param {import("node:http").IncomingMessage} req
+ * Hop 0 uses remoteAddress. A missing, empty, too-short, or malformed header
+ * uses remoteAddress as well. The leftmost entry is never selected on its own.
+ * @param {{ headers?: object, remoteAddress?: string, socket?: { remoteAddress?: string } }} input
  * @param {number} [hops]
  */
-export function clientIp(req, hops = DEFAULT_PROXY_HOPS) {
-  const socket = socketBucket(req);
+export function clientIp(input, hops = DEFAULT_PROXY_HOPS) {
+  const socket = socketBucket(input);
   const hopCount = Number.isInteger(hops) && hops >= 0 ? hops : DEFAULT_PROXY_HOPS;
   if (hopCount === 0) return socket;
-  const rawHeader = req.headers?.["x-forwarded-for"];
+  const rawHeader = input?.headers?.["x-forwarded-for"];
   const header = Array.isArray(rawHeader) ? rawHeader.join(",") : rawHeader;
   if (typeof header !== "string") return socket;
   if (header.length === 0 || header.length > MAX_FORWARDED_CHARS) return socket;
@@ -365,24 +349,13 @@ export function createRateLimiter(options = {}) {
   };
 }
 
-function scalarOrNull(value) {
-  if (value == null) return null;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") return value;
-  return null;
-}
-
-function loadPointsFile() {
-  const filePath = fileURLToPath(new URL("../config/points.json", import.meta.url));
-  const raw = JSON.parse(readFileSync(filePath, "utf8"));
-  const weights = {};
-  for (const key of WEIGHT_KEYS) weights[key] = scalarOrNull(raw?.weights?.[key]);
-  const gates = {};
-  for (const key of GATE_KEYS) gates[key] = scalarOrNull(raw?.gates?.[key]);
-  const rule = raw?.rule_version;
-  const ruleVersion = rule == null ? null : (typeof rule === "string" ? rule : null);
-  return { weights, gates, rule_version: ruleVersion };
-}
+/**
+ * Store the host injects. The core calls only these four methods.
+ * getCursor() returns last_scanned_block, finalized_block, and pass_completed.
+ * getLedgerSummary(address) returns points_total, rows_count, and first_activity_utc_day.
+ * listLedgerRows(address, { limit, afterSeq }) returns row objects. seq is for the cursor.
+ * getConfig() returns weights, gates, and rule_version.
+ */
 
 function disclaimer() {
   const links = {};
@@ -394,26 +367,14 @@ function asInt(value) {
   return Number.isSafeInteger(value) ? value : null;
 }
 
-function emptySync() {
-  return {
-    indexed_to_block: null,
-    finalized_block: null,
-    behind: null,
-    syncing: true,
-  };
-}
-
 function readSync(store) {
-  if (!store || typeof store.db !== "function") return { db: null, ...emptySync() };
-  const db = store.db();
-  if (!db) return { db: null, ...emptySync() };
-  const cursor = asInt(store.lastScannedBlock());
-  const finalized = asInt(store.finalizedBlock());
+  const raw = store.getCursor();
+  const cursor = asInt(raw?.last_scanned_block);
+  const finalized = asInt(raw?.finalized_block);
   const behind = blocksBehind(finalized, cursor);
-  const pass = store.passCompleted() === true;
+  const pass = raw?.pass_completed === true;
   const syncing = !pass || behind == null || behind > 0;
   return {
-    db,
     indexed_to_block: cursor,
     finalized_block: finalized,
     behind,
@@ -449,56 +410,30 @@ function publicHistoryItem(row) {
   };
 }
 
-function addressBody(sync, wallet) {
-  const base = {
+function addressBody(sync, wallet, summary) {
+  return {
     address: wallet,
     chainId: CHAIN_ID,
-    points_total: 0,
+    points_total: Number(summary.points_total),
     points_withheld: true,
     eligibility: { status: "unverified", reason: "ofac_unconfigured" },
-    rows_count: 0,
-    first_activity_utc_day: null,
+    rows_count: Number(summary.rows_count),
+    first_activity_utc_day: summary.first_activity_utc_day ?? null,
     ...syncFields(sync),
     disclaimer: disclaimer(),
   };
-  if (!sync.db) return base;
-  const totals = sync.db.prepare(
-    `SELECT COALESCE(SUM(points), 0) AS points_total, COUNT(*) AS rows_count
-     FROM ledger_rows WHERE wallet = ? AND chain_id = ?`,
-  ).get(wallet, CHAIN_ID);
-  const first = sync.db.prepare(
-    `SELECT utc_day FROM ledger_rows
-     WHERE wallet = ? AND chain_id = ? AND action = 'first_activity'
-     LIMIT 1`,
-  ).get(wallet, CHAIN_ID);
-  return {
-    ...base,
-    points_total: Number(totals.points_total),
-    rows_count: Number(totals.rows_count),
-    first_activity_utc_day: first ? first.utc_day : null,
-  };
 }
 
-function historyBody(sync, wallet, limit, cursor) {
-  const fields = {
+function historyBody(sync, wallet, limit, cursor, rows) {
+  const page = rows.slice(0, limit);
+  return {
     address: wallet,
     chainId: CHAIN_ID,
     limit,
-    items: [],
-    next_cursor: null,
+    items: page.map(publicHistoryItem),
+    next_cursor: rows.length > limit ? String(page[page.length - 1].seq) : null,
     ...syncFields(sync),
   };
-  if (!sync.db) return fields;
-  const rows = sync.db.prepare(
-    `SELECT * FROM ledger_rows
-     WHERE wallet = ? AND chain_id = ? AND seq > ?
-     ORDER BY seq ASC
-     LIMIT ?`,
-  ).all(wallet, CHAIN_ID, cursor, limit + 1);
-  const page = rows.slice(0, limit);
-  fields.items = page.map(publicHistoryItem);
-  fields.next_cursor = rows.length > limit ? String(page[page.length - 1].seq) : null;
-  return fields;
 }
 
 function parseChain(raw) {
@@ -578,7 +513,7 @@ function createBreaker(limit, cooldownMs, clock) {
 
 /**
  * @param {{ store?: object, config?: object, now?: () => number, enabled?: boolean | (() => boolean) }} [options]
- * @returns {((req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void) & { close: () => void, breakerState: () => string }}
+ * @returns {((req: object, res: object) => void) & { close: () => void, breakerState: () => string, handle: (input: object) => { status: number, headers: object, body: object | null } }}
  */
 export function createReadApi(options = {}) {
   const config = options.config ?? {};
@@ -609,20 +544,21 @@ export function createReadApi(options = {}) {
   const enabledFn = typeof options.enabled === "function"
     ? options.enabled
     : () => pointsEnabled(options.enabled === true ? { POINTS_ENABLED: "1" } : {});
-  let pointsCache = config.points ?? null;
+  const store = options.store;
 
-  function pointsView() {
-    if (!pointsCache) pointsCache = loadPointsFile();
-    return pointsCache;
+  function requestOrigin(input) {
+    if (typeof input?.origin === "string") return input.origin;
+    const header = input?.headers?.origin;
+    return typeof header === "string" ? header : undefined;
   }
 
-  function corsHeaders(req) {
+  function corsHeaders(input) {
     const headers = {
       "access-control-allow-headers": "content-type",
       "access-control-allow-methods": "GET, OPTIONS",
       vary: "Origin",
     };
-    const origin = req.headers?.origin;
+    const origin = requestOrigin(input);
     if (typeof origin !== "string") return headers;
     const parsed = parseExactHttpsOrigin(origin);
     if (parsed.ok && origins.has(parsed.origin)) {
@@ -631,114 +567,135 @@ export function createReadApi(options = {}) {
     return headers;
   }
 
-  function send(res, req, status, body, extra) {
+  function result(status, body, input, extra) {
     const headers = {
       "cache-control": "no-store",
-      ...corsHeaders(req),
+      ...corsHeaders(input),
       ...extra,
     };
     if (body == null) {
       headers["content-length"] = "0";
-      res.writeHead(status, headers);
-      res.end();
-      return;
+      return { status, headers, body: null };
     }
     const payload = JSON.stringify(body);
     headers["content-type"] = "application/json; charset=utf-8";
     headers["content-length"] = Buffer.byteLength(payload);
-    res.writeHead(status, headers);
-    res.end(payload);
+    return { status, headers, body };
   }
 
-  function fail(res, req, status, code, extra) {
-    send(res, req, status, { ok: false, error: code }, extra);
+  function fail(status, code, input, extra) {
+    return result(status, { ok: false, error: code }, input, extra);
   }
 
-  function serveRequest(req, res) {
-    const url = new URL(req.url || "/", "http://127.0.0.1");
-    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  function serve(input) {
+    const pathname = String(input?.path || "/").replace(/\/+$/, "") || "/";
+    const query = input?.query ?? {};
     const route = routeOf(pathname);
-    if (req.method === "OPTIONS" && route) {
-      send(res, req, 204, null, { allow: "GET, OPTIONS" });
-      return;
+    if (input?.method === "OPTIONS" && route) {
+      return result(204, null, input, { allow: "GET, OPTIONS" });
     }
-    if (req.method !== "OPTIONS") {
-      const decision = limiter.allow(clientIp(req, hops));
+    if (input?.method !== "OPTIONS") {
+      const decision = limiter.allow(clientIp(input, hops));
       if (!decision.ok) {
-        fail(res, req, 429, "rate_limited", { "retry-after": String(decision.retryAfterSec) });
-        return;
+        return fail(429, "rate_limited", input, { "retry-after": String(decision.retryAfterSec) });
       }
     }
-    if (!route) {
-      fail(res, req, 404, "not_found");
-      return;
+    if (!route) return fail(404, "not_found", input);
+    if (input?.method !== "GET") {
+      return fail(405, "method_not_allowed", input, { allow: "GET, OPTIONS" });
     }
-    if (req.method !== "GET") {
-      fail(res, req, 405, "method_not_allowed", { allow: "GET, OPTIONS" });
-      return;
-    }
-    if (!parseChain(url.searchParams.get("chainId")).ok) {
-      fail(res, req, 400, "wrong_chain");
-      return;
-    }
+    if (!parseChain(query.chainId).ok) return fail(400, "wrong_chain", input);
     if (route.kind === "config") {
-      const points = pointsView();
-      send(res, req, 200, {
+      const points = store.getConfig();
+      return result(200, {
         chainId: CHAIN_ID,
         status: "draft",
         weights: points.weights,
         gates: points.gates,
         rule_version: points.rule_version,
-      });
-      return;
+      }, input);
     }
     let addressText;
     try {
       addressText = decodeURIComponent(route.address);
     } catch {
-      fail(res, req, 400, "invalid_address");
-      return;
+      return fail(400, "invalid_address", input);
     }
-    if (!ADDRESS.test(addressText)) {
-      fail(res, req, 400, "invalid_address");
-      return;
-    }
+    if (!ADDRESS.test(addressText)) return fail(400, "invalid_address", input);
     const wallet = addressText.toLowerCase();
-    const sync = readSync(options.store);
+    const sync = readSync(store);
     if (route.kind === "address") {
-      send(res, req, 200, addressBody(sync, wallet));
-      return;
+      return result(200, addressBody(sync, wallet, store.getLedgerSummary(wallet)), input);
     }
-    const limit = parseLimit(url.searchParams.get("limit"));
-    if (!limit.ok) {
-      fail(res, req, 400, "invalid_limit");
-      return;
-    }
-    const cursor = parseCursor(url.searchParams.get("cursor"));
-    if (!cursor.ok) {
-      fail(res, req, 400, "invalid_cursor");
-      return;
-    }
-    send(res, req, 200, historyBody(sync, wallet, limit.limit, cursor.seq));
+    const limit = parseLimit(query.limit);
+    if (!limit.ok) return fail(400, "invalid_limit", input);
+    const cursor = parseCursor(query.cursor);
+    if (!cursor.ok) return fail(400, "invalid_cursor", input);
+    const rows = store.listLedgerRows(wallet, { limit: limit.limit + 1, afterSeq: cursor.seq });
+    return result(200, historyBody(sync, wallet, limit.limit, cursor.seq, rows), input);
   }
 
-  function handler(req, res) {
+  function handle(input) {
     try {
-      if (enabledFn() !== true) {
-        fail(res, req, 503, "points_disabled");
-        return;
-      }
+      if (enabledFn() !== true) return fail(503, "points_disabled", input);
       if (!breaker.admit()) {
-        fail(res, req, 503, "points_unavailable");
-        return;
+        return fail(503, "points_unavailable", input);
       }
       try {
-        serveRequest(req, res);
+        const outcome = serve(input);
         breaker.success();
+        return outcome;
       } catch (error) {
         breaker.failure();
         throw error;
       }
+    } catch {
+      try {
+        return fail(500, "internal", input);
+      } catch {
+        return {
+          status: 500,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+            "content-length": Buffer.byteLength('{"ok":false,"error":"internal"}'),
+          },
+          body: { ok: false, error: "internal" },
+        };
+      }
+    }
+  }
+
+  function writeResult(res, outcome) {
+    if (outcome.body == null) {
+      res.writeHead(outcome.status, outcome.headers);
+      res.end();
+      return;
+    }
+    res.writeHead(outcome.status, outcome.headers);
+    res.end(JSON.stringify(outcome.body));
+  }
+
+  function fromNodeRequest(req) {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    const query = {};
+    for (const key of url.searchParams.keys()) {
+      if (query[key] === undefined) query[key] = url.searchParams.get(key);
+    }
+    const headerOrigin = req.headers?.origin;
+    return {
+      method: req.method,
+      path: url.pathname,
+      query,
+      headers: req.headers || {},
+      remoteAddress: req.socket?.remoteAddress,
+      origin: typeof headerOrigin === "string" ? headerOrigin : undefined,
+    };
+  }
+
+  function nodeHandler(req, res) {
+    try {
+      writeResult(res, handle(fromNodeRequest(req)));
     } catch {
       try {
         if (res.headersSent) {
@@ -746,17 +703,11 @@ export function createReadApi(options = {}) {
           return;
         }
         const payload = JSON.stringify({ ok: false, error: "internal" });
-        const headers = {
+        res.writeHead(500, {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-store",
           "content-length": Buffer.byteLength(payload),
-        };
-        try {
-          Object.assign(headers, corsHeaders(req));
-        } catch {
-          // The body stays the generic code.
-        }
-        res.writeHead(500, headers);
+        });
         res.end(payload);
       } catch {
         try {
@@ -768,7 +719,8 @@ export function createReadApi(options = {}) {
     }
   }
 
-  handler.close = () => limiter.close();
-  handler.breakerState = () => breaker.state();
-  return handler;
+  nodeHandler.close = () => limiter.close();
+  nodeHandler.breakerState = () => breaker.state();
+  nodeHandler.handle = handle;
+  return nodeHandler;
 }
