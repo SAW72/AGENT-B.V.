@@ -7,7 +7,6 @@ import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
 import { openIndexer } from "./indexer.mjs";
-import { createReadApi, parseCorsList, parseProxyHops, parseRatePerMinute, readApiEnabled } from "./readApi.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -75,6 +74,28 @@ export function assertConfig(cfg) {
 }
 
 /**
+ * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
+ * Checked on each request so the read module stays unloaded while this is off.
+ * @param {{ POINTS_ENABLED?: unknown } | undefined} env
+ */
+function pointsGate(env) {
+  const raw = env?.POINTS_ENABLED;
+  if (raw == null || String(raw).trim() === "") return false;
+  const text = String(raw).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "on" || text === "yes";
+}
+
+function writeJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
+}
+
+/**
  * Pure env loader. Does not open a database or dial a network.
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -103,10 +124,7 @@ export function loadConfig(env = process.env) {
     : positiveInt(env.POINTS_MAX_WINDOWS_PER_PASS, "POINTS_MAX_WINDOWS_PER_PASS");
 
   const cfg = assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
-  cfg.corsOrigins = parseCorsList(blank(env.POINTS_CORS_ORIGINS) ? undefined : env.POINTS_CORS_ORIGINS);
-  cfg.trustedProxyHops = parseProxyHops(env.POINTS_TRUSTED_PROXY_HOPS);
-  cfg.ratePerMinute = parseRatePerMinute(env.POINTS_READ_RATE_PER_MINUTE);
-  cfg.readApiEnabled = readApiEnabled(env);
+  cfg.pointsEnabled = pointsGate(env);
   return cfg;
 }
 
@@ -246,7 +264,7 @@ export function createDefaultRpc(rpcUrl) {
   };
 }
 
-function listenHealth(port, status, readApi) {
+function listenHealth(port, status, onPoints) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
@@ -265,19 +283,16 @@ function listenHealth(port, status, readApi) {
         return;
       }
       if (path === "/v1/points" || path.startsWith("/v1/points/")) {
-        try {
-          readApi(req, res);
-        } catch {
-          if (!res.headersSent) {
-            const payload = JSON.stringify({ ok: false, error: "internal" });
-            res.writeHead(500, {
-              "content-type": "application/json; charset=utf-8",
-              "cache-control": "no-store",
-              "content-length": Buffer.byteLength(payload),
-            });
-            res.end(payload);
-          }
-        }
+        Promise.resolve()
+          .then(() => onPoints(req, res))
+          .catch(() => {
+            if (res.headersSent) return;
+            try {
+              writeJson(res, 500, { ok: false, error: "internal" });
+            } catch {
+              // The request callback must not throw.
+            }
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -426,25 +441,42 @@ export async function start(options = {}) {
   };
 
   let readApi = null;
+  let readApiLoading = null;
+  const env = options.env ?? process.env;
+
+  async function handlePoints(req, res) {
+    if (!pointsGate(env)) {
+      writeJson(res, 503, { ok: false, error: "points_disabled" });
+      return;
+    }
+    if (!readApi) {
+      if (!readApiLoading) {
+        readApiLoading = import("./readApi.mjs").then((mod) => {
+          readApi = mod.createReadApi({
+            store: {
+              db: () => indexer?.db ?? null,
+              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+              finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
+              passCompleted: () => status.lastPassAt != null,
+            },
+            config: mod.readSettings(env),
+            now: () => Date.now(),
+            enabled: () => mod.pointsEnabled(env),
+          });
+          return readApi;
+        }).catch((error) => {
+          readApiLoading = null;
+          throw error;
+        });
+      }
+      await readApiLoading;
+    }
+    readApi(req, res);
+  }
+
   if (options.serve) {
-    const env = options.env ?? process.env;
-    readApi = createReadApi({
-      store: {
-        db: () => indexer?.db ?? null,
-        lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
-        finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
-        passCompleted: () => status.lastPassAt != null,
-      },
-      config: {
-        corsOrigins: cfg.corsOrigins,
-        trustedProxyHops: cfg.trustedProxyHops,
-        ratePerMinute: cfg.ratePerMinute,
-      },
-      now: () => Date.now(),
-      enabled: () => readApiEnabled(env),
-    });
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status, readApi);
+    const health = await listenHealth(port, status, handlePoints);
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);
@@ -495,7 +527,14 @@ export async function start(options = {}) {
       stopped = true;
       if (timer) clearTimeout(timer);
       if (closing) await closing();
-      readApi?.close();
+      if (readApiLoading) {
+        try {
+          const api = await readApiLoading;
+          api?.close();
+        } catch {
+          // The module never finished loading.
+        }
+      }
       indexer?.close();
     },
   };
