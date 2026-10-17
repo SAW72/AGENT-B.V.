@@ -2,11 +2,12 @@ import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createPublicClient, http } from "viem";
+import { HttpRequestError, createPublicClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
 import { openIndexer } from "./indexer.mjs";
+import { createScanPacer, scanErrorClass, sleepMs, textIsRateLimit } from "./pace.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -124,17 +125,21 @@ function textIsRange(text) {
 }
 
 /**
- * Provider block-range limit. Codes and HTTP status are checked before text.
+ * Provider block-range limit. HTTP 429 is never a range error, including when
+ * the provider text contains "exceed". Rate-limit text on details and
+ * shortMessage is not a range error either. HTTP 413 and JSON-RPC -32614 still are.
  * Text is read only from details and shortMessage. The full message is ignored:
  * viem puts the hex request body there, and a block number can contain "413".
  */
 export function isRangeError(error) {
   if (!error || typeof error !== "object") return false;
+  const status = numericCode(error.status ?? error.statusCode);
+  if (status === 429) return false;
   const code = numericCode(error.code);
   if (code === -32614) return true;
-  const status = numericCode(error.status ?? error.statusCode);
   if (status === 413 || code === 413) return true;
   const text = rangeText(error);
+  if (textIsRateLimit(text)) return false;
   if (code === -32005 || code === -32602) return textIsRange(text);
   return textIsRange(text);
 }
@@ -223,10 +228,43 @@ function blocksBehind(head, cursor) {
   return Math.max(0, head - cursor);
 }
 
+/**
+ * Keep HTTP 429 and 5xx status plus Retry-After on the error.
+ * viem otherwise turns a JSON-RPC body into an RPC error and drops the header.
+ * HTTP 413 is left on viem's path so a range code still surfaces.
+ */
+async function pointsFetch(url, init) {
+  const response = await fetch(url, init);
+  const status = response.status;
+  if (status !== 429 && (status < 500 || status > 599)) return response;
+  const text = await response.text();
+  let details = response.statusText || "";
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      const message = parsed?.error?.message ?? parsed?.message;
+      if (typeof message === "string" && message.trim() !== "") details = message;
+    } catch {
+      details = text.slice(0, 200);
+    }
+  }
+  throw new HttpRequestError({
+    details,
+    headers: response.headers,
+    status,
+    url: String(url),
+  });
+}
+
+/** viem retries stay off. The scan pacer is the only retry layer. */
+export function createPointsHttpTransport(rpcUrl) {
+  return http(rpcUrl, { retryCount: 0, fetchFn: pointsFetch });
+}
+
 export function createDefaultRpc(rpcUrl) {
   const client = createPublicClient({
     chain: baseSepolia,
-    transport: http(rpcUrl),
+    transport: createPointsHttpTransport(rpcUrl),
   });
   return {
     chainId: () => client.getChainId(),
@@ -254,6 +292,7 @@ function listenHealth(port, status) {
         const body = { ok: decision.ok, chainId: status.chainId };
         if (decision.ok && decision.behind > 0) body.behind = decision.behind;
         if (!decision.ok && status.lastError) body.error = status.lastError;
+        else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
         res.writeHead(decision.statusCode, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
         return;
@@ -285,14 +324,29 @@ async function assertContractCode(rpc, address, label) {
 /**
  * One ingest pass, then an optional poll loop.
  * Pass `rpc` to avoid dialing. Pass `once: true` to return after a single pass
- * and to surface a scan failure. Without `once`, a scan failure stays in the
+ * and to surface a scan failure. A 429, 5xx, or network failure on getLogs
+ * does not reject the pass: after the bounded retries the pass returns at the
+ * last committed window and the timer continues. Other scan failures still
+ * reject when `once` is set. Without `once`, a thrown scan failure stays in the
  * process: /health stays up and the timer retries. Chain id, contract code,
  * and config failures still reject.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, onListening?: Function, onIndexer?: Function }} [options]
+ * `paceNow` and `sleep` drive the getLogs gap and the retry waits. They default
+ * to the wall clock and a real timer.
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
   const now = options.now ?? (() => performance.now());
+  const paceNow = options.paceNow ?? (() => Date.now());
+  const sleep = options.sleep ?? sleepMs;
+  const pacer = createScanPacer({
+    now: paceNow,
+    sleep,
+    classify(error) {
+      if (isRangeError(error)) return null;
+      return scanErrorClass(error);
+    },
+  });
   const rpc = options.rpc ?? createDefaultRpc(cfg.rpcUrl);
   const reportedChain = asChainId(await rpc.chainId());
   if (!isAcceptedChain(reportedChain)) {
@@ -317,6 +371,7 @@ export async function start(options = {}) {
     pollMs: cfg.pollMs,
     lastPassAt: null,
     lastError: null,
+    earlyReason: null,
     behind: 0,
     now,
   };
@@ -334,17 +389,23 @@ export async function start(options = {}) {
     let window = learnedWindow;
     let inserted = 0;
     let committedWindows = 0;
+    let earlyReason = null;
     const ranges = [];
     status.behind = blocksBehind(head, cursor);
     while (from <= head && committedWindows < cfg.maxWindows) {
       const to = Math.min(head, from + window - 1);
       let logs;
       try {
-        logs = await rpc.getLogs({
+        const scanned = await pacer.run(() => rpc.getLogs({
           fromBlock: from,
           toBlock: to,
           address: [cfg.escrowAddress, PANEL],
-        });
+        }));
+        if (!scanned.ok) {
+          earlyReason = scanned.reason;
+          break;
+        }
+        logs = scanned.value;
       } catch (error) {
         if (isRangeError(error) && window > 1) {
           window = nextRangeWindow(window, error, cfg.logRange);
@@ -372,16 +433,35 @@ export async function start(options = {}) {
       dirty = false;
       rebuilds = 1;
     }
+    status.behind = blocksBehind(head, indexer.lastScannedBlock());
+    const scannedThrough = indexer.lastScannedBlock();
+    if (earlyReason) {
+      status.earlyReason = earlyReason;
+      status.lastError = earlyReason;
+      console.error(`${earlyReason} pass_ended_early`);
+      return {
+        ok: true,
+        endedEarly: true,
+        reason: earlyReason,
+        inserted,
+        rebuilds,
+        ranges,
+        skipped: false,
+        scannedThrough,
+        behind: status.behind,
+      };
+    }
+    status.earlyReason = null;
     status.lastPassAt = now();
     status.lastError = null;
-    status.behind = blocksBehind(head, indexer.lastScannedBlock());
     return {
       ok: true,
+      endedEarly: false,
       inserted,
       rebuilds,
       ranges,
       skipped: false,
-      scannedThrough: indexer.lastScannedBlock(),
+      scannedThrough,
       behind: status.behind,
     };
   };
@@ -396,6 +476,7 @@ export async function start(options = {}) {
     try {
       return await runOnce();
     } catch (error) {
+      status.earlyReason = null;
       status.lastError = errorCode(error);
       throw error;
     } finally {
