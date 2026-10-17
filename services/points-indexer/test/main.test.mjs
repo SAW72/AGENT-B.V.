@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { HttpRequestError, RpcRequestError } from "viem";
 import { ESCROW_START_BLOCK, PANEL } from "../src/constants.mjs";
+import { PointsError } from "../src/hex.mjs";
 import {
   DEFAULT_DB_PATH,
   DEFAULT_ESCROW_ADDRESS,
@@ -106,6 +107,14 @@ describe("process entry", () => {
         /POINTS_MAX_WINDOWS_PER_PASS must be a positive integer/,
       );
     }
+  });
+
+  it("refuses a poll interval that is not a positive integer", () => {
+    for (const poll of ["0", "-1", "1.5", "abc", "1e3"]) {
+      assert.throws(() => loadConfig({ POINTS_POLL_MS: poll }), /POINTS_POLL_MS must be a positive integer/);
+    }
+    assert.equal(loadConfig({ POINTS_POLL_MS: "" }).pollMs, DEFAULT_POLL_MS);
+    assert.equal(loadConfig({ POINTS_POLL_MS: "   " }).pollMs, DEFAULT_POLL_MS);
   });
 
   it("refuses a missing, zero, or malformed escrow address", () => {
@@ -356,7 +365,7 @@ describe("process entry", () => {
   it("surfaces a one-block range failure and leaves the cursor unmoved", async () => {
     const dir = dbDir();
     let head = ESCROW_START_BLOCK - 1;
-    let fail = false;
+    let calls = 0;
     const running = await start({
       once: true,
       env: {
@@ -369,6 +378,8 @@ describe("process entry", () => {
           return head;
         },
         async getLogs() {
+          calls += 1;
+          if (calls > 5) throw new Error("stuck");
           throw new HttpRequestError({
             body: { method: "eth_getLogs" },
             details: "Payload Too Large",
@@ -380,10 +391,9 @@ describe("process entry", () => {
     });
     try {
       assert.equal(running.indexer.lastScannedBlock(), null);
-      fail = true;
       head = ESCROW_START_BLOCK;
       await assert.rejects(() => running.pass(), /Payload Too Large/);
-      assert.equal(fail, true);
+      assert.equal(calls, 1);
       assert.equal(running.indexer.lastScannedBlock(), null);
       assert.equal(running.indexer.rawCount(), 0);
     } finally {
@@ -391,6 +401,50 @@ describe("process entry", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  for (const [label, makeError] of [
+    ["-32614 with no number in the text", () => new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32614, message: "range too wide" },
+      url: "https://sepolia.base.org",
+    })],
+    ["HTTP 413 without a JSON-RPC body", () => new HttpRequestError({
+      body: { method: "eth_getLogs" },
+      details: "Payload Too Large",
+      status: 413,
+      url: "https://sepolia.base.org",
+    })],
+  ]) {
+    it(`halves the window step by step on ${label}`, async () => {
+      const dir = dbDir();
+      const head = ESCROW_START_BLOCK + 7;
+      const spans = [];
+      let running;
+      try {
+        running = await start({
+          once: true,
+          env: { CHAIN_ID: "84532", POINTS_DB_PATH: join(dir, "ledger.sqlite"), POINTS_LOG_RANGE: "8" },
+          rpc: withCode({
+            async finalizedBlockNumber() {
+              return head;
+            },
+            async getLogs(args) {
+              const span = args.toBlock - args.fromBlock + 1;
+              spans.push(span);
+              if (spans.length > 40) throw new Error("stuck: window is not shrinking");
+              if (span > 2) throw makeError();
+              return [];
+            },
+          }),
+        });
+        assert.deepEqual(spans.slice(0, 3), [8, 4, 2]);
+        assert.equal(running.indexer.lastScannedBlock(), head);
+      } finally {
+        if (running) await running.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("rolls back the cursor and the raw logs together when a window commit fails", () => {
     const ctx = tempIndexer();
@@ -430,6 +484,44 @@ describe("process entry", () => {
       assert.equal(ctx.indexer.rawCount(), 1);
       const stored = ctx.indexer.db.prepare("SELECT tx_hash FROM raw_logs").all();
       assert.deepEqual(stored.map((row) => row.tx_hash), [first.transactionHash]);
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it("writes the cursor in the same transaction as the raw logs", () => {
+    const ctx = tempIndexer();
+    const log = createdLog({
+      escrowId: `0x${"33".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 10,
+      blockNumber: ESCROW_START_BLOCK,
+      logIndex: 7,
+      txHash: `0x${"c7".repeat(32)}`,
+      timestamp: 20_000 * 86400,
+    });
+    try {
+      ctx.indexer.db.exec(`
+        CREATE TRIGGER block_cursor_insert BEFORE INSERT ON meta
+        WHEN NEW.key = 'last_scanned_block'
+        BEGIN
+          SELECT RAISE(ABORT, 'cursor blocked');
+        END
+      `);
+      ctx.indexer.db.exec(`
+        CREATE TRIGGER block_cursor_update BEFORE UPDATE ON meta
+        WHEN NEW.key = 'last_scanned_block'
+        BEGIN
+          SELECT RAISE(ABORT, 'cursor blocked');
+        END
+      `);
+      assert.throws(
+        () => ctx.indexer.commitScanWindow([log], ESCROW_START_BLOCK),
+        /cursor blocked/,
+      );
+      assert.equal(ctx.indexer.rawCount(), 0);
+      assert.equal(ctx.indexer.lastScannedBlock(), null);
     } finally {
       ctx.close();
     }
@@ -580,6 +672,54 @@ describe("process entry", () => {
     }
   });
 
+  it("keeps /health at 200 while a multi-window pass is still running", async () => {
+    const dir = dbDir();
+    const head = ESCROW_START_BLOCK + 39;
+    let clock = 0;
+    let calls = 0;
+    let healthUrl;
+    const mid = [];
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      now: () => clock,
+      onListening(info) {
+        healthUrl = info.url;
+      },
+      env: {
+        CHAIN_ID: "84532",
+        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+        POINTS_POLL_MS: "1000",
+        POINTS_LOG_RANGE: "10",
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          clock += 2000;
+          calls += 1;
+          if (calls >= 2) {
+            const response = await fetch(healthUrl);
+            mid.push(response.status);
+            await response.text();
+          }
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(calls, 4);
+      assert.ok(clock > 3000);
+      assert.deepEqual(mid, [200, 200, 200]);
+      assert.equal(running.ingested.ok, true);
+    } finally {
+      await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("classifies viem range errors without treating a hex 413 as a range limit", () => {
     const limited = new RpcRequestError({
       body: { method: "eth_getLogs" },
@@ -616,6 +756,11 @@ describe("process entry", () => {
       [new RpcRequestError({
         body: { method: "eth_getLogs" },
         error: { code: -32005, message: "too many results" },
+        url: "https://sepolia.base.org",
+      }), true],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32614, message: "range too wide" },
         url: "https://sepolia.base.org",
       }), true],
     ];
@@ -742,6 +887,60 @@ describe("process entry", () => {
       assert.equal(joined.includes(keyUrl), false);
       assert.equal(joined.includes("example-rpc.io"), false);
       assert.equal(joined.includes("https://"), false);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not print error messages or alternate URL forms from logFailure", async () => {
+    const dir = dbDir();
+    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
+    const wssUrl = "wss://base-sepolia.example-rpc.io/v2/WSS_SECRET_KEY";
+    const encodedUrl = "https%3A%2F%2Fbase-sepolia.example-rpc.io%2Fv2%2FENC_SECRET_KEY";
+    const bareUrl = "base-sepolia.example-rpc.io/v2/BARE_SECRET_KEY";
+    const secretText = `${keyUrl} ${wssUrl} ${encodedUrl} ${bareUrl}`;
+    const failure = new Error(`provider down ${secretText}`);
+    failure.details = `details ${secretText}`;
+    failure.stack = `stack ${secretText}`;
+    failure.shortMessage = "header not found";
+    const logged = [];
+    const original = console.error;
+    console.error = (...args) => {
+      logged.push(args.map((part) => String(part)).join(" "));
+    };
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+          BASE_SEPOLIA_RPC_URL: keyUrl,
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            throw failure;
+          },
+        }),
+      });
+      assert.equal(running.ingested.ok, false);
+      const response = await fetch(running.healthUrl);
+      const bodyText = await response.text();
+      const joined = logged.join("\n");
+      assert.match(joined, /rpc_error/);
+      assert.match(joined, /header not found/);
+      for (const secret of [keyUrl, wssUrl, encodedUrl, bareUrl, "FAKE_SECRET_KEY_abc123", "WSS_SECRET_KEY", "ENC_SECRET_KEY", "BARE_SECRET_KEY", "wss://", "https%3A", "provider down", "details "]) {
+        assert.equal(joined.includes(secret), false, secret);
+        assert.equal(bodyText.includes(secret), false, secret);
+      }
     } finally {
       console.error = original;
       if (running) await running.stop();
@@ -1025,6 +1224,119 @@ describe("process entry", () => {
       assert.equal(body.error, "rpc_error");
       assert.equal(JSON.stringify(body).includes("boom"), false);
     } finally {
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports ledger_error, config_error, and range_error on /health", async () => {
+    const cases = [
+      {
+        code: "ledger_error",
+        range: "10",
+        makeError: () => new PointsError("bad_log"),
+      },
+      {
+        code: "config_error",
+        range: "10",
+        makeError: () => new Error("POINTS_LOG_RANGE must be a positive integer"),
+      },
+      {
+        code: "range_error",
+        range: "1",
+        makeError: () => new HttpRequestError({
+          body: { method: "eth_getLogs" },
+          details: "Payload Too Large",
+          status: 413,
+          url: "https://sepolia.base.org",
+        }),
+      },
+    ];
+    for (const item of cases) {
+      const dir = dbDir();
+      const original = console.error;
+      console.error = () => {};
+      let calls = 0;
+      let running;
+      try {
+        running = await start({
+          serve: true,
+          port: 0,
+          env: {
+            CHAIN_ID: "84532",
+            POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+            POINTS_POLL_MS: "60000",
+            POINTS_LOG_RANGE: item.range,
+          },
+          rpc: withCode({
+            async finalizedBlockNumber() {
+              return ESCROW_START_BLOCK;
+            },
+            async getLogs() {
+              calls += 1;
+              if (calls > 3) throw new Error("stuck");
+              throw item.makeError();
+            },
+          }),
+        });
+        assert.equal(running.ingested.ok, false);
+        assert.equal(running.ingested.error, item.code);
+        const response = await fetch(running.healthUrl);
+        assert.equal(response.status, 503);
+        const body = await response.json();
+        assert.equal(body.ok, false);
+        assert.equal(body.error, item.code);
+        assert.deepEqual(Object.keys(body).sort(), ["chainId", "error", "ok"]);
+      } finally {
+        console.error = original;
+        if (running) await running.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("poll timer retries after a failed pass and recovers", async () => {
+    const dir = dbDir();
+    let calls = 0;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        now: () => 1_000_000,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "20",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            calls += 1;
+            if (calls < 3) throw new Error("transient");
+            return [];
+          },
+        }),
+      });
+      assert.equal(running.ingested.ok, false);
+      const deadline = Date.now() + 2000;
+      let status = 0;
+      while (Date.now() < deadline) {
+        const response = await fetch(running.healthUrl);
+        status = response.status;
+        await response.text();
+        if (status === 200 && calls >= 3) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(status, 200);
+      assert.ok(calls >= 3);
+    } finally {
+      console.error = original;
       if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
