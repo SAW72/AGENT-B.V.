@@ -19,6 +19,7 @@ import {
   textIsHeadLag,
   textIsRateLimit,
 } from "./pace.mjs";
+import { createReadApi, parseCorsList, parseProxyHops, parseRatePerMinute, readApiEnabled } from "./readApi.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -159,7 +160,12 @@ export function loadConfig(env = process.env) {
     ? DEFAULT_MAX_WINDOWS
     : positiveInt(env.POINTS_MAX_WINDOWS_PER_PASS, "POINTS_MAX_WINDOWS_PER_PASS");
 
-  return assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
+  const cfg = assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
+  cfg.corsOrigins = parseCorsList(blank(env.POINTS_CORS_ORIGINS) ? undefined : env.POINTS_CORS_ORIGINS);
+  cfg.trustedProxyHops = parseProxyHops(env.POINTS_TRUSTED_PROXY_HOPS);
+  cfg.ratePerMinute = parseRatePerMinute(env.POINTS_READ_RATE_PER_MINUTE);
+  cfg.readApiEnabled = readApiEnabled(env);
+  return cfg;
 }
 
 /**
@@ -521,7 +527,7 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   };
 }
 
-function listenHealth(port, status) {
+function listenHealth(port, status, readApi) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
@@ -540,6 +546,22 @@ function listenHealth(port, status) {
         else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
         res.writeHead(decision.statusCode, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
+        return;
+      }
+      if (path === "/v1/points" || path.startsWith("/v1/points/")) {
+        try {
+          readApi(req, res);
+        } catch {
+          if (!res.headersSent) {
+            const payload = JSON.stringify({ ok: false, error: "internal" });
+            res.writeHead(500, {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+              "content-length": Buffer.byteLength(payload),
+            });
+            res.end(payload);
+          }
+        }
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -939,9 +961,26 @@ export async function start(options = {}) {
     }
   };
 
+  let readApi = null;
   if (options.serve) {
+    const env = options.env ?? process.env;
+    readApi = createReadApi({
+      store: {
+        db: () => indexer?.db ?? null,
+        lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+        finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
+        passCompleted: () => status.lastPassAt != null,
+      },
+      config: {
+        corsOrigins: cfg.corsOrigins,
+        trustedProxyHops: cfg.trustedProxyHops,
+        ratePerMinute: cfg.ratePerMinute,
+      },
+      now: () => Date.now(),
+      enabled: () => readApiEnabled(env),
+    });
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status);
+    const health = await listenHealth(port, status, readApi);
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);
@@ -994,6 +1033,7 @@ export async function start(options = {}) {
       if (cancelCarry) cancelCarry();
       if (timer) clearTimeout(timer);
       if (closing) await closing();
+      readApi?.close();
       indexer?.close();
     },
   };
