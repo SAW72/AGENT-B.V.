@@ -1097,14 +1097,17 @@ export async function start(options = {}) {
     }
     if (!readApi) {
       if (!readApiLoading) {
-        readApiLoading = import("./readApi.mjs").then((mod) => {
+        readApiLoading = Promise.all([
+          import("./readApi.mjs"),
+          import("./readApiSqliteStore.mjs"),
+        ]).then(([mod, stores]) => {
           readApi = mod.createReadApi({
-            store: {
+            store: stores.createReadApiSqliteStore({
               db: () => indexer?.db ?? null,
               lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
               finalizedBlock: () => (indexer ? indexer.finalizedBlock : null),
               passCompleted: () => status.lastPassAt != null,
-            },
+            }),
             config: mod.readSettings(env),
             now: () => Date.now(),
             enabled: () => mod.pointsEnabled(env),
