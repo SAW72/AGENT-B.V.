@@ -345,23 +345,22 @@ export function commitScanWindow(
   storage: Storage,
   logs: unknown[],
   scannedThrough: number,
-  chainId = CHAIN_ID,
-  finalizedHead: number | null = null,
+  chainId: number,
+  finalizedHead: number,
 ) {
   if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
   if (!Number.isInteger(scannedThrough) || scannedThrough < 0) throw new PointsError("bad_cursor");
+  if (!Number.isInteger(finalizedHead) || finalizedHead < 0) throw new PointsError("bad_finalized");
   const previous = lastScannedBlock(storage.sql);
   if (previous != null && scannedThrough < previous) throw new PointsError("cursor_backwards");
   const normalized = logs.map((log) => normalizeLog(log));
   let inserted = 0;
   let removed = 0;
   let anomalies = 0;
-  // This alarm's RPC finalized head. The stored head is behind the window, so it cannot decide.
-  const finalized = Number.isInteger(finalizedHead) && (finalizedHead as number) >= 0 ? finalizedHead : null;
   storage.transactionSync(() => {
     for (const log of normalized) {
       if (log.removed) {
-        if (finalized != null && log.blockNumber <= finalized) {
+        if (log.blockNumber <= finalizedHead) {
           anomalies += 1;
           console.error(JSON.stringify({
             message: "removed_finalized_log",
@@ -369,25 +368,7 @@ export function commitScanWindow(
           }));
           continue;
         }
-        const existing = one(
-          storage.sql,
-          "SELECT 1 AS n FROM raw_logs WHERE chain_id = ? AND contract = ? AND tx_hash = ? AND log_index = ?",
-          chainId,
-          log.contract,
-          log.txHash,
-          log.logIndex,
-        );
-        if (existing) {
-          run(
-            storage.sql,
-            "DELETE FROM raw_logs WHERE chain_id = ? AND contract = ? AND tx_hash = ? AND log_index = ?",
-            chainId,
-            log.contract,
-            log.txHash,
-            log.logIndex,
-          );
-          removed += 1;
-        }
+        throw new PointsError("removed_above_head");
       } else {
         inserted += upsertRaw(storage.sql, chainId, log);
       }

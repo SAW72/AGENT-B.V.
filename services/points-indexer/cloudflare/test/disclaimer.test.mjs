@@ -17,6 +17,9 @@ test("disclaimer bytes match the locked sentence everywhere it is copied", () =>
     "docs/POINTS-ANNOUNCEMENT-DRAFT.md",
     "docs/AGENT-BV-POINTS-SPEC.md",
     "config/reputation/sepolia.json",
+    "apps/wallet-ux/src/reputation/copy.ts",
+    "apps/wallet-ux/fixtures/reputation/EXAMPLE-DATA.balance.example.json",
+    "claim-relayer/fixtures/reputation/balance.example.json",
   ]) {
     assert.equal(readRepo(path).includes(EXPECTED), true, path);
   }

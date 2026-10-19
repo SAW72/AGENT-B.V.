@@ -8,6 +8,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           POINTS_FAST_PACE: "1",
+          POINTS_CORS_ORIGINS: "https://agent-bv.pages.dev",
         },
       },
     }),

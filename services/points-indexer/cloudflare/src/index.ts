@@ -101,8 +101,8 @@ function duplicateResponse(request: Request, env: Env): Response {
 /**
  * Enabled /health charges the per-address limiter, then rejects a repeated
  * query, then uses the cache. A repeated query does not spend the global cap
- * and does not call the object. A disabled route returns 503 before that,
- * including when the query is repeated.
+ * and does not call the object. A disabled route returns 503 before that.
+ * OPTIONS is always 204 and does not reach this function.
  */
 function optionsResponse(request: Request, env: Env): Response {
   const origins = new Set(parseCorsList(env.POINTS_CORS_ORIGINS));
@@ -131,6 +131,12 @@ async function charge(binding: Limiter | undefined, key: string): Promise<Respon
     return json(503, { ok: false, error: "rate_limited" });
   }
   return json(429, { ok: false, error: "rate_limited" }, { "retry-after": "60" });
+}
+
+function applyCors(request: Request, env: Env, response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsFor(request, env))) headers.set(key, value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function clientKey(request: Request) {
@@ -174,36 +180,39 @@ async function enabledHealth(request: Request, env: Env, repeated: boolean): Pro
   return response;
 }
 
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const repeated = duplicateQuery(url);
+  if (path === "/health") {
+    if (!pointsEnabled(env)) return json(503, { status: "disabled" });
+    return enabledHealth(request, env, repeated);
+  }
+  if (path === "/v1/points" || path.startsWith("/v1/points/")) {
+    if (!pointsEnabled(env)) return disabledResponse();
+    const address = clientKey(request);
+    if (!address) return json(400, { ok: false, error: "client_address_required" });
+    const limited = await charge(limiterOf(env, "POINTS_RATE_LIMITER"), address);
+    if (limited) return limited;
+    if (repeated) return duplicateResponse(request, env);
+    const globalLimited = await charge(limiterOf(env, "POINTS_GLOBAL_LIMITER"), GLOBAL_KEY);
+    if (globalLimited) return globalLimited;
+    const result: ReadResult = await stub(env).read({
+      method: request.method,
+      path,
+      query: queryOf(url),
+      origin: request.headers.get("Origin"),
+      cfConnectingIp: request.headers.get("CF-Connecting-IP"),
+    });
+    return toResponse(result);
+  }
+  if (repeated) return duplicateResponse(request, env);
+  return new Response("not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-    const repeated = duplicateQuery(url);
-    if (path === "/health") {
-      if (!pointsEnabled(env)) return json(503, { status: "disabled" });
-      return enabledHealth(request, env, repeated);
-    }
-    if (path === "/v1/points" || path.startsWith("/v1/points/")) {
-      if (request.method === "OPTIONS" && !repeated) return optionsResponse(request, env);
-      if (!pointsEnabled(env)) return disabledResponse();
-      if (request.method === "OPTIONS") return duplicateResponse(request, env);
-      const address = clientKey(request);
-      if (!address) return json(400, { ok: false, error: "client_address_required" });
-      const limited = await charge(limiterOf(env, "POINTS_RATE_LIMITER"), address);
-      if (limited) return limited;
-      if (repeated) return duplicateResponse(request, env);
-      const globalLimited = await charge(limiterOf(env, "POINTS_GLOBAL_LIMITER"), GLOBAL_KEY);
-      if (globalLimited) return globalLimited;
-      const result: ReadResult = await stub(env).read({
-        method: request.method,
-        path,
-        query: queryOf(url),
-        origin: request.headers.get("Origin"),
-        cfConnectingIp: request.headers.get("CF-Connecting-IP"),
-      });
-      return toResponse(result);
-    }
-    if (repeated) return duplicateResponse(request, env);
-    return new Response("not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    if (request.method === "OPTIONS") return optionsResponse(request, env);
+    return applyCors(request, env, await route(request, env));
   },
 } satisfies ExportedHandler<Env>;

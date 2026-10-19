@@ -30,16 +30,23 @@ describe("points read API while POINTS_ENABLED is unset", () => {
     });
     expect(options.status).toBe(204);
     expect(options.headers.get("access-control-allow-methods")).toContain("OPTIONS");
-    const repeated = await SELF.fetch(`https://points.test/v1/points/${address}?limit=1&limit=2`);
+    const repeated = await SELF.fetch(`https://points.test/v1/points/${address}?limit=1&limit=2`, {
+      headers: { Origin: "https://agent-bv.pages.dev" },
+    });
     expect(repeated.status).toBe(503);
     const repeatedText = await repeated.text();
     expect(JSON.parse(repeatedText)).toEqual({ ok: false, error: "points_disabled" });
+    expect(repeated.headers.get("access-control-allow-origin")).toBe("https://agent-bv.pages.dev");
+    expect(repeated.headers.get("access-control-allow-methods")).toContain("GET");
     forbidRankAndEarn(repeatedText);
     const repeatedOptions = await SELF.fetch(`https://points.test/v1/points/${address}?limit=1&limit=2`, {
       method: "OPTIONS",
+      headers: { Origin: "https://agent-bv.pages.dev" },
     });
-    expect(repeatedOptions.status).toBe(503);
-    expect(await repeatedOptions.json()).toEqual({ ok: false, error: "points_disabled" });
+    expect(repeatedOptions.status).toBe(204);
+    expect(repeatedOptions.headers.get("access-control-allow-origin")).toBe("https://agent-bv.pages.dev");
+    const healthOptions = await SELF.fetch("https://points.test/health?ready=1&ready=1", { method: "OPTIONS" });
+    expect(healthOptions.status).toBe(204);
     expect(await listDurableObjectIds(env.POINTS)).toEqual([]);
   });
 

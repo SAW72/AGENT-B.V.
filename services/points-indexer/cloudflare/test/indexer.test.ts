@@ -431,7 +431,99 @@ describe("points alarm", () => {
     const cursor = await meta("last_scanned_block");
     expect(cursor).not.toBe("0");
     expect(Number(cursor)).toBeGreaterThanOrEqual(ESCROW_START_BLOCK);
-    expect(await meta("error_backoff_ms")).toBe("0");
+    expect(await meta("error_backoff_ms")).toBeNull();
+    const firstLogs = rpc.calls.find((call) => call.method === "eth_getLogs");
+    const fromBlock = Number((firstLogs?.params[0] as { fromBlock: string }).fromBlock);
+    expect(fromBlock).toBe(ESCROW_START_BLOCK);
+  });
+
+  it("keeps a removed log exactly at the RPC head", async () => {
+    const head = ESCROW_START_BLOCK;
+    const log = await escrowLog(head, 6, 1_700_000_000);
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO raw_logs(
+           chain_id, contract, tx_hash, log_index, block_number, block_hash, block_timestamp,
+           topics_json, data, removed, tx_from
+         ) VALUES(84532, ?, ?, ?, ?, ?, ?, ?, '0x', 0, null)`,
+        log.address,
+        log.transactionHash,
+        log.logIndex,
+        log.blockNumber,
+        log.blockHash,
+        1_700_000_000,
+        JSON.stringify(log.topics),
+      );
+    });
+    log.removed = true;
+    const rpc = installRpc(chainHandler({ head, logs: [log] }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await count("raw_logs")).toBe(1);
+    expect(await meta("removed_finalized")).toBe("1");
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.82" },
+    });
+    const body = await health.json() as { removed_finalized?: number };
+    expect(body.removed_finalized).toBe(1);
+  });
+
+  it("rejects a removed log one block above the RPC head", async () => {
+    const head = ESCROW_START_BLOCK + 10;
+    const kept = await escrowLog(ESCROW_START_BLOCK, 7, 1_700_000_000);
+    const removed = await escrowLog(head + 1, 8, 1_700_000_100);
+    removed.removed = true;
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO raw_logs(
+           chain_id, contract, tx_hash, log_index, block_number, block_hash, block_timestamp,
+           topics_json, data, removed, tx_from
+         ) VALUES(84532, ?, ?, ?, ?, ?, ?, ?, '0x', 0, null)`,
+        kept.address,
+        kept.transactionHash,
+        kept.logIndex,
+        kept.blockNumber,
+        kept.blockHash,
+        1_700_000_000,
+        JSON.stringify(kept.topics),
+      );
+    });
+    const rpc = installRpc(chainHandler({ head, logs: [removed], keepOutside: true }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_error")).toBe("log_outside_request");
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(1);
+    const stored = await runInDurableObject(stub(), async (_instance, state) => {
+      return state.storage.sql.exec("SELECT tx_hash FROM raw_logs").toArray()[0];
+    });
+    expect(String(stored.tx_hash)).toBe(kept.transactionHash);
+  });
+
+  it("throws instead of deleting a removed log above the passed head", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK + 5, 9, 1_700_000_000);
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO raw_logs(
+           chain_id, contract, tx_hash, log_index, block_number, block_hash, block_timestamp,
+           topics_json, data, removed, tx_from
+         ) VALUES(84532, ?, ?, ?, ?, ?, ?, ?, '0x', 0, null)`,
+        log.address,
+        log.transactionHash,
+        log.logIndex,
+        log.blockNumber,
+        log.blockHash,
+        1_700_000_000,
+        JSON.stringify(log.topics),
+      );
+      log.removed = true;
+      const { commitScanWindow } = await import("../src/ledger");
+      expect(() => commitScanWindow(state.storage, [log], ESCROW_START_BLOCK + 5, 84532, ESCROW_START_BLOCK)).toThrow();
+      const row = state.storage.sql.exec("SELECT tx_hash FROM raw_logs").toArray()[0];
+      expect(String(row.tx_hash)).toBe(log.transactionHash);
+      const cursor = state.storage.sql.exec("SELECT value FROM meta WHERE key = 'last_scanned_block'").toArray()[0];
+      expect(cursor).toBeUndefined();
+    });
   });
 
   it("does not advance the cursor when a block timestamp cannot be read", async () => {
@@ -701,7 +793,7 @@ describe("points alarm", () => {
     expect(await runDurableObjectAlarm(stub())).toBe(true);
     expect(await meta("last_scanned_block")).toBeNull();
     expect(await count("raw_logs")).toBe(0);
-    expect(await meta("last_error")).toBe("rpc_error");
+    expect(await meta("last_error")).toBe("log_outside_request");
 
     const wrong = await escrowLog(ESCROW_START_BLOCK, 1, 1_700_000_000);
     wrong.address = "0x0000000000000000000000000000000000000001";
@@ -834,5 +926,96 @@ describe("points alarm", () => {
     expect(isRangeError({ code: -32602, details: "invalid params" })).toBe(true);
     expect(isRangeError({ code: -32000, details: "invalid params -32602" })).toBe(false);
     expect(isRangeError({ code: -32000, message: "-32602" })).toBe(false);
+  });
+
+  it("checks rate-limit text before the -32602 code", () => {
+    expect(isRangeError({ code: -32602, details: "invalid params" })).toBe(true);
+    expect(isRangeError({ code: -32602, details: "rate limit" })).toBe(false);
+  });
+
+  it("ramps the wait when getLogs keeps failing", async () => {
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK + 10,
+      logs: [],
+      getLogsStatus: () => ({ status: 503 }),
+    }));
+    restore = rpc.restore;
+    for (const wait of [1_000, 2_000, 4_000]) {
+      const before = Date.now();
+      expect(await runDurableObjectAlarm(stub())).toBe(true);
+      const after = Date.now();
+      const scheduled = await alarmAt() as number;
+      expect(scheduled).toBeGreaterThanOrEqual(before + wait);
+      expect(scheduled).toBeLessThanOrEqual(after + wait);
+      expect(await meta("error_backoff_ms")).toBe(String(wait));
+      expect(await meta("last_error")).toBe("server_error");
+    }
+  });
+
+  it("ramps the wait when rebuild keeps failing", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [log] }));
+    restore = rpc.restore;
+    await runInDurableObject(stub(), async (instance, state) => {
+      const sql = state.storage.sql;
+      const original = sql.exec.bind(sql);
+      sql.exec = ((query: string, ...bindings: unknown[]) => {
+        if (String(query).includes("DELETE FROM ledger_rows")) throw new Error("sqlite forced");
+        return original(query, ...bindings);
+      }) as typeof sql.exec;
+      const read = (key: string) => {
+        const row = sql.exec("SELECT value FROM meta WHERE key = ?", key).toArray()[0];
+        return row ? String(row.value) : null;
+      };
+      for (const wait of [1_000, 2_000, 4_000]) {
+        const before = Date.now();
+        await instance.alarm();
+        const after = Date.now();
+        const scheduled = await state.storage.getAlarm() as number;
+        expect(scheduled).toBeGreaterThanOrEqual(before + wait);
+        expect(scheduled).toBeLessThanOrEqual(after + wait);
+        expect(read("error_backoff_ms")).toBe(String(wait));
+        expect(read("last_error")).toBe("ledger_error");
+      }
+    });
+  });
+
+  it("shows the poll wait during config_error and starts the next RPC failure at 1s", async () => {
+    const rpc = installRpc(() => ({ status: 500, body: null }));
+    restore = rpc.restore;
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec("INSERT INTO meta(key, value) VALUES('error_backoff_ms', '8000')");
+      const { runAlarm } = await import("../src/scan");
+      const before = Date.now();
+      const result = await runAlarm({
+        storage: state.storage,
+        env: {
+          CHAIN_ID: "1",
+          POINTS_FAST_PACE: "1",
+        },
+      });
+      const after = Date.now();
+      expect(result).toEqual({ ok: false, error: "config_error" });
+      const scheduled = await state.storage.getAlarm() as number;
+      expect(scheduled).toBeGreaterThanOrEqual(before + 15_000);
+      expect(scheduled).toBeLessThanOrEqual(after + 15_000);
+    });
+    expect(await meta("error_backoff_ms")).toBe("0");
+    expect(await meta("config_wait_ms")).toBe("15000");
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.90", Origin: "https://agent-bv.pages.dev" },
+    });
+    const healthBody = await health.json() as { error_backoff_ms?: number; error?: string };
+    expect(healthBody.error).toBe("config_error");
+    expect(healthBody.error_backoff_ms).toBe(15_000);
+
+    const before = Date.now();
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const after = Date.now();
+    expect(await meta("last_error")).toBe("server_error");
+    expect(await meta("error_backoff_ms")).toBe("1000");
+    const scheduled = await alarmAt() as number;
+    expect(scheduled).toBeGreaterThanOrEqual(before + 1_000);
+    expect(scheduled).toBeLessThanOrEqual(after + 1_000);
   });
 });

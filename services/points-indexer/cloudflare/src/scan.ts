@@ -123,6 +123,7 @@ function errorCode(error: unknown) {
   if (classified === "rate_limited" || classified === "server_error" || classified === "timeout") return classified;
   if (error instanceof RpcError && error.kind === "timeout") return "timeout";
   const message = error instanceof Error ? error.message : "";
+  if (message === "log_outside_request") return "log_outside_request";
   if (/sqlite|unique constraint/i.test(message)) return "ledger_error";
   if (
     message.startsWith("CHAIN_ID")
@@ -171,6 +172,9 @@ export async function runAlarm(options: {
     const jitter = fast ? 0 : jitterMs();
     const delay = Math.min(ERROR_BACKOFF_CAP_MS, Math.max(base + jitter, defer));
     try {
+      if (metaGet(storage.sql, "config_wait_ms") != null) {
+        storage.sql.exec("DELETE FROM meta WHERE key = ?", "config_wait_ms");
+      }
       metaSet(storage.sql, "error_backoff_ms", String(delay));
     } catch {
       // Schema or storage failed. Still reschedule below.
@@ -323,7 +327,8 @@ export async function runAlarm(options: {
       metaSet(storage.sql, "stale", "0");
       metaSet(storage.sql, "pass_completed", "1");
       metaSet(storage.sql, "last_pass_at", String(now()));
-      metaSet(storage.sql, "error_backoff_ms", "0");
+      clearErrorBackoff();
+      clearConfigWait();
       await schedule(behind);
     }
     return {
@@ -347,8 +352,28 @@ export async function runAlarm(options: {
       message: code,
       detail: publicDetail(error instanceof Error ? error.message : "", rpcUrl),
     }));
-    if (code === "config_error") await schedule(0);
-    else await scheduleError(0);
+    if (code === "config_error") {
+      const delay = await schedule(0);
+      try {
+        clearErrorBackoff();
+        metaSet(storage.sql, "config_wait_ms", String(delay));
+      } catch {
+        // The alarm is already scheduled.
+      }
+    } else {
+      await scheduleError(0);
+    }
     return { ok: false, error: code };
+  }
+
+  function clearErrorBackoff() {
+    const current = metaGet(storage.sql, "error_backoff_ms");
+    if (current == null || current === "" || current === "0") return;
+    metaSet(storage.sql, "error_backoff_ms", "0");
+  }
+
+  function clearConfigWait() {
+    if (metaGet(storage.sql, "config_wait_ms") == null) return;
+    storage.sql.exec("DELETE FROM meta WHERE key = ?", "config_wait_ms");
   }
 }

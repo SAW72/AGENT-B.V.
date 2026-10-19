@@ -69,9 +69,14 @@ export class PointsObject extends DurableObject<Env> {
     const anomalies = metaInt(this.ctx.storage.sql, "removed_finalized");
     if (anomalies != null && anomalies > 0) body.removed_finalized = anomalies;
     if (metaGet(this.ctx.storage.sql, "rebuild_capped") === "1") body.rebuild_capped = true;
-    const backoff = metaInt(this.ctx.storage.sql, "error_backoff_ms");
-    if (backoff != null && backoff > 0) body.error_backoff_ms = backoff;
     const lastError = metaGet(this.ctx.storage.sql, "last_error");
+    if (lastError === "config_error") {
+      const wait = metaInt(this.ctx.storage.sql, "config_wait_ms");
+      if (wait != null && wait > 0) body.error_backoff_ms = wait;
+    } else {
+      const backoff = metaInt(this.ctx.storage.sql, "error_backoff_ms");
+      if (backoff != null && backoff > 0) body.error_backoff_ms = backoff;
+    }
     const early = metaGet(this.ctx.storage.sql, "early_reason");
     if (!decision.ok && lastError) body.error = lastError;
     else if (decision.ok && early) body.error = early;

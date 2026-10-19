@@ -109,6 +109,12 @@ function encodeCursor(row: { block_number: number; log_index: number; action: st
   return bytesToBase64Url(new TextEncoder().encode(payload));
 }
 
+export function disclaimerLinks(source: Record<string, unknown> | null | undefined) {
+  const links: Record<string, string | null> = {};
+  for (const key of DISCLAIMER_LINK_SLOTS) links[key] = httpsUrl(source?.[key]);
+  return links;
+}
+
 export function httpsUrl(value: unknown) {
   const text = String(value ?? "").trim();
   if (!text || !/^https:\/\//i.test(text)) return null;
@@ -124,11 +130,7 @@ export function httpsUrl(value: unknown) {
 }
 
 function disclaimer() {
-  const links: Record<string, string | null> = {};
-  const source = sepolia.disclaimer_links as Record<string, string>;
-  for (const key of DISCLAIMER_LINK_SLOTS) {
-    links[key] = httpsUrl(source?.[key]);
-  }
+  const links = disclaimerLinks(sepolia.disclaimer_links as Record<string, string>);
   if (sepolia.display.disclaimer !== DISCLAIMER) {
     throw new Error("display.disclaimer mismatch");
   }

@@ -2,10 +2,20 @@ import { reset, runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
 import sepolia from "../../../../config/reputation/sepolia.json";
-import { createReadApi, httpsUrl, pointsEnabled } from "../src/read-api";
+import { createReadApi, disclaimerLinks, httpsUrl, pointsEnabled } from "../src/read-api";
+import { ESCROW_START_BLOCK } from "./helpers";
 import { publicDetail } from "../src/rpc";
 
 const DISCLAIMER = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
+
+const CORS_ORIGIN = "https://agent-bv.pages.dev";
+
+function expectCors(response: Response) {
+  expect(response.headers.get("access-control-allow-origin")).toBe(CORS_ORIGIN);
+  expect(response.headers.get("access-control-allow-methods")).toContain("GET");
+  expect(response.headers.get("access-control-allow-headers")).toBe("content-type");
+  expect(response.headers.get("vary")).toBe("Origin");
+}
 
 function forbidRankAndEarn(payload: string) {
   const lower = payload.toLowerCase();
@@ -156,16 +166,33 @@ describe("points read API", () => {
       method: "OPTIONS",
       headers: { Origin: origin },
     });
-    expect(options.status).toBe(400);
-    expect(await options.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expect(options.status).toBe(204);
     expect(options.headers.get("access-control-allow-origin")).toBe(origin);
     expect(options.headers.get("access-control-allow-methods")).toContain("GET");
-    const missing = await SELF.fetch(`https://points.test/v1/points/${address}`);
+    const healthOptions = await SELF.fetch("https://points.test/health?ready=1&ready=1", {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
+    expect(healthOptions.status).toBe(204);
+    expectCors(healthOptions);
+    const unknownOptions = await SELF.fetch("https://points.test/nope?a=1&a=2", {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
+    expect(unknownOptions.status).toBe(204);
+    expectCors(unknownOptions);
+    const missing = await SELF.fetch(`https://points.test/v1/points/${address}`, {
+      headers: { Origin: origin },
+    });
     expect(missing.status).toBe(400);
     expect(await missing.json()).toEqual({ ok: false, error: "client_address_required" });
-    const unknownPath = await SELF.fetch("https://points.test/nope?a=1&a=2");
+    expectCors(missing);
+    const unknownPath = await SELF.fetch("https://points.test/nope?a=1&a=2", {
+      headers: { Origin: origin },
+    });
     expect(unknownPath.status).toBe(400);
     expect(await unknownPath.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expectCors(unknownPath);
   });
 
   it("accepts only an https link with a host and no userinfo", () => {
@@ -179,6 +206,20 @@ describe("points read API", () => {
     expect(httpsUrl("https://user:pass@example.com/legal")).toBeNull();
     expect(httpsUrl("https://user@example.com/legal")).toBeNull();
     expect(httpsUrl("HTTPS://Example.com/Legal")).toBe("https://example.com/Legal");
+    const links = disclaimerLinks({
+      master_disclaimer: "http://example.invalid/master",
+      legal_notice_url: "https://example.invalid/legal",
+      as_is: "data:text/plain,hi",
+      not_investment: "/relative",
+      eligibility_notice: "https:example.invalid",
+      abuse_policy: "HTTPS://Example.invalid/Abuse",
+    });
+    expect(links.master_disclaimer).toBeNull();
+    expect(links.legal_notice_url).toBe("https://example.invalid/legal");
+    expect(links.as_is).toBeNull();
+    expect(links.not_investment).toBeNull();
+    expect(links.eligibility_notice).toBeNull();
+    expect(links.abuse_policy).toBe("https://example.invalid/Abuse");
   });
 
   it("drops client addresses and header secrets from log details", () => {
@@ -203,6 +244,22 @@ describe("points read API", () => {
     expect(paddedDetail).not.toContain(tail);
     expect(paddedDetail).not.toContain(addressHex);
     expect(paddedDetail).toContain("[redacted]");
+    const extra = "ff";
+    const upper = addressHex.toUpperCase();
+    const withMore = `0x${addressHex}${extra}`;
+    const underscored = `0x${addressHex}_note`;
+    const bareUnderscore = `${addressHex}_note`;
+    const bareMore = `${addressHex}${extra}`;
+    const multiWord = `0x${"00".repeat(24)}${addressHex}`;
+    const upperPrefixed = `0X${upper}`;
+    const kept = "block 47715415 tx 12";
+    const mixed = publicDetail(`${kept} ${withMore} ${underscored} ${bareUnderscore} ${bareMore} ${upperPrefixed} ${multiWord}`);
+    expect(mixed).not.toContain(tail);
+    expect(mixed).not.toContain(upper);
+    expect(mixed).not.toContain(extra);
+    expect(mixed).toContain("47715415");
+    expect(mixed).toContain("tx 12");
+    expect(mixed).toContain("[redacted]");
   });
 
   it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {
@@ -220,11 +277,16 @@ describe("points read API", () => {
     const limited = await SELF.fetch(path, {
       headers: {
         "CF-Connecting-IP": "203.0.113.8",
+        Origin: CORS_ORIGIN,
         "X-Forwarded-For": "198.51.100.9",
       },
     });
     expect(limited.status).toBe(429);
     expect(await limited.json()).toEqual({ ok: false, error: "rate_limited" });
+    expectCors(limited);
+    const stillOpen = await SELF.fetch(path, { method: "OPTIONS", headers: { Origin: CORS_ORIGIN } });
+    expect(stillOpen.status).toBe(204);
+    expectCors(stillOpen);
     expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
 
     const other = await SELF.fetch(path, {
@@ -234,6 +296,26 @@ describe("points read API", () => {
       },
     });
     expect(other.status).toBe(200);
+  });
+
+  it("sends CORS on a fresh health response", async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const put = (key: string, value: string) => {
+        state.storage.sql.exec(
+          "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          key,
+          value,
+        );
+      };
+      put("last_pass_at", String(Date.now()));
+      put("chain_head", String(ESCROW_START_BLOCK));
+      put("last_scanned_block", String(ESCROW_START_BLOCK));
+    });
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.81", Origin: CORS_ORIGIN },
+    });
+    expect(health.status).toBe(200);
+    expectCors(health);
   });
 
   it("opens the read circuit after repeated store failures", async () => {
