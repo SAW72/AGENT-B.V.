@@ -14,10 +14,14 @@ export const RETRY_BACKOFF_MS = Object.freeze([1_000, 2_000, 4_000]);
 export const MAX_SCAN_RETRIES = 3;
 
 /**
- * Cap for a Retry-After delay. A larger delta-seconds value or a later HTTP-date
- * waits this long and no longer. 30 seconds.
+ * Cap for one in-pass Retry-After sleep. A larger value sleeps this long, ends
+ * the pass, and the next pass waits the remainder before any RPC. 30 seconds.
  */
 export const MAX_RETRY_AFTER_MS = 30_000;
+
+const IMF_FIXDATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+const RFC_850_DATE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT$/;
+const ASCTIME_DATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}$/;
 
 const NETWORK_CODES = new Set([
   "ECONNRESET",
@@ -70,29 +74,50 @@ function clampRetryAfter(ms, cap = MAX_RETRY_AFTER_MS) {
   return Math.floor(ms);
 }
 
+function isHttpDate(text) {
+  return IMF_FIXDATE.test(text) || RFC_850_DATE.test(text) || ASCTIME_DATE.test(text);
+}
+
 /**
- * Retry-After as integer seconds or an HTTP-date.
- * Returns milliseconds, or null when the header is missing or not one of those two forms.
- * A past HTTP-date is 0. Values above {@link MAX_RETRY_AFTER_MS} clamp to that cap.
+ * Unclamped Retry-After in milliseconds.
+ * Integer seconds, or an HTTP-date in IMF-fixdate, RFC 850, or asctime form.
+ * Anything else, including a fraction or a leading minus, is null.
+ * A past HTTP-date is 0.
  * @param {unknown} value
- * @param {number} nowMs wall-clock epoch milliseconds, for an HTTP-date only
- * @param {number} [cap]
+ * @param {number} nowMs
  * @returns {number | null}
  */
-export function parseRetryAfter(value, nowMs, cap = MAX_RETRY_AFTER_MS) {
+function readRetryAfter(value, nowMs) {
   if (value == null) return null;
   const text = String(value).trim();
   if (!text) return null;
   if (/^\d+$/.test(text)) {
     const seconds = Number(text);
     if (!Number.isSafeInteger(seconds)) return null;
-    return clampRetryAfter(seconds * 1000, cap);
+    return seconds * 1000;
   }
+  if (!isHttpDate(text)) return null;
   const dated = Date.parse(text);
   if (Number.isNaN(dated)) return null;
   const delta = dated - nowMs;
-  if (!Number.isFinite(delta)) return null;
-  return clampRetryAfter(Math.max(0, delta), cap);
+  if (!Number.isFinite(delta) || delta <= 0) return 0;
+  return Math.floor(delta);
+}
+
+/**
+ * Retry-After as integer seconds or an HTTP-date.
+ * Returns milliseconds, or null when the header is missing or not one of those two forms.
+ * A past HTTP-date is 0. Values above {@link MAX_RETRY_AFTER_MS} clamp to that cap.
+ * The unclamped value is what a pass carries when the header is longer than the cap.
+ * @param {unknown} value
+ * @param {number} nowMs wall-clock epoch milliseconds, for an HTTP-date only
+ * @param {number} [cap]
+ * @returns {number | null}
+ */
+export function parseRetryAfter(value, nowMs, cap = MAX_RETRY_AFTER_MS) {
+  const full = readRetryAfter(value, nowMs);
+  if (full == null) return null;
+  return clampRetryAfter(full, cap);
 }
 
 function walk(error) {
@@ -161,6 +186,9 @@ export function textIsRateLimit(text) {
   if (value.includes("quota")) return true;
   if (value.includes("compute units")) return true;
   if (value.includes("capacity")) return true;
+  if (value.includes("credits exceeded")) return true;
+  if (value.includes("daily request count exceeded")) return true;
+  if (value.includes("limit exceeded")) return true;
   if (/\b429\b/.test(value)) return true;
   return false;
 }
@@ -252,7 +280,9 @@ export function retryWaitMs(error, attempt, nowMs, options = {}) {
  * Pace every call and retry retryable failures. A non-retryable error is rethrown.
  * `now` is the monotonic gap clock. `wallNow` is epoch milliseconds and is used
  * only when Retry-After is an HTTP-date. Jitter is added on top of the gap and
- * the schedule. A readable Retry-After is not jittered.
+ * the schedule. A readable Retry-After is not jittered. A Retry-After longer
+ * than the cap sleeps the cap once, ends this call, and returns `deferUntil`
+ * so the next pass can wait out the rest before it dials.
  * @param {{ now: () => number, wallNow?: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number, gapJitterMs?: number, backoffMs?: number[], backoffJitterMs?: number, maxRetries?: number, maxRetryAfterMs?: number, random?: () => number, classify?: (error: unknown) => string | null }} options
  */
 export function createScanPacer(options) {
@@ -279,10 +309,21 @@ export function createScanPacer(options) {
         } catch (error) {
           const reason = classify(error);
           if (!reason) throw error;
+          const cap = options.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS;
+          const header = headerFrom(error, "retry-after");
+          if (header != null) {
+            const started = wallNow();
+            const full = readRetryAfter(header, started);
+            if (full != null && full > cap) {
+              const wait = Math.min(full, cap);
+              if (wait > 0) await sleep(wait);
+              return { ok: false, reason, error, deferUntil: started + full };
+            }
+          }
           if (attempt >= maxRetries) return { ok: false, reason, error };
           const wait = retryWaitMs(error, attempt, wallNow(), {
             backoffMs: options.backoffMs,
-            maxRetryAfterMs: options.maxRetryAfterMs,
+            maxRetryAfterMs: cap,
             backoffJitterMs: options.backoffJitterMs ?? 0,
             random,
           });

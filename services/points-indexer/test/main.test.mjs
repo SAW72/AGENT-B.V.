@@ -580,6 +580,8 @@ describe("process entry", () => {
     });
     const dir = dbDir();
     let head = block;
+    const original = console.error;
+    console.error = () => {};
     const running = await start({
       once: true,
       env: {
@@ -609,6 +611,7 @@ describe("process entry", () => {
       assert.equal(running.indexer.finalizedBlock, block);
       assert.equal(running.indexer.canonical(), before);
     } finally {
+      console.error = original;
       await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -786,7 +789,9 @@ describe("process entry", () => {
       };
       if (body.method === "eth_chainId") return send(200, { result: "0x14a34" });
       if (body.method === "eth_getCode") return send(200, { result: "0x60016000" });
-      if (body.method === "eth_blockNumber") return send(200, { result: `0x${head.toString(16)}` });
+      if (body.method === "eth_getBlockByNumber") {
+        return send(200, { result: { number: `0x${head.toString(16)}` } });
+      }
       if (body.method === "eth_getLogs") {
         const params = body.params?.[0] ?? {};
         const from = Number(BigInt(params.fromBlock));
@@ -855,6 +860,16 @@ describe("process entry", () => {
       assert.equal(leaked.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(leaked.includes(keyUrl), false);
       assert.equal(leaked.includes("https://"), false);
+      const wss = redact("dial wss://base-sepolia.example-rpc.io/v2/WSSKEY1234567890", keyUrl);
+      assert.equal(wss.includes("wss://"), false);
+      assert.equal(wss.includes("WSSKEY1234567890"), false);
+      const encoded = redact("see https%3A%2F%2Fbase-sepolia.example-rpc.io%2Fv2%2FENC_SECRET_KEY", keyUrl);
+      assert.equal(encoded.includes("ENC_SECRET_KEY"), false);
+      assert.equal(encoded.includes("%3A%2F%2F"), false);
+      const segment = redact("path /v2/FAKE_SECRET_KEY_abc123 end", "");
+      assert.equal(segment.includes("FAKE_SECRET_KEY_abc123"), false);
+      const query = redact("https://rpc.example/v2?apikey=QUERYSECRET123456", "");
+      assert.equal(query.includes("QUERYSECRET123456"), false);
       running = await start({
         serve: true,
         port: 0,

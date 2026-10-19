@@ -33,7 +33,16 @@ const PACE_REASONS = new Set(["rate_limited", "server_error", "network_error", "
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-const URL_PATTERN = /https?:\/\/\S+/gi;
+const URL_PATTERN = /(?:https?|wss?):\/\/\S+/gi;
+const ENCODED_URL_PATTERN = /(?:https?|wss?)%3a%2f%2f\S+/gi;
+const QUERY_SECRET_PATTERN = /([?&](?:api[_-]?key|access[_-]?token|token|secret|key)=)[^&\s#]*/gi;
+const KEY_SEGMENT_PATTERN = /\/([A-Za-z0-9_-]{16,})/g;
+const USER_AGENT_SAFE = /^[A-Za-z0-9 .,_+():/-]{1,128}$/;
+const GAP_MAX_MS = 60_000;
+const TIMEOUT_MAX_MS = 120_000;
+const RETRIES_MAX = 8;
+const BACKOFF_SLOT_MAX_MS = 30_000;
+const BACKOFF_SLOTS_MAX = 8;
 
 function blank(value) {
   return value === undefined || value === null || String(value).trim() === "";
@@ -67,6 +76,12 @@ function nonNegativeInt(value) {
 function positiveOrNull(value) {
   const parsed = nonNegativeInt(value);
   if (parsed == null || parsed < 1) return null;
+  return parsed;
+}
+
+function boundedInt(value, min, max) {
+  const parsed = nonNegativeInt(value);
+  if (parsed == null || parsed < min || parsed > max) return null;
   return parsed;
 }
 
@@ -138,28 +153,31 @@ export function loadConfig(env = process.env) {
  * Pace settings. A missing or invalid value falls back to the default.
  * This does not throw. Defaults stay 200 ms, three retries at 1/2/4 s,
  * a 30 s Retry-After cap, no jitter, a 10 s HTTP timeout, and three poll
- * intervals of health freshness. POINTS_MAX_WINDOWS_PER_RUN is unset unless
- * it is a positive integer.
+ * intervals of health freshness. A gap, cap, timeout, or retry count of 0,
+ * or a value above its ceiling, falls back to that default. The ceiling does
+ * not raise the 30 s cap. POINTS_MAX_WINDOWS_PER_RUN is unset unless it is a
+ * positive integer, and it limits one pass. A User-Agent that is blank or
+ * outside the safe character set falls back to the default.
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function loadPaceSettings(env = process.env) {
   const minGapMs = blank(env.POINTS_GETLOGS_MIN_GAP_MS)
     ? GETLOGS_MIN_GAP_MS
-    : (nonNegativeInt(env.POINTS_GETLOGS_MIN_GAP_MS) ?? GETLOGS_MIN_GAP_MS);
+    : (boundedInt(env.POINTS_GETLOGS_MIN_GAP_MS, 1, GAP_MAX_MS) ?? GETLOGS_MIN_GAP_MS);
 
   let backoffMs = [...RETRY_BACKOFF_MS];
   if (!blank(env.POINTS_RETRY_BACKOFF_MS)) {
     const parts = String(env.POINTS_RETRY_BACKOFF_MS).split(",").map((part) => part.trim()).filter((part) => part !== "");
-    const parsed = parts.map((part) => positiveOrNull(part));
-    if (parts.length > 0 && parsed.every((item) => item != null)) backoffMs = parsed;
+    const parsed = parts.map((part) => boundedInt(part, 1, BACKOFF_SLOT_MAX_MS));
+    if (parts.length > 0 && parts.length <= BACKOFF_SLOTS_MAX && parsed.every((item) => item != null)) backoffMs = parsed;
   }
 
   const maxRetries = blank(env.POINTS_MAX_SCAN_RETRIES)
     ? MAX_SCAN_RETRIES
-    : (positiveOrNull(env.POINTS_MAX_SCAN_RETRIES) ?? MAX_SCAN_RETRIES);
+    : (boundedInt(env.POINTS_MAX_SCAN_RETRIES, 1, RETRIES_MAX) ?? MAX_SCAN_RETRIES);
   const maxRetryAfterMs = blank(env.POINTS_MAX_RETRY_AFTER_MS)
     ? MAX_RETRY_AFTER_MS
-    : (nonNegativeInt(env.POINTS_MAX_RETRY_AFTER_MS) ?? MAX_RETRY_AFTER_MS);
+    : (boundedInt(env.POINTS_MAX_RETRY_AFTER_MS, 1, MAX_RETRY_AFTER_MS) ?? MAX_RETRY_AFTER_MS);
   const gapJitterMs = blank(env.POINTS_GETLOGS_GAP_JITTER_MS)
     ? 0
     : (nonNegativeInt(env.POINTS_GETLOGS_GAP_JITTER_MS) ?? 0);
@@ -168,14 +186,15 @@ export function loadPaceSettings(env = process.env) {
     : (nonNegativeInt(env.POINTS_RETRY_BACKOFF_JITTER_MS) ?? 0);
   const httpTimeoutMs = blank(env.POINTS_HTTP_TIMEOUT_MS)
     ? DEFAULT_HTTP_TIMEOUT_MS
-    : (nonNegativeInt(env.POINTS_HTTP_TIMEOUT_MS) ?? DEFAULT_HTTP_TIMEOUT_MS);
+    : (boundedInt(env.POINTS_HTTP_TIMEOUT_MS, 1, TIMEOUT_MAX_MS) ?? DEFAULT_HTTP_TIMEOUT_MS);
   const freshnessPolls = blank(env.POINTS_HEALTH_FRESHNESS_POLLS)
     ? DEFAULT_HEALTH_FRESHNESS_POLLS
     : (positiveOrNull(env.POINTS_HEALTH_FRESHNESS_POLLS) ?? DEFAULT_HEALTH_FRESHNESS_POLLS);
   const maxWindowsPerRun = blank(env.POINTS_MAX_WINDOWS_PER_RUN)
     ? null
     : positiveOrNull(env.POINTS_MAX_WINDOWS_PER_RUN);
-  const userAgent = blank(env.POINTS_USER_AGENT) ? DEFAULT_USER_AGENT : String(env.POINTS_USER_AGENT).trim();
+  const rawAgent = blank(env.POINTS_USER_AGENT) ? "" : String(env.POINTS_USER_AGENT).trim();
+  const userAgent = USER_AGENT_SAFE.test(rawAgent) ? rawAgent : DEFAULT_USER_AGENT;
 
   return {
     minGapMs,
@@ -286,11 +305,18 @@ export function errorCode(error) {
   return "rpc_error";
 }
 
-/** Replace the configured RPC URL and any http(s) URL before a line is logged. */
+function keyLikeSegment(segment) {
+  return /[A-Za-z]/.test(segment) && /\d/.test(segment);
+}
+
+/** Replace RPC URLs, websocket URLs, and key-like path segments before a line is logged. */
 export function redact(text, rpcUrl) {
   let out = String(text ?? "");
   if (rpcUrl) out = out.split(String(rpcUrl)).join("[redacted-url]");
-  return out.replace(URL_PATTERN, "[redacted-url]");
+  out = out.replace(URL_PATTERN, "[redacted-url]");
+  out = out.replace(ENCODED_URL_PATTERN, "[redacted-url]");
+  out = out.replace(QUERY_SECRET_PATTERN, "$1[redacted]");
+  return out.replace(KEY_SEGMENT_PATTERN, (match, segment) => (keyLikeSegment(segment) ? "/[redacted]" : match));
 }
 
 function logFailure(error, rpcUrl) {
@@ -371,7 +397,10 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   });
   return {
     chainId: () => client.getChainId(),
-    finalizedBlockNumber: () => client.getBlockNumber({ blockTag: "finalized" }),
+    finalizedBlockNumber: async () => {
+      const block = await client.getBlock({ blockTag: "finalized" });
+      return block.number;
+    },
     getCode: ({ address }) => client.getCode({ address }),
     getLogs: (args) => client.getLogs({
       address: args.address,
@@ -445,8 +474,10 @@ async function assertContractCode(rpc, address, label, pacer) {
  * rejects. A retryable failure on the finalized head ends the pass instead.
  * Config failures still reject.
  * `paceNow` times the gap and defaults to `performance.now`. `wallNow` defaults
- * to `Date.now` and is used only to read an HTTP-date Retry-After. `sleep`
- * defaults to a real timer.
+ * to `Date.now` and is used only to read an HTTP-date Retry-After and to carry
+ * a Retry-After that was longer than the cap. `sleep` defaults to a real timer.
+ * POINTS_MAX_WINDOWS_PER_RUN limits windows inside one pass. The next pass
+ * continues. A reported finalized head behind the stored head scans nothing.
  * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
@@ -494,7 +525,7 @@ export async function start(options = {}) {
   let skippedTicks = 0;
   let learnedWindow = cfg.logRange;
   let dirty = false;
-  let runWindows = 0;
+  let carryUntil = null;
   const status = {
     chainId: cfg.chainId,
     pollMs: cfg.pollMs,
@@ -507,8 +538,14 @@ export async function start(options = {}) {
   };
 
   const runOnce = async () => {
+    if (carryUntil != null) {
+      const remain = carryUntil - wallNow();
+      carryUntil = null;
+      if (remain > 0) await sleep(remain);
+    }
     const headRead = await pacer.run(() => rpc.finalizedBlockNumber());
     if (!headRead.ok) {
+      if (headRead.deferUntil != null) carryUntil = headRead.deferUntil;
       const reason = headRead.reason;
       status.earlyReason = reason;
       status.lastError = reason;
@@ -531,19 +568,37 @@ export async function start(options = {}) {
       indexer = openIndexer({ path: cfg.dbPath, finalizedBlock: reported, chainId: cfg.chainId });
       if (typeof options.onIndexer === "function") options.onIndexer(indexer);
     }
-    const head = Math.max(indexer.finalizedBlock, reported);
+    if (reported < indexer.finalizedBlock) {
+      status.earlyReason = "head_behind";
+      status.lastError = "head_behind";
+      status.behind = blocksBehind(indexer.finalizedBlock, indexer.lastScannedBlock());
+      console.error("head_behind");
+      return {
+        ok: true,
+        endedEarly: true,
+        reason: "head_behind",
+        inserted: 0,
+        rebuilds: 0,
+        ranges: [],
+        skipped: false,
+        scannedThrough: indexer.lastScannedBlock(),
+        behind: status.behind,
+      };
+    }
+    const head = reported;
     const cursor = indexer.lastScannedBlock();
     let from = cursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, cursor + 1);
     let window = learnedWindow;
     let inserted = 0;
     let committedWindows = 0;
+    let windowsThisPass = 0;
     let earlyReason = null;
     const ranges = [];
     status.behind = blocksBehind(head, cursor);
     while (
       from <= head
       && committedWindows < cfg.maxWindows
-      && (pace.maxWindowsPerRun == null || runWindows < pace.maxWindowsPerRun)
+      && (pace.maxWindowsPerRun == null || windowsThisPass < pace.maxWindowsPerRun)
     ) {
       const to = Math.min(head, from + window - 1);
       let logs;
@@ -554,6 +609,7 @@ export async function start(options = {}) {
           address: [cfg.escrowAddress, PANEL],
         }));
         if (!scanned.ok) {
+          if (scanned.deferUntil != null) carryUntil = scanned.deferUntil;
           earlyReason = scanned.reason;
           break;
         }
@@ -570,7 +626,7 @@ export async function start(options = {}) {
       const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
       inserted += committed.inserted;
       committedWindows += 1;
-      runWindows += 1;
+      windowsThisPass += 1;
       ranges.push({ fromBlock: from, toBlock: to });
       from = to + 1;
       learnedWindow = Math.min(cfg.logRange, window * 2);
@@ -578,6 +634,14 @@ export async function start(options = {}) {
       status.lastPassAt = now();
       status.lastError = null;
       status.behind = blocksBehind(head, to);
+    }
+    if (
+      earlyReason == null
+      && pace.maxWindowsPerRun != null
+      && windowsThisPass >= pace.maxWindowsPerRun
+      && from <= head
+    ) {
+      earlyReason = "run_cap";
     }
     const headResult = indexer.setFinalizedBlock(head, { rebuild: false });
     let rebuilds = 0;

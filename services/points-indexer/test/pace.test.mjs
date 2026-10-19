@@ -130,6 +130,12 @@ describe("getLogs pace", () => {
     assert.equal(parseRetryAfter(new Date(origin + 45_000).toUTCString(), origin), 30_000);
     assert.equal(parseRetryAfter(new Date(origin - 5_000).toUTCString(), origin), 0);
     assert.equal(parseRetryAfter("soon", origin), null);
+    assert.equal(parseRetryAfter("1.5", origin), null);
+    assert.equal(parseRetryAfter("-1", origin), null);
+    assert.equal(parseRetryAfter("12 31", origin), null);
+    assert.equal(parseRetryAfter("Thu, 15 Jan 2026 00:00:12 GMT", origin), 12_000);
+    assert.equal(parseRetryAfter("Thursday, 15-Jan-26 00:00:12 GMT", origin), 12_000);
+    assert.equal(parseRetryAfter("Thu Jan 15 00:00:12 2026", origin), 12_000);
 
     const cases = [
       {
@@ -144,11 +150,6 @@ describe("getLogs pace", () => {
         start: origin - 1_000,
         header: (now) => new Date(now + 12_000).toUTCString(),
         expectWait: 12_000,
-      },
-      {
-        label: "cap",
-        header: () => "90",
-        expectWait: 30_000,
       },
       {
         label: "past-date",
@@ -493,6 +494,22 @@ describe("getLogs pace", () => {
     const onlyExceed = new Error("wide");
     onlyExceed.details = "query exceeded the cap";
     assert.equal(isRangeError(onlyExceed), true);
+    for (const details of ["credits exceeded", "daily request count exceeded", "limit exceeded"]) {
+      const limited = new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32005, message: details },
+        url: "http://127.0.0.1",
+      });
+      assert.equal(isRangeError(limited), false, details);
+      assert.equal(scanErrorClass(limited), "rate_limited", details);
+      assert.equal(errorCode(limited), "rate_limited", details);
+    }
+    const tooMany = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32005, message: "too many results" },
+      url: "http://127.0.0.1",
+    });
+    assert.equal(isRangeError(tooMany), true);
     const payload = new HttpRequestError({
       status: 413,
       details: "Payload Too Large",
@@ -623,6 +640,33 @@ describe("getLogs pace", () => {
     assert.equal(bad.freshnessPolls, 3);
     assert.equal(bad.maxWindowsPerRun, null);
     assert.equal(bad.userAgent, DEFAULT_USER_AGENT);
+
+    const bounded = loadPaceSettings({
+      POINTS_GETLOGS_MIN_GAP_MS: "0",
+      POINTS_RETRY_BACKOFF_MS: "0,1000,2000",
+      POINTS_MAX_SCAN_RETRIES: "9",
+      POINTS_MAX_RETRY_AFTER_MS: "60000",
+      POINTS_HTTP_TIMEOUT_MS: "0",
+      POINTS_USER_AGENT: "bad\r\nX-Injected: 1",
+    });
+    assert.equal(bounded.minGapMs, 200);
+    assert.deepEqual(bounded.backoffMs, [1_000, 2_000, 4_000]);
+    assert.equal(bounded.maxRetries, 3);
+    assert.equal(bounded.maxRetryAfterMs, 30_000);
+    assert.equal(bounded.httpTimeoutMs, 10_000);
+    assert.equal(bounded.userAgent, DEFAULT_USER_AGENT);
+    const kept = loadPaceSettings({
+      POINTS_GETLOGS_MIN_GAP_MS: "1",
+      POINTS_MAX_SCAN_RETRIES: "5",
+      POINTS_MAX_RETRY_AFTER_MS: "30000",
+      POINTS_HTTP_TIMEOUT_MS: "120000",
+      POINTS_USER_AGENT: "Agent-B.V. points-indexer/1.0",
+    });
+    assert.equal(kept.minGapMs, 1);
+    assert.equal(kept.maxRetries, 5);
+    assert.equal(kept.maxRetryAfterMs, 30_000);
+    assert.equal(kept.httpTimeoutMs, 120_000);
+    assert.equal(kept.userAgent, "Agent-B.V. points-indexer/1.0");
 
     const custom = loadPaceSettings({
       POINTS_GETLOGS_MIN_GAP_MS: "200",
@@ -923,7 +967,9 @@ describe("getLogs pace", () => {
       };
       if (body.method === "eth_chainId") return send({ result: "0x14a34" });
       if (body.method === "eth_getCode") return send({ result: "0x60016000" });
-      if (body.method === "eth_blockNumber") return send({ result: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` });
+      if (body.method === "eth_getBlockByNumber") {
+        return send({ result: { number: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` } });
+      }
       if (body.method === "eth_getLogs") {
         if (mode === "429") {
           res.writeHead(429, { "content-type": "text/plain", "retry-after": "3" });
@@ -979,7 +1025,9 @@ describe("getLogs pace", () => {
         };
         if (body.method === "eth_chainId") return send({ result: "0x14a34" });
         if (body.method === "eth_getCode") return send({ result: "0x60016000" });
-        if (body.method === "eth_blockNumber") return send({ result: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` });
+        if (body.method === "eth_getBlockByNumber") {
+          return send({ result: { number: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` } });
+        }
         if (body.method === "eth_getLogs") {
           logs += 1;
           if (logs === 1) {
@@ -1021,15 +1069,19 @@ describe("getLogs pace", () => {
     }
   });
 
-  it("stops further windows after POINTS_MAX_WINDOWS_PER_RUN in the same process", async () => {
+  it("caps one pass at POINTS_MAX_WINDOWS_PER_RUN and continues on the next pass", async () => {
     const clock = fakeClock(0);
     const head = ESCROW_START_BLOCK + 99;
     let calls = 0;
+    const original = console.error;
+    console.error = () => {};
     const running = await start({
       once: true,
+      serve: true,
+      port: 0,
       paceNow: clock.now,
       sleep: clock.sleep,
-      now: () => 1,
+      now: () => 5_000_000,
       env: env({ POINTS_MAX_WINDOWS_PER_RUN: "2", POINTS_LOG_RANGE: "10" }),
       rpc: withCode({
         async finalizedBlockNumber() {
@@ -1043,15 +1095,210 @@ describe("getLogs pace", () => {
     });
     try {
       assert.equal(calls, 2);
-      assert.equal(running.ingested.endedEarly, false);
+      assert.equal(running.ingested.endedEarly, true);
+      assert.equal(running.ingested.reason, "run_cap");
       assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19);
+      const response = await fetch(running.healthUrl);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.error, "run_cap");
+      assert.ok(body.behind > 0);
       const again = await running.pass();
-      assert.equal(again.endedEarly, false);
-      assert.equal(again.ranges.length, 0);
-      assert.equal(calls, 2);
-      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19);
+      assert.equal(again.endedEarly, true);
+      assert.equal(again.reason, "run_cap");
+      assert.equal(again.ranges.length, 2);
+      assert.equal(calls, 4);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 39);
     } finally {
+      console.error = original;
       await running.stop();
+    }
+  });
+
+  it("ends the pass when Retry-After exceeds 30 seconds and carries the rest", async () => {
+    const origin = Date.parse("2026-01-15T00:00:00.000Z");
+    const cases = [
+      { label: "seconds", header: () => "90", full: 90_000 },
+      {
+        label: "http-date",
+        start: origin - 1_000,
+        header: (now) => new Date(now + 45_000).toUTCString(),
+        full: 45_000,
+      },
+    ];
+    for (const item of cases) {
+      const clock = fakeClock(item.start ?? origin);
+      let failed = false;
+      let headReads = 0;
+      let secondHeadAt = null;
+      const original = console.error;
+      console.error = () => {};
+      const running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        paceNow: clock.now,
+        wallNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 5_000_000,
+        env: env(),
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            headReads += 1;
+            if (headReads === 2) secondHeadAt = clock.now();
+            return ESCROW_START_BLOCK + 19;
+          },
+          async getLogs(args) {
+            if (args.fromBlock === ESCROW_START_BLOCK + 10 && !failed) {
+              failed = true;
+              throw httpError(429, {
+                details: "slow down",
+                retryAfter: item.header(clock.now()),
+              });
+            }
+            return [];
+          },
+        }),
+      });
+      try {
+        assert.equal(running.ingested.endedEarly, true, item.label);
+        assert.equal(running.ingested.reason, "rate_limited", item.label);
+        assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 9, item.label);
+        assert.equal(clock.sleeps.includes(30_000), true, item.label);
+        assert.equal(clock.sleeps.includes(item.full), false, item.label);
+        assert.equal(clock.sleeps.includes(1_000), false, item.label);
+        const response = await fetch(running.healthUrl);
+        const body = await response.json();
+        assert.equal(body.error, "rate_limited", item.label);
+        const before = clock.now();
+        const again = await running.pass();
+        const remainder = item.full - 30_000;
+        assert.equal(secondHeadAt - before, remainder, item.label);
+        assert.equal(clock.sleeps.includes(remainder), true, item.label);
+        assert.equal(again.endedEarly, false, item.label);
+        assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19, item.label);
+      } finally {
+        console.error = original;
+        await running.stop();
+      }
+    }
+  });
+
+  it("ignores a malformed Retry-After and uses the backoff schedule", async () => {
+    for (const header of ["1.5", "-1", "not-a-date"]) {
+      const clock = fakeClock(0);
+      let failed = false;
+      const running = await start({
+        once: true,
+        paceNow: clock.now,
+        wallNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 1,
+        env: env(),
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK + 9;
+          },
+          async getLogs() {
+            if (!failed) {
+              failed = true;
+              throw httpError(429, { details: "slow down", retryAfter: header });
+            }
+            return [];
+          },
+        }),
+      });
+      try {
+        assert.equal(running.ingested.endedEarly, false, header);
+        assert.equal(clock.sleeps.includes(1_000), true, header);
+        assert.equal(clock.sleeps.filter((ms) => ms >= 1_000).length, 1, header);
+      } finally {
+        await running.stop();
+      }
+    }
+  });
+
+  it("scans nothing when the reported finalized head is behind the stored head", async () => {
+    const clock = fakeClock(0);
+    let head = ESCROW_START_BLOCK + 40;
+    const calls = [];
+    const logged = [];
+    const original = console.error;
+    console.error = (...args) => {
+      logged.push(args.map((part) => String(part)).join(" "));
+    };
+    let running;
+    try {
+      running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        paceNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 5_000_000,
+        env: env({ POINTS_LOG_RANGE: "10", POINTS_MAX_WINDOWS_PER_PASS: "1" }),
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return head;
+          },
+          async getLogs(args) {
+            calls.push(args.fromBlock);
+            return [];
+          },
+        }),
+      });
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 9);
+      assert.equal(running.indexer.finalizedBlock, ESCROW_START_BLOCK + 40);
+      head = ESCROW_START_BLOCK + 20;
+      calls.length = 0;
+      const again = await running.pass();
+      assert.equal(again.endedEarly, true);
+      assert.equal(again.reason, "head_behind");
+      assert.deepEqual(calls, []);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 9);
+      assert.equal(running.indexer.finalizedBlock, ESCROW_START_BLOCK + 40);
+      assert.equal(logged.some((line) => line === "head_behind"), true);
+      const response = await fetch(running.healthUrl);
+      const body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.error, "head_behind");
+      assert.ok(body.behind > 0);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
+  it("reads the finalized head with eth_getBlockByNumber and the finalized tag", async () => {
+    const head = ESCROW_START_BLOCK + 4;
+    const seen = [];
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+      seen.push({ method: body.method, params: body.params });
+      const send = (payload) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, ...payload }));
+      };
+      if (body.method === "eth_getBlockByNumber") {
+        return send({ result: { number: `0x${head.toString(16)}` } });
+      }
+      send({ error: { code: -32601, message: "unhandled" } });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const rpc = createDefaultRpc(url);
+      const number = await rpc.finalizedBlockNumber();
+      assert.equal(number, BigInt(head));
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].method, "eth_getBlockByNumber");
+      assert.equal(seen[0].params[0], "finalized");
+      assert.equal(seen.some((call) => call.method === "eth_blockNumber"), false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 
