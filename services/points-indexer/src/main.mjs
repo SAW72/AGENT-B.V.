@@ -20,6 +20,8 @@ import {
   textIsHeadLag,
   textIsRateLimit,
 } from "./pace.mjs";
+import { pointsEnabled } from "./pointsFlag.mjs";
+import { openReadConnection } from "./readConnection.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -150,23 +152,12 @@ export function assertConfig(cfg) {
   return { ...cfg, escrowAddress: escrow, chainId: CHAIN_ID, logRange, pollMs, maxWindows };
 }
 
-/**
- * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
- * Checked on each request so the read module stays unloaded while this is off.
- * @param {{ POINTS_ENABLED?: unknown } | undefined} env
- */
-function pointsGate(env) {
-  const raw = env?.POINTS_ENABLED;
-  if (raw == null || String(raw).trim() === "") return false;
-  const text = String(raw).trim().toLowerCase();
-  return text === "1" || text === "true" || text === "on" || text === "yes";
-}
-
 function writeJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
     "content-length": Buffer.byteLength(payload),
   });
   res.end(payload);
@@ -200,9 +191,7 @@ export function loadConfig(env = process.env) {
     ? DEFAULT_MAX_WINDOWS
     : positiveInt(env.POINTS_MAX_WINDOWS_PER_PASS, "POINTS_MAX_WINDOWS_PER_PASS");
 
-  const cfg = assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
-  cfg.pointsEnabled = pointsGate(env);
-  return cfg;
+  return assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
 }
 
 /**
@@ -1090,10 +1079,18 @@ export async function start(options = {}) {
 
   let readApi = null;
   let readApiLoading = null;
+  let readDb = null;
   const env = options.env ?? process.env;
 
+  function readDatabase() {
+    if (!indexer) return null;
+    if (cfg.dbPath === ":memory:") return indexer.db;
+    if (!readDb) readDb = openReadConnection(cfg.dbPath);
+    return readDb;
+  }
+
   async function handlePoints(req, res) {
-    if (!pointsGate(env)) {
+    if (!pointsEnabled(env)) {
       writeJson(res, 503, { ok: false, error: "points_disabled" });
       return;
     }
@@ -1105,14 +1102,18 @@ export async function start(options = {}) {
         ]).then(([mod, stores]) => {
           readApi = mod.createReadApi({
             store: stores.createReadApiSqliteStore({
-              db: () => indexer?.db ?? null,
+              db: () => readDatabase(),
               lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
               finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
               passCompleted: () => status.lastPassAt != null,
+              stale: () => status.lastError != null,
             }),
             config: mod.readSettings(env),
             now: () => Date.now(),
             enabled: () => mod.pointsEnabled(env),
+            log: (line) => {
+              console.error(redact(String(line), cfg.rpcUrl));
+            },
           });
           return readApi;
         }).catch((error) => {
@@ -1187,6 +1188,14 @@ export async function start(options = {}) {
         } catch {
           // The module never finished loading.
         }
+      }
+      if (readDb) {
+        try {
+          readDb.close();
+        } catch {
+          // The read connection was already closed.
+        }
+        readDb = null;
       }
       indexer?.close();
     },
