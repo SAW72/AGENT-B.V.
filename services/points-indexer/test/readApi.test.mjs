@@ -11,12 +11,19 @@ import {
   bucketClientAddress,
   createRateLimiter,
   createReadApi,
+  HISTORY_DEFAULT_LIMIT,
+  HISTORY_MAX_LIMIT,
+  historyRank,
   pointsEnabled,
   READ_ENV_ALLOWLIST,
   readSettings,
+  rowFollowsCursor,
 } from "../src/readApi.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
+const SEPOLIA_FILE = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
+const README_FILE = fileURLToPath(new URL("../README.md", import.meta.url));
+const FLAG_SOURCE = fileURLToPath(new URL("../src/pointsFlag.mjs", import.meta.url));
 const READ_SOURCE = fileURLToPath(new URL("../src/readApi.mjs", import.meta.url));
 const MAIN_SOURCE = fileURLToPath(new URL("../src/main.mjs", import.meta.url));
 const ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -81,10 +88,16 @@ function fakeStore(overrides = {}) {
     },
     listLedgerRows(address, query) {
       if (overrides.throwOn === "rows") throw overrides.error ?? new Error("store down");
-      const afterSeq = query?.afterSeq ?? 0;
+      const after = query?.after ?? null;
       const limit = Number.isInteger(query?.limit) ? query.limit : rows.length;
       return rows
-        .filter((row) => (row.wallet == null || row.wallet === address) && row.seq > afterSeq)
+        .filter((row) => (row.wallet == null || row.wallet === address) && rowFollowsCursor(row, after))
+        .sort((left, right) => (
+          left.block_number - right.block_number
+          || left.log_index - right.log_index
+          || historyRank(left.action) - historyRank(right.action)
+          || left.utc_day - right.utc_day
+        ))
         .slice(0, limit);
     },
     getConfig() {
@@ -100,6 +113,7 @@ async function withServer(options, fn) {
     config: options.config,
     now: options.now,
     enabled: options.enabled,
+    log: options.log,
   });
   const server = createServer(api);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -131,6 +145,7 @@ async function request(base, path, options = {}) {
 
 function assertJsonNoStore(response) {
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
   const origin = response.headers.get("access-control-allow-origin");
   assert.equal(origin == null || origin === "https://agent-bv.pages.dev", true);
@@ -173,6 +188,7 @@ function ledgerRow(index, wallet, extra = {}) {
 }
 
 function expectedItem(row) {
+  const withheld = row.points_withheld === 1 || row.points_withheld === true;
   return {
     action: row.action,
     utc_day: row.utc_day,
@@ -180,8 +196,8 @@ function expectedItem(row) {
     log_index: row.log_index,
     block_number: row.block_number,
     escrow_id: row.escrow_id,
-    points: row.points,
-    points_withheld: row.points_withheld === 1,
+    points: withheld ? 0 : row.points,
+    points_withheld: withheld,
     eligibility_reason: row.eligibility_reason,
     register_status: row.register_status,
   };
@@ -192,11 +208,8 @@ describe("points read API", { concurrency: false }, () => {
     const config = loadConfig({});
     assert.equal(config.chainId, 84532);
     assert.equal(config.dbPath, "points-indexer.sqlite");
-    assert.equal(config.pointsEnabled, false);
-    assert.equal(loadConfig({ POINTS_ENABLED: "1" }).pointsEnabled, true);
-    assert.equal(loadConfig({ POINTS_ENABLED: "true" }).pointsEnabled, true);
-    assert.equal(loadConfig({ POINTS_ENABLED: "" }).pointsEnabled, false);
-    assert.equal(loadConfig({ POINTS_ENABLED: "0" }).pointsEnabled, false);
+    assert.equal(Object.hasOwn(config, "pointsEnabled"), false);
+    assert.equal(Object.hasOwn(loadConfig({ POINTS_ENABLED: "1" }), "pointsEnabled"), false);
     assert.equal(pointsEnabled({}), false);
     assert.equal(pointsEnabled({ POINTS_ENABLED: "1" }), true);
     assert.equal(pointsEnabled({ POINTS_ENABLED: "true" }), true);
@@ -207,7 +220,7 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(pointsEnabled({ POINTS_READ_API_ENABLED: "1" }), false);
     const settings = readSettings({});
     assert.equal(settings.ratePerMinute, 60);
-    assert.equal(settings.trustedProxyHops, 1);
+    assert.equal(settings.trustedProxyHops, 0);
     assert.equal(settings.breakerFailures, 5);
     assert.equal(settings.breakerCooldownMs, 30_000);
     assert.deepEqual(settings.corsOrigins, []);
@@ -215,7 +228,7 @@ describe("points read API", { concurrency: false }, () => {
     assert.deepEqual(readSettings({ POINTS_CORS_ORIGINS: "   " }).corsOrigins, []);
     assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops, 0);
     assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops, 2);
-    assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "nope" }).trustedProxyHops, 1);
+    assert.equal(readSettings({ POINTS_TRUSTED_PROXY_HOPS: "nope" }).trustedProxyHops, 0);
     assert.equal(readSettings({ POINTS_READ_RATE_PER_MINUTE: "15" }).ratePerMinute, 15);
     assert.equal(readSettings({ POINTS_READ_RATE_PER_MINUTE: "0" }).ratePerMinute, 60);
     assert.equal(readSettings({ POINTS_BREAKER_FAILURES: "3" }).breakerFailures, 3);
@@ -313,7 +326,7 @@ describe("points read API", { concurrency: false }, () => {
       const posted = await request(base, "/v1/points/config", { method: "POST" });
       assert.equal(posted.response.status, 405);
       assert.deepEqual(posted.json, { ok: false, error: "method_not_allowed" });
-      assert.equal(posted.response.headers.get("allow"), "GET, OPTIONS");
+      assert.equal(posted.response.headers.get("allow"), "GET, HEAD, OPTIONS");
       assertJsonNoStore(posted.response);
       const preflight = await request(base, "/v1/points/config", {
         method: "OPTIONS",
@@ -321,7 +334,7 @@ describe("points read API", { concurrency: false }, () => {
       });
       assert.equal(preflight.response.status, 204);
       assert.equal(preflight.text, "");
-      assert.equal(preflight.response.headers.get("allow"), "GET, OPTIONS");
+      assert.equal(preflight.response.headers.get("allow"), "GET, HEAD, OPTIONS");
       assert.equal(preflight.response.headers.get("access-control-allow-origin"), "https://agent-bv.pages.dev");
       assert.equal(preflight.response.headers.get("cache-control"), "no-store");
       const denied = await request(base, "/v1/points/config", {
@@ -370,7 +383,7 @@ describe("points read API", { concurrency: false }, () => {
     });
   });
 
-  it("sums points_total from committed rows", async () => {
+  it("reports a zero total while points are withheld", async () => {
     const wallet = ADDRESS;
     const mixed = `0x${ADDRESS.slice(2).toUpperCase()}`;
     const rows = [
@@ -389,7 +402,7 @@ describe("points read API", { concurrency: false }, () => {
       const body = await request(base, `/v1/points/${mixed}?chainId=84532`);
       assert.equal(body.response.status, 200);
       assert.equal(body.json.address, wallet);
-      assert.equal(body.json.points_total, 8);
+      assert.equal(body.json.points_total, 0);
       assert.equal(body.json.points_withheld, true);
       assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "ofac_unconfigured" });
       assert.equal(body.json.rows_count, 2);
@@ -398,11 +411,18 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(body.json.finalized_block, 100_000_000);
       assert.equal(body.json.behind, 0);
       assert.equal(body.json.syncing, false);
+      const sepolia = JSON.parse(readFileSync(SEPOLIA_FILE, "utf8"));
+      assert.equal(body.json.disclaimer.text, sepolia.display.disclaimer);
+      assert.equal(
+        body.json.disclaimer.text,
+        "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.",
+      );
       assert.equal(body.json.disclaimer.links.master_disclaimer, null);
       assert.ok(Object.values(body.json.disclaimer.links).every((value) => value === null));
       const history = await request(base, `/v1/points/${wallet}/history?chainId=84532`);
       assert.deepEqual(history.json.items, rows.map(expectedItem));
-      assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 8);
+      assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 0);
+      assert.equal(history.json.items.every((item) => item.points_withheld === true), true);
       assert.equal(history.json.next_cursor, null);
     });
   });
@@ -476,8 +496,9 @@ describe("points read API", { concurrency: false }, () => {
         assert.equal(clamped.json.limit, 100);
         assert.equal(clamped.json.items.length, 100);
         assert.equal(clamped.json.items[99].tx_hash, txHash(100));
-        assert.equal(clamped.json.next_cursor, "100");
-        const rest = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=25&cursor=100`);
+        assert.equal(typeof clamped.json.next_cursor, "string");
+        assert.equal(/^\d+$/.test(clamped.json.next_cursor), false);
+        const rest = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=25&cursor=${encodeURIComponent(clamped.json.next_cursor)}`);
         assert.equal(rest.json.items.length, 1);
         assert.equal(rest.json.items[0].tx_hash, txHash(101));
         assert.equal(rest.json.next_cursor, null);
@@ -851,7 +872,7 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(source.includes('from "./readApiSqliteStore.mjs"'), false);
     assert.equal(source.includes('import("./readApi.mjs")'), true);
     assert.equal(source.includes('import("./readApiSqliteStore.mjs")'), true);
-    const gateAt = source.indexOf("if (!pointsGate(env))");
+    const gateAt = source.indexOf("if (!pointsEnabled(env))");
     const importAt = source.indexOf('import("./readApi.mjs")');
     const storeAt = source.indexOf('import("./readApiSqliteStore.mjs")');
     assert.ok(gateAt !== -1 && importAt !== -1 && storeAt !== -1);
@@ -980,7 +1001,7 @@ describe("points read API", { concurrency: false }, () => {
     });
   });
 
-  it("clears the failure streak after a completed read or a rejected query", async () => {
+  it("clears the failure streak only after a completed store read", async () => {
     let broken = true;
     let calls = 0;
     const store = {
@@ -1034,11 +1055,11 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(rejected.response.status, 400);
       assert.equal(rejected.json.error, "wrong_chain");
       assert.equal(api.breakerState(), "closed");
-      for (let index = 0; index < 4; index += 1) {
-        assert.equal((await request(base, `/v1/points/${ADDRESS}`)).response.status, 500);
-      }
-      assert.equal(calls, 8);
-      assert.equal(api.breakerState(), "closed");
+      assert.equal(calls, 4);
+      const fifth = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(fifth.response.status, 500);
+      assert.equal(calls, 5);
+      assert.equal(api.breakerState(), "open");
     });
   });
 
@@ -1137,6 +1158,7 @@ describe("points read API", { concurrency: false }, () => {
       assert.deepEqual(hidden.json, { ok: false, error: "points_disabled" });
       assert.equal(hidden.response.headers.get("content-type"), "application/json; charset=utf-8");
       assert.equal(hidden.response.headers.get("cache-control"), "no-store");
+      assert.equal(hidden.response.headers.get("x-content-type-options"), "nosniff");
       assert.equal(hidden.response.headers.get("access-control-allow-origin"), null);
       env.POINTS_ENABLED = "1";
       const syncing = await request(origin, `/v1/points/${ADDRESS}`);
@@ -1291,6 +1313,7 @@ describe("points read API", { concurrency: false }, () => {
         assert.equal(body.json.behind, liveHead - cursor);
         assert.ok(body.json.finalized_block >= body.json.indexed_to_block);
         assert.equal(body.json.finalized_block, liveHead);
+        assert.equal(body.json.stale, false);
       } finally {
         if (releaseSecond) releaseSecond();
         try {
@@ -1302,6 +1325,358 @@ describe("points read API", { concurrency: false }, () => {
         else if (health) await health.close();
       }
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores X-Forwarded-For until a hop count is set", async () => {
+    assert.equal(readSettings({}).trustedProxyHops, 0);
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 1 },
+    }, async (base) => {
+      const first = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "1.1.1.1" },
+      });
+      assert.equal(first.response.status, 200);
+      const otherHeader = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "2.2.2.2" },
+      });
+      assert.equal(otherHeader.response.status, 429);
+      assert.equal(otherHeader.json.error, "rate_limited");
+    });
+  });
+
+  it("answers HEAD with the GET headers and an empty body", async () => {
+    await withServer({ enabled: () => true, config: { ratePerMinute: 10 } }, async (base) => {
+      const got = await request(base, "/v1/points/config");
+      const head = await request(base, "/v1/points/config", { method: "HEAD" });
+      assert.equal(head.response.status, 200);
+      assert.equal(head.text, "");
+      assert.equal(head.response.headers.get("content-type"), got.response.headers.get("content-type"));
+      assert.equal(head.response.headers.get("content-length"), got.response.headers.get("content-length"));
+      assert.equal(head.response.headers.get("cache-control"), "no-store");
+      assert.equal(head.response.headers.get("x-content-type-options"), "nosniff");
+      const denied = await request(base, "/v1/points/config", { method: "POST" });
+      assert.equal(denied.response.status, 405);
+      assert.equal(denied.response.headers.get("allow"), "GET, HEAD, OPTIONS");
+    });
+  });
+
+  it("does not let a 4xx that skipped the store close the breaker", async () => {
+    let now = 0;
+    let calls = 0;
+    const lines = [];
+    const store = {
+      getCursor() {
+        calls += 1;
+        throw new Error("db down https://secret.example/key");
+      },
+      getLedgerSummary() {
+        return { points_total: 9, rows_count: 1, first_activity_utc_day: null };
+      },
+      listLedgerRows() {
+        return [];
+      },
+      getConfig() {
+        return { weights: {}, gates: {}, rule_version: null };
+      },
+    };
+    await withServer({
+      store,
+      now: () => now,
+      enabled: () => true,
+      log: (line) => lines.push(line),
+      config: { ratePerMinute: 100, breakerFailures: 5, breakerCooldownMs: 30_000, trustedProxyHops: 0 },
+    }, async (base, api) => {
+      for (let index = 0; index < 5; index += 1) {
+        const failed = await request(base, `/v1/points/${ADDRESS}`);
+        assert.equal(failed.response.status, 500);
+        assert.equal(failed.text.includes("secret.example"), false);
+      }
+      assert.equal(api.breakerState(), "open");
+      assert.equal(lines.filter((line) => line === "points_read internal").length, 5);
+      assert.equal(lines.filter((line) => line === "points_read breaker_open").length, 1);
+      assert.equal(lines.some((line) => String(line).includes("secret.example")), false);
+      const probe = await request(base, "/v1/points/0x1234");
+      assert.equal(probe.response.status, 400);
+      assert.equal(probe.json.error, "invalid_address");
+      assert.equal(calls, 5);
+      assert.equal(api.breakerState(), "open");
+      const still = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(still.response.status, 503);
+      assert.equal(still.json.error, "points_unavailable");
+      assert.equal(calls, 5);
+    });
+  });
+
+  it("locks page size, error codes, and the response fields", async () => {
+    assert.equal(HISTORY_DEFAULT_LIMIT, 25);
+    assert.equal(HISTORY_MAX_LIMIT, 100);
+    const row = ledgerRow(1, ADDRESS, { points: 4, points_withheld: 1 });
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        cursor: { last_scanned_block: 10, finalized_block: 12, pass_completed: true, stale: true },
+        summary: { points_total: 4, rows_count: 1, first_activity_utc_day: 20_000 },
+        rows: [row],
+      }),
+      config: { ratePerMinute: 30 },
+    }, async (base) => {
+      const config = await request(base, "/v1/points/config?chainId=84532");
+      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "gates", "rule_version", "status", "weights"]);
+      const address = await request(base, `/v1/points/${ADDRESS}?chainId=84532`);
+      assert.deepEqual(Object.keys(address.json).sort(), [
+        "address",
+        "behind",
+        "chainId",
+        "disclaimer",
+        "eligibility",
+        "finalized_block",
+        "first_activity_utc_day",
+        "indexed_to_block",
+        "points_total",
+        "points_withheld",
+        "rows_count",
+        "stale",
+        "syncing",
+      ]);
+      assert.deepEqual(Object.keys(address.json.eligibility).sort(), ["reason", "status"]);
+      assert.deepEqual(Object.keys(address.json.disclaimer).sort(), ["links", "text"]);
+      assert.equal(address.json.points_total, 0);
+      assert.equal(address.json.stale, true);
+      const history = await request(base, `/v1/points/${ADDRESS}/history?chainId=84532`);
+      assert.equal(history.json.limit, 25);
+      assert.deepEqual(Object.keys(history.json).sort(), [
+        "address",
+        "behind",
+        "chainId",
+        "finalized_block",
+        "indexed_to_block",
+        "items",
+        "limit",
+        "next_cursor",
+        "stale",
+        "syncing",
+      ]);
+      assert.deepEqual(Object.keys(history.json.items[0]).sort(), [
+        "action",
+        "block_number",
+        "eligibility_reason",
+        "escrow_id",
+        "log_index",
+        "points",
+        "points_withheld",
+        "register_status",
+        "tx_hash",
+        "utc_day",
+      ]);
+      assert.equal(history.json.items[0].points, 0);
+      const codes = [
+        ["/v1/points/config?chainId=1", 400, "wrong_chain"],
+        ["/v1/points/0x1234", 400, "invalid_address"],
+        [`/v1/points/${ADDRESS}/history?limit=0`, 400, "invalid_limit"],
+        [`/v1/points/${ADDRESS}/history?cursor=100`, 400, "invalid_cursor"],
+        ["/v1/points/config/extra", 404, "not_found"],
+      ];
+      for (const [path, status, code] of codes) {
+        const result = await request(base, path);
+        assert.equal(result.response.status, status, path);
+        assert.equal(result.json.error, code, path);
+        assert.equal(result.response.headers.get("x-content-type-options"), "nosniff");
+      }
+    });
+    await withServer({ enabled: () => true, config: { ratePerMinute: 1, trustedProxyHops: 0 } }, async (base) => {
+      assert.equal((await request(base, "/v1/points/config")).response.status, 200);
+      const limited = await request(base, "/v1/points/config");
+      assert.equal(limited.response.status, 429);
+      assert.equal(limited.json.error, "rate_limited");
+    });
+    await withServer({ enabled: () => false, config: { ratePerMinute: 10 } }, async (base) => {
+      const disabled = await request(base, "/v1/points/config");
+      assert.equal(disabled.response.status, 503);
+      assert.equal(disabled.json.error, "points_disabled");
+    });
+  });
+
+  it("logs a fixed code when a read throws and when the breaker opens", async () => {
+    const lines = [];
+    let throwCursor = true;
+    await withServer({
+      enabled: () => true,
+      log: (line) => lines.push(String(line)),
+      now: () => 0,
+      store: {
+        getCursor() {
+          if (throwCursor) throw new Error("db down");
+          return { last_scanned_block: 1, finalized_block: 1, pass_completed: true, stale: false };
+        },
+        getLedgerSummary() {
+          return { points_total: 3, rows_count: 1, first_activity_utc_day: null };
+        },
+        listLedgerRows() {
+          return [];
+        },
+        getConfig() {
+          return { weights: {}, gates: {}, rule_version: null };
+        },
+      },
+      config: { ratePerMinute: 20, breakerFailures: 1, breakerCooldownMs: 30_000 },
+    }, async (base) => {
+      const failed = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(failed.response.status, 500);
+      assert.equal(failed.json.error, "internal");
+      assert.deepEqual(lines, ["points_read breaker_open", "points_read internal"]);
+      const blocked = await request(base, `/v1/points/${ADDRESS}`);
+      assert.equal(blocked.response.status, 503);
+      assert.equal(blocked.json.error, "points_unavailable");
+      assert.equal(lines.length, 2);
+    });
+  });
+
+  it("spells Agent-B.V. in the read API notes and reads the disclaimer from config", () => {
+    const source = readFileSync(READ_SOURCE, "utf8");
+    assert.equal(source.includes("It cannot be transferred"), false);
+    assert.equal(source.includes("config/reputation/sepolia.json"), true);
+    const readme = readFileSync(README_FILE, "utf8");
+    const section = readme.split("## Read API")[1].split("## What it stores")[0];
+    assert.equal(section.includes("Agent-B.V."), true);
+    assert.equal(section.includes("Agent-BV"), false);
+    assert.equal(section.includes("Agent BV"), false);
+    const main = readFileSync(MAIN_SOURCE, "utf8");
+    const flag = readFileSync(FLAG_SOURCE, "utf8");
+    assert.equal(main.includes("function pointsGate"), false);
+    assert.equal(main.includes('from "./pointsFlag.mjs"'), true);
+    assert.equal(main.includes('text === "on"'), false);
+    assert.equal(flag.includes('text === "on"'), true);
+    assert.equal(flag.includes("node:sqlite"), false);
+  });
+
+  it("sets stale after an RPC pass fails and keeps the provider text out of the body", async () => {
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_MAX_WINDOWS_PER_PASS: "1",
+      POINTS_ENABLED: "1",
+    };
+    const running = await start({
+      once: false,
+      serve: true,
+      port: 0,
+      env,
+      rpc: {
+        async chainId() {
+          return 84532;
+        },
+        async getCode() {
+          return "0x6001600055";
+        },
+        async finalizedBlockNumber() {
+          throw new Error("rpc down https://secret.example/key");
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+    try {
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      const body = await request(origin, `/v1/points/${ADDRESS}`);
+      assert.equal(body.response.status, 200);
+      assert.equal(body.json.stale, true);
+      assert.equal(body.json.points_total, 0);
+      assert.equal(body.json.syncing, true);
+      assert.equal(body.text.includes("secret.example"), false);
+      assert.equal(body.text.includes("https://"), false);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("reads a file database through a separate connection from the writer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "abv-read-"));
+    const dbPath = join(dir, "points.sqlite");
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: dbPath,
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_MAX_WINDOWS_PER_PASS: "1",
+      POINTS_ENABLED: "1",
+    };
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      env,
+      rpc: {
+        async chainId() {
+          return 84532;
+        },
+        async getCode() {
+          return "0x6001600055";
+        },
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK;
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+    try {
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      running.indexer.db.prepare(
+        `INSERT INTO ledger_rows(
+           seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
+           wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
+           rule_weight, counts_for_return_day, register_status, dispute_id, support,
+           source_action, source_tx_hash, source_log_index
+         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        1,
+        84532,
+        "0x3d660502d75f1e97b08c110255921b437a3c4c42",
+        txHash(1),
+        1,
+        ESCROW_START_BLOCK,
+        1_700_000_000,
+        20_000,
+        ADDRESS,
+        "fund",
+        `0x${"11".repeat(32)}`,
+        6,
+        "unverified",
+        "ofac_unconfigured",
+        1,
+        null,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      const writerPrepare = running.indexer.db.prepare.bind(running.indexer.db);
+      running.indexer.db.prepare = (sql) => {
+        if (String(sql).includes("ledger_rows")) throw new Error("writer handle");
+        return writerPrepare(sql);
+      };
+      const body = await request(origin, `/v1/points/${ADDRESS}?chainId=84532`);
+      assert.equal(body.response.status, 200);
+      assert.equal(body.json.rows_count, 1);
+      assert.equal(body.json.points_total, 0);
+      assert.equal(body.text.includes("writer handle"), false);
+      const history = await request(origin, `/v1/points/${ADDRESS}/history?chainId=84532`);
+      assert.equal(history.response.status, 200);
+      assert.equal(history.json.items.length, 1);
+      assert.equal(history.json.items[0].points, 0);
+      assert.equal(history.json.items[0].points_withheld, true);
+    } finally {
+      await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });

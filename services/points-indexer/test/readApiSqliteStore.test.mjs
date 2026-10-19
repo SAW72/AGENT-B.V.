@@ -216,13 +216,14 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       last_scanned_block: null,
       finalized_block: null,
       pass_completed: false,
+      stale: false,
     });
     assert.deepEqual(store.getLedgerSummary(ADDRESS), {
       points_total: 0,
       rows_count: 0,
       first_activity_utc_day: null,
     });
-    assert.deepEqual(store.listLedgerRows(ADDRESS, { limit: 25, afterSeq: 0 }), []);
+    assert.deepEqual(store.listLedgerRows(ADDRESS, { limit: 25, after: null }), []);
   });
 
   it("sums committed points and keeps private columns out of the response", async () => {
@@ -230,7 +231,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
     try {
       const store = createReadApiSqliteStore(sourceFrom(ctx.indexer, true));
       const summary = store.getLedgerSummary(ctx.wallet);
-      assert.equal(summary.points_total, 8);
+      assert.equal(summary.points_total, 0);
       assert.equal(summary.rows_count, 2);
       assert.equal(summary.first_activity_utc_day, 20_000);
       const stored = store.listLedgerRows(ctx.wallet, { limit: 10, afterSeq: 0 });
@@ -241,14 +242,14 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       await withServer(store, async (base) => {
         const body = await request(base, `/v1/points/${ctx.wallet}?chainId=84532`);
         assert.equal(body.response.status, 200);
-        assert.equal(body.json.points_total, 8);
+        assert.equal(body.json.points_total, 0);
         assert.equal(body.json.rows_count, 2);
         assert.equal(body.json.points_withheld, true);
         assert.equal(body.json.indexed_to_block, 100_000_000);
         const history = await request(base, `/v1/points/${ctx.wallet}/history?chainId=84532`);
         assert.equal(history.json.items.length, 2);
         assert.equal(history.json.items[0].points_withheld, true);
-        assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 8);
+        assert.equal(history.json.items.reduce((sum, item) => sum + item.points, 0), 0);
         const found = [];
         walkKeys(body.json, found);
         walkKeys(history.json, found);
@@ -276,18 +277,27 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
     insertPage(indexer.db, PAGE_WALLET, 101);
     try {
       const store = createReadApiSqliteStore(sourceFrom(indexer, true));
-      const page = store.listLedgerRows(PAGE_WALLET, { limit: 100, afterSeq: 0 });
+      const page = store.listLedgerRows(PAGE_WALLET, { limit: 100, after: null });
       assert.equal(page.length, 100);
-      assert.equal(page[99].seq, 100);
-      const rest = store.listLedgerRows(PAGE_WALLET, { limit: 25, afterSeq: 100 });
+      assert.equal(page[99].block_number, ESCROW_START_BLOCK + 100);
+      const rest = store.listLedgerRows(PAGE_WALLET, {
+        limit: 25,
+        after: {
+          block_number: page[99].block_number,
+          log_index: page[99].log_index,
+          action: page[99].action,
+          utc_day: page[99].utc_day,
+        },
+      });
       assert.equal(rest.length, 1);
       assert.equal(rest[0].tx_hash, txHash(101));
       await withServer(store, async (base) => {
         const clamped = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=101`);
         assert.equal(clamped.response.status, 200);
         assert.equal(clamped.json.items.length, 100);
-        assert.equal(clamped.json.next_cursor, "100");
-        const next = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&cursor=100`);
+        assert.equal(typeof clamped.json.next_cursor, "string");
+        assert.equal(/^\d+$/.test(clamped.json.next_cursor), false);
+        const next = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&cursor=${encodeURIComponent(clamped.json.next_cursor)}`);
         assert.equal(next.json.items.length, 1);
         assert.equal(next.json.items[0].tx_hash, txHash(101));
         assert.equal(next.json.next_cursor, null);
@@ -306,6 +316,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         last_scanned_block: ESCROW_START_BLOCK + 25,
         finalized_block: ESCROW_START_BLOCK + 1000,
         pass_completed: true,
+        stale: false,
       });
     } finally {
       indexer.close();
@@ -327,10 +338,10 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       const store = createReadApiSqliteStore(sourceFrom(indexer, true));
       const summaryA = store.getLedgerSummary(walletA);
       const summaryB = store.getLedgerSummary(walletB);
-      assert.equal(summaryA.points_total, 8);
+      assert.equal(summaryA.points_total, 0);
       assert.equal(summaryA.rows_count, 2);
       assert.equal(summaryA.first_activity_utc_day, 20_002);
-      assert.equal(summaryB.points_total, 18);
+      assert.equal(summaryB.points_total, 0);
       assert.equal(summaryB.rows_count, 2);
       assert.equal(summaryB.first_activity_utc_day, 20_011);
       const historyA = store.listLedgerRows(walletA, { limit: 25, afterSeq: 0 }).map((row) => row.tx_hash);
@@ -340,16 +351,36 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       await withServer(store, async (base) => {
         const bodyA = await request(base, `/v1/points/${walletA}?chainId=84532`);
         const bodyB = await request(base, `/v1/points/${walletB}?chainId=84532`);
-        assert.equal(bodyA.json.points_total, 8);
+        assert.equal(bodyA.json.points_total, 0);
         assert.equal(bodyA.json.rows_count, 2);
         assert.equal(bodyA.json.first_activity_utc_day, 20_002);
-        assert.equal(bodyB.json.points_total, 18);
+        assert.equal(bodyB.json.points_total, 0);
         assert.equal(bodyB.json.rows_count, 2);
         assert.equal(bodyB.json.first_activity_utc_day, 20_011);
         const pageA = await request(base, `/v1/points/${walletA}/history?chainId=84532`);
         const pageB = await request(base, `/v1/points/${walletB}/history?chainId=84532`);
         assert.deepEqual(pageA.json.items.map((item) => item.tx_hash), [txHash(1), txHash(2)]);
         assert.deepEqual(pageB.json.items.map((item) => item.tx_hash), [txHash(3), txHash(4)]);
+      });
+    } finally {
+      indexer.close();
+    }
+  });
+
+  it("pages the same rows after seq is renumbered", async () => {
+    const indexer = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 20 });
+    insertPage(indexer.db, PAGE_WALLET, 3);
+    try {
+      const store = createReadApiSqliteStore(sourceFrom(indexer, true));
+      await withServer(store, async (base) => {
+        const first = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=1`);
+        assert.equal(first.json.items[0].tx_hash, txHash(1));
+        const cursor = first.json.next_cursor;
+        indexer.db.prepare("UPDATE ledger_rows SET seq = 1000 - seq").run();
+        const next = await request(base, `/v1/points/${PAGE_WALLET}/history?chainId=84532&limit=1&cursor=${encodeURIComponent(cursor)}`);
+        assert.equal(next.response.status, 200);
+        assert.equal(next.json.items.length, 1);
+        assert.equal(next.json.items[0].tx_hash, txHash(2));
       });
     } finally {
       indexer.close();

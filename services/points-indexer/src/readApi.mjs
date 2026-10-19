@@ -6,11 +6,16 @@
  * around handle().
  */
 
+import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { fileURLToPath } from "node:url";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
+import { pointsEnabled } from "./pointsFlag.mjs";
+
+export { pointsEnabled };
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
-export const DEFAULT_PROXY_HOPS = 1;
+export const DEFAULT_PROXY_HOPS = 0;
 export const DEFAULT_WINDOW_MS = 60_000;
 export const DEFAULT_MAX_ENTRIES = 4096;
 export const DEFAULT_SWEEP_MS = 60_000;
@@ -34,7 +39,15 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const EXACT_HTTPS_ORIGIN =
   /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-const DISCLAIMER_TEXT = "Testnet only. Not a token. It cannot be transferred, sold, or redeemed. It may be adjusted or cancelled.";
+const SEPOLIA_CONFIG_PATH = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
+const ALLOW = "GET, HEAD, OPTIONS";
+const HISTORY_ACTIONS = Object.freeze({
+  fund: 1,
+  release_or_refund: 2,
+  dispute_open_or_vote: 3,
+  first_activity: 4,
+  return_day: 5,
+});
 const DISCLAIMER_LINK_SLOTS = [
   "master_disclaimer",
   "bvt_securities_disclaimer",
@@ -58,18 +71,6 @@ export function blocksBehind(head, cursor) {
   }
   if (!Number.isSafeInteger(cursor)) return null;
   return Math.max(0, head - cursor);
-}
-
-/**
- * POINTS_ENABLED is off unless the value is 1, true, on, or yes.
- * An unset or blank value stays off.
- * @param {{ POINTS_ENABLED?: unknown } | undefined} env
- */
-export function pointsEnabled(env) {
-  const raw = env?.POINTS_ENABLED;
-  if (raw == null || String(raw).trim() === "") return false;
-  const text = String(raw).trim().toLowerCase();
-  return text === "1" || text === "true" || text === "on" || text === "yes";
 }
 
 /**
@@ -131,8 +132,8 @@ export function parseCorsList(value) {
 }
 
 /**
- * Non-negative integer. Blank or malformed falls back to 1.
- * Zero is kept: it means the forwarded header is not trusted.
+ * Non-negative integer. Blank or malformed falls back to 0.
+ * Zero means the forwarded header is not trusted.
  * @param {unknown} value
  */
 export function parseProxyHops(value) {
@@ -273,9 +274,10 @@ function socketBucket(input) {
 
 /**
  * Trusted proxy hops are counted from the right of X-Forwarded-For.
- * Hop 1 is the rightmost entry (the address a single appending proxy adds).
- * Hop 0 uses remoteAddress. A missing, empty, too-short, or malformed header
- * uses remoteAddress as well. The leftmost entry is never selected on its own.
+ * Hop 0, the default, uses remoteAddress and ignores the header.
+ * A positive hop count is an operator setting for a proxy they have checked.
+ * Hop 1 is the rightmost entry. A missing, empty, too-short, or malformed
+ * header uses remoteAddress. The leftmost entry is never selected on its own.
  * @param {{ headers?: object, remoteAddress?: string, socket?: { remoteAddress?: string } }} input
  * @param {number} [hops]
  */
@@ -352,14 +354,30 @@ export function createRateLimiter(options = {}) {
  * Store the host injects. The core calls only these four methods.
  * getCursor() returns last_scanned_block, finalized_block, and pass_completed.
  * getLedgerSummary(address) returns points_total, rows_count, and first_activity_utc_day.
- * listLedgerRows(address, { limit, afterSeq }) returns row objects. seq is for the cursor.
+ * listLedgerRows(address, { limit, after }) returns row objects.
+ * after is null or { block_number, log_index, action, utc_day }. seq is not a cursor.
  * getConfig() returns weights, gates, and rule_version.
+ * getCursor() may set stale when the last pass failed.
  */
+
+let cachedDisclaimer;
+
+function disclaimerText() {
+  if (cachedDisclaimer == null) {
+    const raw = JSON.parse(readFileSync(SEPOLIA_CONFIG_PATH, "utf8"));
+    const text = raw?.display?.disclaimer;
+    if (typeof text !== "string" || text.length === 0) {
+      throw new Error("display.disclaimer missing");
+    }
+    cachedDisclaimer = text;
+  }
+  return cachedDisclaimer;
+}
 
 function disclaimer() {
   const links = {};
   for (const key of DISCLAIMER_LINK_SLOTS) links[key] = null;
-  return { text: DISCLAIMER_TEXT, links };
+  return { text: disclaimerText(), links };
 }
 
 function asInt(value) {
@@ -378,6 +396,7 @@ function readSync(store) {
     finalized_block: finalized,
     behind,
     syncing,
+    stale: raw?.stale === true,
   };
 }
 
@@ -387,14 +406,50 @@ function syncFields(sync) {
     finalized_block: sync.finalized_block,
     behind: sync.behind,
     syncing: sync.syncing,
+    stale: sync.stale === true,
   };
 }
 
 /**
- * Named columns only. seq is read for the cursor and is not returned.
+ * History order. Matches the rank used by the sqlite adapter.
+ * seq is assigned again on rebuild, so it is not part of this key.
+ * @param {string} action
+ */
+export function historyRank(action) {
+  return HISTORY_ACTIONS[action] ?? 9;
+}
+
+/**
+ * @param {object} row
+ * @param {{ block_number: number, log_index: number, action: string, utc_day: number } | null} after
+ */
+export function rowFollowsCursor(row, after) {
+  if (!after) return true;
+  const key = [row.block_number, row.log_index, historyRank(row.action), row.utc_day];
+  const bound = [after.block_number, after.log_index, historyRank(after.action), after.utc_day];
+  for (let index = 0; index < key.length; index += 1) {
+    if (key[index] > bound[index]) return true;
+    if (key[index] < bound[index]) return false;
+  }
+  return false;
+}
+
+function encodeCursor(row) {
+  return Buffer.from(JSON.stringify([
+    row.block_number,
+    row.log_index,
+    row.action,
+    row.utc_day,
+  ]), "utf8").toString("base64url");
+}
+
+/**
+ * Named columns only. The history cursor is the keyset, not seq.
  * @param {object} row
  */
 function publicHistoryItem(row) {
+  const withheld = row.points_withheld === 1 || row.points_withheld === true;
+  const stored = typeof row.points === "bigint" ? Number(row.points) : row.points;
   return {
     action: row.action,
     utc_day: row.utc_day,
@@ -402,8 +457,8 @@ function publicHistoryItem(row) {
     log_index: row.log_index,
     block_number: row.block_number,
     escrow_id: row.escrow_id,
-    points: typeof row.points === "bigint" ? Number(row.points) : row.points,
-    points_withheld: row.points_withheld === 1 || row.points_withheld === true,
+    points: withheld ? 0 : stored,
+    points_withheld: withheld,
     eligibility_reason: row.eligibility_reason,
     register_status: row.register_status ?? null,
   };
@@ -413,7 +468,7 @@ function addressBody(sync, wallet, summary) {
   return {
     address: wallet,
     chainId: CHAIN_ID,
-    points_total: Number(summary.points_total),
+    points_total: 0,
     points_withheld: true,
     eligibility: { status: "unverified", reason: "ofac_unconfigured" },
     rows_count: Number(summary.rows_count),
@@ -423,14 +478,14 @@ function addressBody(sync, wallet, summary) {
   };
 }
 
-function historyBody(sync, wallet, limit, cursor, rows) {
+function historyBody(sync, wallet, limit, rows) {
   const page = rows.slice(0, limit);
   return {
     address: wallet,
     chainId: CHAIN_ID,
     limit,
     items: page.map(publicHistoryItem),
-    next_cursor: rows.length > limit ? String(page[page.length - 1].seq) : null,
+    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
     ...syncFields(sync),
   };
 }
@@ -449,11 +504,30 @@ function parseLimit(raw) {
 }
 
 function parseCursor(raw) {
-  if (raw == null || raw === "") return { ok: true, seq: 0 };
-  if (!/^(0|[1-9][0-9]*)$/.test(raw)) return { ok: false };
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) return { ok: false };
-  return { ok: true, seq: value };
+  if (raw == null || raw === "") return { ok: true, after: null };
+  if (typeof raw !== "string" || raw.length > 512 || !/^[A-Za-z0-9_-]+$/.test(raw)) return { ok: false };
+  let text;
+  try {
+    text = Buffer.from(raw, "base64url").toString("utf8");
+  } catch {
+    return { ok: false };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false };
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 4) return { ok: false };
+  const [block, logIndex, action, utcDay] = parsed;
+  if (!Number.isSafeInteger(block) || block < 0) return { ok: false };
+  if (!Number.isSafeInteger(logIndex) || logIndex < 0) return { ok: false };
+  if (typeof action !== "string" || !/^[a-z0-9_]{1,64}$/.test(action)) return { ok: false };
+  if (!Number.isSafeInteger(utcDay)) return { ok: false };
+  return {
+    ok: true,
+    after: { block_number: block, log_index: logIndex, action, utc_day: utcDay },
+  };
 }
 
 function routeOf(pathname) {
@@ -468,26 +542,38 @@ function routeOf(pathname) {
 /**
  * Consecutive thrown reads open the breaker. A cool-down then rejects
  * with points_unavailable. One probe after the cool-down closes it again
- * when that probe finishes, or opens it again when the probe throws.
+ * when that probe's store read finishes, or opens it again when the probe throws.
+ * A response that never called the store does not change the breaker.
  * @param {number} limit
  * @param {number} cooldownMs
  * @param {() => number} clock
+ * @param {() => void} [onOpen]
  */
-function createBreaker(limit, cooldownMs, clock) {
+function createBreaker(limit, cooldownMs, clock, onOpen) {
   let state = "closed";
   let consecutive = 0;
   let openedAt = 0;
+
+  function open() {
+    state = "open";
+    openedAt = clock();
+    consecutive = 0;
+    if (typeof onOpen === "function") onOpen();
+  }
 
   return {
     state() {
       return state;
     },
-    admit() {
-      if (state === "closed") return true;
-      if (state === "half_open") return false;
-      if (clock() - openedAt < cooldownMs) return false;
-      state = "half_open";
-      return true;
+    /** True when the request must not call the store. Does not start a probe. */
+    blocked() {
+      if (state === "closed") return false;
+      if (state === "half_open") return true;
+      return clock() - openedAt < cooldownMs;
+    },
+    /** Mark the one allowed probe. No-op while the breaker is closed. */
+    begin() {
+      if (state === "open") state = "half_open";
     },
     success() {
       consecutive = 0;
@@ -495,17 +581,11 @@ function createBreaker(limit, cooldownMs, clock) {
     },
     failure() {
       if (state === "half_open") {
-        state = "open";
-        openedAt = clock();
-        consecutive = 0;
+        open();
         return;
       }
       consecutive += 1;
-      if (consecutive >= limit) {
-        state = "open";
-        openedAt = clock();
-        consecutive = 0;
-      }
+      if (consecutive >= limit) open();
     },
   };
 }
@@ -539,7 +619,14 @@ export function createReadApi(options = {}) {
   const breakerCooldownMs = Number.isInteger(config.breakerCooldownMs) && config.breakerCooldownMs >= 0
     ? config.breakerCooldownMs
     : DEFAULT_BREAKER_COOLDOWN_MS;
-  const breaker = createBreaker(breakerFailures, breakerCooldownMs, clock);
+  const log = typeof options.log === "function"
+    ? options.log
+    : (line) => {
+      console.error(line);
+    };
+  const breaker = createBreaker(breakerFailures, breakerCooldownMs, clock, () => {
+    log("points_read breaker_open");
+  });
   const enabledFn = typeof options.enabled === "function"
     ? options.enabled
     : () => pointsEnabled(options.enabled === true ? { POINTS_ENABLED: "1" } : {});
@@ -554,7 +641,7 @@ export function createReadApi(options = {}) {
   function corsHeaders(input) {
     const headers = {
       "access-control-allow-headers": "content-type",
-      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-methods": ALLOW,
       vary: "Origin",
     };
     const origin = requestOrigin(input);
@@ -569,6 +656,7 @@ export function createReadApi(options = {}) {
   function result(status, body, input, extra) {
     const headers = {
       "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
       ...corsHeaders(input),
       ...extra,
     };
@@ -586,77 +674,143 @@ export function createReadApi(options = {}) {
     return result(status, { ok: false, error: code }, input, extra);
   }
 
+  function rateLimit(input) {
+    const decision = limiter.allow(clientIp(input, hops));
+    if (decision.ok) return null;
+    return fail(429, "rate_limited", input, { "retry-after": String(decision.retryAfterSec) });
+  }
+
+  function asHead(outcome) {
+    if (outcome.body == null) return outcome;
+    return { status: outcome.status, headers: outcome.headers, body: null };
+  }
+
+  function finish(input, outcome) {
+    return input?.method === "HEAD" ? asHead(outcome) : outcome;
+  }
+
+  /**
+   * Validation that does not call the store stays outside the breaker.
+   * A store read is admitted only after that validation, and a 4xx or 429
+   * that never called the store does not close the breaker.
+   */
   function serve(input) {
+    const method = input?.method;
+    const head = method === "HEAD";
     const pathname = String(input?.path || "/").replace(/\/+$/, "") || "/";
     const query = input?.query ?? {};
     const route = routeOf(pathname);
-    if (input?.method === "OPTIONS" && route) {
-      return result(204, null, input, { allow: "GET, OPTIONS" });
+    if (method === "OPTIONS" && route) {
+      return result(204, null, input, { allow: ALLOW });
     }
-    if (input?.method !== "OPTIONS") {
-      const decision = limiter.allow(clientIp(input, hops));
-      if (!decision.ok) {
-        return fail(429, "rate_limited", input, { "retry-after": String(decision.retryAfterSec) });
+    if (!route) {
+      if (method !== "OPTIONS") {
+        const limited = rateLimit(input);
+        if (limited) return finish(input, limited);
+      }
+      return finish(input, fail(404, "not_found", input));
+    }
+    if (method !== "GET" && !head) {
+      if (method !== "OPTIONS") {
+        const limited = rateLimit(input);
+        if (limited) return finish(input, limited);
+      }
+      return finish(input, fail(405, "method_not_allowed", input, { allow: ALLOW }));
+    }
+    if (!parseChain(query.chainId).ok) {
+      const limited = rateLimit(input);
+      if (limited) return finish(input, limited);
+      return finish(input, fail(400, "wrong_chain", input));
+    }
+
+    let wallet = null;
+    let limit = null;
+    let after = null;
+    if (route.kind !== "config") {
+      let addressText;
+      try {
+        addressText = decodeURIComponent(route.address);
+      } catch {
+        const limited = rateLimit(input);
+        if (limited) return finish(input, limited);
+        return finish(input, fail(400, "invalid_address", input));
+      }
+      if (!ADDRESS.test(addressText)) {
+        const limited = rateLimit(input);
+        if (limited) return finish(input, limited);
+        return finish(input, fail(400, "invalid_address", input));
+      }
+      wallet = addressText.toLowerCase();
+      if (route.kind === "history") {
+        const parsedLimit = parseLimit(query.limit);
+        if (!parsedLimit.ok) {
+          const limited = rateLimit(input);
+          if (limited) return finish(input, limited);
+          return finish(input, fail(400, "invalid_limit", input));
+        }
+        const cursor = parseCursor(query.cursor);
+        if (!cursor.ok) {
+          const limited = rateLimit(input);
+          if (limited) return finish(input, limited);
+          return finish(input, fail(400, "invalid_cursor", input));
+        }
+        limit = parsedLimit.limit;
+        after = cursor.after;
       }
     }
-    if (!route) return fail(404, "not_found", input);
-    if (input?.method !== "GET") {
-      return fail(405, "method_not_allowed", input, { allow: "GET, OPTIONS" });
-    }
-    if (!parseChain(query.chainId).ok) return fail(400, "wrong_chain", input);
-    if (route.kind === "config") {
-      const points = store.getConfig();
-      return result(200, {
-        chainId: CHAIN_ID,
-        status: "draft",
-        weights: points.weights,
-        gates: points.gates,
-        rule_version: points.rule_version,
-      }, input);
-    }
-    let addressText;
+
+    if (breaker.blocked()) return finish(input, fail(503, "points_unavailable", input));
+    const limited = rateLimit(input);
+    if (limited) return finish(input, limited);
+    breaker.begin();
     try {
-      addressText = decodeURIComponent(route.address);
-    } catch {
-      return fail(400, "invalid_address", input);
+      let outcome;
+      if (route.kind === "config") {
+        const points = store.getConfig();
+        outcome = result(200, {
+          chainId: CHAIN_ID,
+          status: "draft",
+          weights: points.weights,
+          gates: points.gates,
+          rule_version: points.rule_version,
+        }, input);
+      } else {
+        const sync = readSync(store);
+        if (route.kind === "address") {
+          outcome = result(200, addressBody(sync, wallet, store.getLedgerSummary(wallet)), input);
+        } else {
+          const rows = store.listLedgerRows(wallet, { limit: limit + 1, after });
+          outcome = result(200, historyBody(sync, wallet, limit, rows), input);
+        }
+      }
+      breaker.success();
+      return finish(input, outcome);
+    } catch (error) {
+      breaker.failure();
+      throw error;
     }
-    if (!ADDRESS.test(addressText)) return fail(400, "invalid_address", input);
-    const wallet = addressText.toLowerCase();
-    const sync = readSync(store);
-    if (route.kind === "address") {
-      return result(200, addressBody(sync, wallet, store.getLedgerSummary(wallet)), input);
-    }
-    const limit = parseLimit(query.limit);
-    if (!limit.ok) return fail(400, "invalid_limit", input);
-    const cursor = parseCursor(query.cursor);
-    if (!cursor.ok) return fail(400, "invalid_cursor", input);
-    const rows = store.listLedgerRows(wallet, { limit: limit.limit + 1, afterSeq: cursor.seq });
-    return result(200, historyBody(sync, wallet, limit.limit, cursor.seq, rows), input);
   }
 
   function handle(input) {
     try {
-      if (enabledFn() !== true) return fail(503, "points_disabled", input);
-      if (!breaker.admit()) {
-        return fail(503, "points_unavailable", input);
-      }
+      if (enabledFn() !== true) return finish(input, fail(503, "points_disabled", input));
       try {
-        const outcome = serve(input);
-        breaker.success();
-        return outcome;
-      } catch (error) {
-        breaker.failure();
-        throw error;
+        return serve(input);
+      } catch {
+        log("points_read internal");
+        return finish(input, fail(500, "internal", input));
       }
     } catch {
       try {
-        return fail(500, "internal", input);
+        log("points_read internal");
+        return finish(input, fail(500, "internal", input));
       } catch {
         return {
           status: 500,
           headers: {
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
             "content-length": Buffer.byteLength('{"ok":false,"error":"internal"}'),
           },
           body: { ok: false, error: "internal" },
@@ -705,6 +859,7 @@ export function createReadApi(options = {}) {
         res.writeHead(500, {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
           "content-length": Buffer.byteLength(payload),
         });
         res.end(payload);

@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CHAIN_ID } from "./constants.mjs";
+import { historyRank } from "./readApi.mjs";
 
 const WEIGHT_KEYS = [
   "first_activity",
@@ -51,8 +52,17 @@ function emptyCursor() {
     last_scanned_block: null,
     finalized_block: null,
     pass_completed: false,
+    stale: false,
   };
 }
+
+const ACTION_RANK_SQL = `CASE action
+        WHEN 'fund' THEN 1
+        WHEN 'release_or_refund' THEN 2
+        WHEN 'dispute_open_or_vote' THEN 3
+        WHEN 'first_activity' THEN 4
+        WHEN 'return_day' THEN 5
+        ELSE 9 END`;
 
 function emptySummary() {
   return {
@@ -63,28 +73,31 @@ function emptySummary() {
 }
 
 /**
- * @param {{ db?: () => object | null, lastScannedBlock?: () => number | null, finalizedBlock?: () => number | null, passCompleted?: () => boolean }} source
+ * @param {{ db?: () => object | null, lastScannedBlock?: () => number | null, finalizedBlock?: () => number | null, passCompleted?: () => boolean, stale?: () => boolean }} source
  */
 export function createReadApiSqliteStore(source = {}) {
   const db = typeof source.db === "function" ? source.db : () => null;
   const lastScannedBlock = typeof source.lastScannedBlock === "function" ? source.lastScannedBlock : () => null;
   const finalizedBlock = typeof source.finalizedBlock === "function" ? source.finalizedBlock : () => null;
   const passCompleted = typeof source.passCompleted === "function" ? source.passCompleted : () => false;
+  const stale = typeof source.stale === "function" ? source.stale : () => false;
 
   return {
     getCursor() {
-      if (!db()) return emptyCursor();
+      if (!db()) return { ...emptyCursor(), stale: stale() === true };
       return {
         last_scanned_block: asInt(lastScannedBlock()),
         finalized_block: asInt(finalizedBlock()),
         pass_completed: passCompleted() === true,
+        stale: stale() === true,
       };
     },
     getLedgerSummary(address) {
       const database = db();
       if (!database) return emptySummary();
       const totals = database.prepare(
-        `SELECT COALESCE(SUM(points), 0) AS points_total, COUNT(*) AS rows_count
+        `SELECT COALESCE(SUM(CASE WHEN points_withheld = 0 THEN points ELSE 0 END), 0) AS points_total,
+                COUNT(*) AS rows_count
          FROM ledger_rows WHERE wallet = ? AND chain_id = ?`,
       ).get(address, CHAIN_ID);
       const first = database.prepare(
@@ -102,13 +115,35 @@ export function createReadApiSqliteStore(source = {}) {
       const database = db();
       if (!database) return [];
       const limit = query?.limit;
-      const afterSeq = query?.afterSeq ?? 0;
+      const after = query?.after;
+      if (!after) {
+        return database.prepare(
+          `SELECT * FROM ledger_rows
+           WHERE wallet = ? AND chain_id = ?
+           ORDER BY block_number ASC, log_index ASC, (${ACTION_RANK_SQL}) ASC, utc_day ASC
+           LIMIT ?`,
+        ).all(address, CHAIN_ID, limit);
+      }
       return database.prepare(
         `SELECT * FROM ledger_rows
-         WHERE wallet = ? AND chain_id = ? AND seq > ?
-         ORDER BY seq ASC
-         LIMIT ?`,
-      ).all(address, CHAIN_ID, afterSeq, limit);
+         WHERE wallet = @wallet AND chain_id = @chain
+           AND (
+             block_number > @block
+             OR (block_number = @block AND log_index > @logIndex)
+             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_RANK_SQL}) > @rank)
+             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_RANK_SQL}) = @rank AND utc_day > @utcDay)
+           )
+         ORDER BY block_number ASC, log_index ASC, (${ACTION_RANK_SQL}) ASC, utc_day ASC
+         LIMIT @limit`,
+      ).all({
+        wallet: address,
+        chain: CHAIN_ID,
+        block: after.block_number,
+        logIndex: after.log_index,
+        rank: historyRank(after.action),
+        utcDay: after.utc_day,
+        limit,
+      });
     },
     getConfig() {
       return loadPointsFile();
