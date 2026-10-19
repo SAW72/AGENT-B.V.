@@ -298,6 +298,7 @@ export function emptyCode(value) {
  */
 export function errorCode(error) {
   if (!error || typeof error !== "object") return "rpc_error";
+  if (error.scanReason === "rebuild_error") return "rebuild_error";
   if (isRangeError(error)) return "range_error";
   if (typeof error.scanReason === "string" && PACE_REASONS.has(error.scanReason)) return error.scanReason;
   const paced = scanErrorClass(error);
@@ -428,7 +429,9 @@ export function healthDecision(status) {
     : DEFAULT_HEALTH_FRESHNESS_POLLS;
   const fresh = status.lastPassAt != null && status.now - status.lastPassAt <= polls * status.pollMs;
   const behind = Number.isSafeInteger(status.behind) ? Math.max(0, status.behind) : 0;
-  return { ok: fresh, statusCode: fresh ? 200 : 503, behind };
+  const stale = status.ledgerStale === true;
+  const ok = fresh && !stale;
+  return { ok, statusCode: ok ? 200 : 503, behind, stale };
 }
 
 /**
@@ -529,6 +532,7 @@ function listenHealth(port, status) {
           freshnessPolls: status.freshnessPolls,
           now: status.now(),
           behind: status.behind,
+          ledgerStale: status.ledgerStale,
         });
         const body = { ok: decision.ok, chainId: status.chainId };
         if (decision.ok && decision.behind > 0) body.behind = decision.behind;
@@ -637,6 +641,7 @@ export async function start(options = {}) {
     lastPassAt: null,
     lastError: null,
     earlyReason: null,
+    ledgerStale: false,
     behind: 0,
     now,
   };
@@ -818,7 +823,7 @@ export async function start(options = {}) {
       learnedWindow = Math.min(cfg.logRange, window * 2);
       window = learnedWindow;
       status.lastPassAt = now();
-      status.lastError = null;
+      if (!dirty && status.ledgerStale !== true) status.lastError = null;
       status.behind = blocksBehind(head, to);
     }
     if (
@@ -830,17 +835,37 @@ export async function start(options = {}) {
       earlyReason = "run_cap";
     }
     const previousHead = indexer.finalizedBlock;
-    const headResult = indexer.setFinalizedBlock(head, { rebuild: false });
+    // Decide the crossing before the head is stored. A throw here leaves the
+    // stored head where it was, so the next pass can decide again.
+    let crossed = false;
+    try {
+      crossed = storedLogCrossedByHead(indexer, previousHead, head);
+    } catch (error) {
+      status.ledgerStale = true;
+      status.lastError = "rebuild_error";
+      const wrapped = error instanceof Error ? error : new Error("rebuild failed");
+      wrapped.scanReason = "rebuild_error";
+      throw wrapped;
+    }
+    if (crossed) dirty = true;
+    indexer.setFinalizedBlock(head, { rebuild: false });
     // TODO: incremental attribution. rebuild() replays raw logs, chains, nonces,
     // links, and derived rows, then renumbers seq. A partial replay is not wired.
     // This pass skips that replay when it inserted no raw log and the finalized
     // head did not move over a stored log. A failed replay stays due on the next pass.
-    const crossed = storedLogCrossedByHead(indexer, previousHead, headResult.finalizedBlock);
     let rebuilds = 0;
-    if (dirty || crossed) {
-      dirty = true;
-      indexer.rebuild();
+    if (dirty) {
+      status.ledgerStale = true;
+      status.lastError = "rebuild_error";
+      try {
+        indexer.rebuild();
+      } catch (error) {
+        const wrapped = error instanceof Error ? error : new Error("rebuild failed");
+        wrapped.scanReason = "rebuild_error";
+        throw wrapped;
+      }
       dirty = false;
+      status.ledgerStale = false;
       rebuilds = 1;
     }
     status.behind = blocksBehind(head, indexer.lastScannedBlock());
