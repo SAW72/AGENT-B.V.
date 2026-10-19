@@ -6,9 +6,7 @@
  * around handle().
  */
 
-import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { fileURLToPath } from "node:url";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
 import { pointsEnabled } from "./pointsFlag.mjs";
 
@@ -33,13 +31,13 @@ export const READ_ENV_ALLOWLIST = Object.freeze([
   "POINTS_READ_RATE_PER_MINUTE",
   "POINTS_BREAKER_FAILURES",
   "POINTS_BREAKER_COOLDOWN_MS",
+  "POINTS_CLOUDFLARE_INGRESS",
 ]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const EXACT_HTTPS_ORIGIN =
   /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-const SEPOLIA_CONFIG_PATH = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
 const ALLOW = "GET, HEAD, OPTIONS";
 const HISTORY_ACTIONS = Object.freeze({
   fund: 1,
@@ -50,12 +48,15 @@ const HISTORY_ACTIONS = Object.freeze({
 });
 const DISCLAIMER_LINK_SLOTS = [
   "master_disclaimer",
-  "bvt_securities_disclaimer",
+  "legal_notice_url",
   "as_is",
   "not_investment",
   "eligibility_notice",
   "abuse_policy",
 ];
+
+/** One sentence for every public read response. */
+export const DISCLAIMER_TEXT = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
 
 /**
  * Distance from the scan cursor to the stored finalized head.
@@ -196,6 +197,7 @@ export function readSettings(env) {
     ratePerMinute: parseRatePerMinute(source.POINTS_READ_RATE_PER_MINUTE),
     breakerFailures: parseBreakerFailures(source.POINTS_BREAKER_FAILURES),
     breakerCooldownMs: parseBreakerCooldownMs(source.POINTS_BREAKER_COOLDOWN_MS),
+    cloudflareIngress: source.POINTS_CLOUDFLARE_INGRESS === "true",
   };
 }
 
@@ -281,8 +283,13 @@ function socketBucket(input) {
  * @param {{ headers?: object, remoteAddress?: string, socket?: { remoteAddress?: string } }} input
  * @param {number} [hops]
  */
-export function clientIp(input, hops = DEFAULT_PROXY_HOPS) {
+export function clientIp(input, hops = DEFAULT_PROXY_HOPS, options = {}) {
   const socket = socketBucket(input);
+  if (options.cloudflareIngress === true) {
+    const header = input?.headers?.["cf-connecting-ip"];
+    const value = Array.isArray(header) ? header[0] : header;
+    return bucketClientAddress(typeof value === "string" ? value.trim() : "") || socket;
+  }
   const hopCount = Number.isInteger(hops) && hops >= 0 ? hops : DEFAULT_PROXY_HOPS;
   if (hopCount === 0) return socket;
   const rawHeader = input?.headers?.["x-forwarded-for"];
@@ -297,7 +304,8 @@ export function clientIp(input, hops = DEFAULT_PROXY_HOPS) {
 
 /**
  * In-memory window limiter. The sweep timer is unref'd so it does not
- * keep the process alive. maxEntries evicts the oldest key.
+ * keep the process alive. Expired keys are dropped first. A new key is
+ * refused when the map is still full, so a limited client is not reset.
  * @param {{ windowMs?: number, max?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
  */
 export function createRateLimiter(options = {}) {
@@ -331,19 +339,23 @@ export function createRateLimiter(options = {}) {
     },
     allow(key) {
       const now = clock();
+      for (const [entry, stamps] of hits) {
+        const live = stamps.filter((ts) => now - ts < windowMs);
+        if (live.length === 0) hits.delete(entry);
+        else if (live.length !== stamps.length) hits.set(entry, live);
+      }
       const id = String(key || "unknown");
-      const prev = hits.get(id) || [];
-      const fresh = prev.filter((ts) => now - ts < windowMs);
+      const fresh = (hits.get(id) || []).filter((ts) => now - ts < windowMs);
       if (fresh.length >= max) {
         hits.set(id, fresh);
         const retryAfterMs = Math.max(0, fresh[0] + windowMs - now);
         return { ok: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
       }
       if (!hits.has(id) && hits.size >= maxEntries) {
-        const oldest = hits.keys().next().value;
-        if (oldest !== undefined) hits.delete(oldest);
+        return { ok: false, retryAfterSec: Math.max(1, Math.ceil(windowMs / 1000)) };
       }
       fresh.push(now);
+      if (hits.has(id)) hits.delete(id);
       hits.set(id, fresh);
       return { ok: true };
     },
@@ -360,24 +372,10 @@ export function createRateLimiter(options = {}) {
  * getCursor() may set stale when the last pass failed.
  */
 
-let cachedDisclaimer;
-
-function disclaimerText() {
-  if (cachedDisclaimer == null) {
-    const raw = JSON.parse(readFileSync(SEPOLIA_CONFIG_PATH, "utf8"));
-    const text = raw?.display?.disclaimer;
-    if (typeof text !== "string" || text.length === 0) {
-      throw new Error("display.disclaimer missing");
-    }
-    cachedDisclaimer = text;
-  }
-  return cachedDisclaimer;
-}
-
 function disclaimer() {
   const links = {};
   for (const key of DISCLAIMER_LINK_SLOTS) links[key] = null;
-  return { text: disclaimerText(), links };
+  return { text: DISCLAIMER_TEXT, links };
 }
 
 function asInt(value) {
@@ -487,6 +485,7 @@ function historyBody(sync, wallet, limit, rows) {
     items: page.map(publicHistoryItem),
     next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
     ...syncFields(sync),
+    disclaimer: disclaimer(),
   };
 }
 
@@ -602,6 +601,7 @@ export function createReadApi(options = {}) {
   const hops = Number.isInteger(config.trustedProxyHops) && config.trustedProxyHops >= 0
     ? config.trustedProxyHops
     : DEFAULT_PROXY_HOPS;
+  const cloudflareIngress = config.cloudflareIngress === true;
   const rateMax = Number.isInteger(config.ratePerMinute) && config.ratePerMinute > 0
     ? config.ratePerMinute
     : DEFAULT_RATE_PER_MINUTE;
@@ -629,7 +629,7 @@ export function createReadApi(options = {}) {
   });
   const enabledFn = typeof options.enabled === "function"
     ? options.enabled
-    : () => pointsEnabled(options.enabled === true ? { POINTS_ENABLED: "1" } : {});
+    : () => pointsEnabled(options.enabled === true ? { POINTS_ENABLED: "true" } : {});
   const store = options.store;
 
   function requestOrigin(input) {
@@ -675,7 +675,7 @@ export function createReadApi(options = {}) {
   }
 
   function rateLimit(input) {
-    const decision = limiter.allow(clientIp(input, hops));
+    const decision = limiter.allow(clientIp(input, hops, { cloudflareIngress }));
     if (decision.ok) return null;
     return fail(429, "rate_limited", input, { "retry-after": String(decision.retryAfterSec) });
   }
@@ -773,6 +773,7 @@ export function createReadApi(options = {}) {
           weights: points.weights,
           gates: points.gates,
           rule_version: points.rule_version,
+          disclaimer: disclaimer(),
         }, input);
       } else {
         const sync = readSync(store);
@@ -794,6 +795,7 @@ export function createReadApi(options = {}) {
   function handle(input) {
     try {
       if (enabledFn() !== true) return finish(input, fail(503, "points_disabled", input));
+      if (input?.duplicateQuery === true) return finish(input, fail(400, "duplicate_query", input));
       try {
         return serve(input);
       } catch {
@@ -832,14 +834,18 @@ export function createReadApi(options = {}) {
   function fromNodeRequest(req) {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const query = {};
+    let duplicateQuery = false;
     for (const key of url.searchParams.keys()) {
-      if (query[key] === undefined) query[key] = url.searchParams.get(key);
+      const values = url.searchParams.getAll(key);
+      if (values.length > 1) duplicateQuery = true;
+      else query[key] = values[0];
     }
     const headerOrigin = req.headers?.origin;
     return {
       method: req.method,
       path: url.pathname,
       query,
+      duplicateQuery,
       headers: req.headers || {},
       remoteAddress: req.socket?.remoteAddress,
       origin: typeof headerOrigin === "string" ? headerOrigin : undefined,
