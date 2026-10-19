@@ -114,6 +114,11 @@ jobs:
       - name: Points indexer tests (offline fixtures, no network)
         working-directory: services/points-indexer
         run: npm test
+      - name: Points indexer tests in a non-UTC timezone
+        working-directory: services/points-indexer
+        run: npm test
+        env:
+          TZ: America/New_York
 
   # Public Base Sepolia fork of LiveDenylistVaultTest. continue-on-error so an RPC
   # failure cannot fail the required CI checks. No keys, no broadcast.

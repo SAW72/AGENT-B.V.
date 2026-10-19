@@ -19,6 +19,7 @@ import {
   isRangeError,
   loadConfig,
   redact,
+  redactShortMessage,
   start,
 } from "../src/main.mjs";
 import { account, createdLog, creditCandidate, loadFixture, tempIndexer } from "./support.mjs";
@@ -49,9 +50,9 @@ function blockOf(log) {
 }
 
 async function until(pred) {
-  for (let i = 0; i < 100; i += 1) {
+  for (let i = 0; i < 200; i += 1) {
     if (pred()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timed out");
 }
@@ -551,6 +552,7 @@ describe("process entry", () => {
     });
     try {
       const pending = running.pass();
+      await until(() => typeof release === "function");
       const skipped = await running.pass();
       assert.equal(skipped.skipped, true);
       assert.equal(running.skippedTicks, 1);
@@ -579,6 +581,8 @@ describe("process entry", () => {
     });
     const dir = dbDir();
     let head = block;
+    const original = console.error;
+    console.error = () => {};
     const running = await start({
       once: true,
       env: {
@@ -608,6 +612,7 @@ describe("process entry", () => {
       assert.equal(running.indexer.finalizedBlock, block);
       assert.equal(running.indexer.canonical(), before);
     } finally {
+      console.error = original;
       await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -644,7 +649,7 @@ describe("process entry", () => {
     });
     let running;
     try {
-      await until(() => health);
+      await until(() => health && typeof release === "function");
       const early = await fetch(health.url);
       assert.equal(early.status, 503);
       const earlyBody = await early.json();
@@ -755,6 +760,11 @@ describe("process entry", () => {
       }), false],
       [new RpcRequestError({
         body: { method: "eth_getLogs" },
+        error: { code: -32602, message: "block range extends beyond current head block" },
+        url: "https://sepolia.base.org",
+      }), false],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
         error: { code: -32005, message: "too many results" },
         url: "https://sepolia.base.org",
       }), true],
@@ -780,7 +790,9 @@ describe("process entry", () => {
       };
       if (body.method === "eth_chainId") return send(200, { result: "0x14a34" });
       if (body.method === "eth_getCode") return send(200, { result: "0x60016000" });
-      if (body.method === "eth_blockNumber") return send(200, { result: `0x${head.toString(16)}` });
+      if (body.method === "eth_getBlockByNumber") {
+        return send(200, { result: { number: `0x${head.toString(16)}` } });
+      }
       if (body.method === "eth_getLogs") {
         const params = body.params?.[0] ?? {};
         const from = Number(BigInt(params.fromBlock));
@@ -834,7 +846,7 @@ describe("process entry", () => {
 
   it("keeps a keyed RPC URL out of /health and out of console.error", async () => {
     const dir = dbDir();
-    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
+    const keyUrl = "https://base-sepolia.rpc.invalid/v2/FAKE_SECRET_KEY_abc123";
     const logged = [];
     const original = console.error;
     console.error = (...args) => {
@@ -849,6 +861,74 @@ describe("process entry", () => {
       assert.equal(leaked.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(leaked.includes(keyUrl), false);
       assert.equal(leaked.includes("https://"), false);
+      const wss = redact("dial wss://base-sepolia.rpc.invalid/v2/WSSKEY1234567890", keyUrl);
+      assert.equal(wss.includes("wss://"), false);
+      assert.equal(wss.includes("WSSKEY1234567890"), false);
+      const encoded = redact("see https%3A%2F%2Fbase-sepolia.rpc.invalid%2Fv2%2FENC_SECRET_KEY", keyUrl);
+      assert.equal(encoded.includes("ENC_SECRET_KEY"), false);
+      assert.equal(encoded.includes("%3A%2F%2F"), false);
+      const segment = redact("path /v2/FAKE_SECRET_KEY_abc123 end", "");
+      assert.equal(segment.includes("FAKE_SECRET_KEY_abc123"), false);
+      const query = redact("https://rpc.invalid/v2?apikey=QUERYSECRET123456", "");
+      assert.equal(query.includes("QUERYSECRET123456"), false);
+      const assigned = redact("apikey=QUERYSECRET123456", "");
+      assert.equal(assigned.includes("QUERYSECRET123456"), false);
+      const jsonKey = redact('{"apiKey":"QUERYSECRET123456"}', "");
+      assert.equal(jsonKey.includes("QUERYSECRET123456"), false);
+      const bearer = redact("Authorization: Bearer QUERYSECRET123456", "");
+      assert.equal(bearer.includes("QUERYSECRET123456"), false);
+      const userinfo = redact("user:QUERYSECRET123456@rpc.invalid/v2", "");
+      assert.equal(userinfo.includes("QUERYSECRET123456"), false);
+      const doubled = redact("see https%253A%252F%252Frpc.invalid%252Fv2%252FENC_SECRET_KEY", "");
+      assert.equal(doubled.includes("ENC_SECRET_KEY"), false);
+      const authValue = "auth".repeat(2) + "91";
+      const authLine = redact(`header ?auth=${authValue} next`, "");
+      assert.equal(authLine.includes(authValue), false);
+      assert.match(authLine, /\?auth=\[redacted\]/);
+      const bareKey = "bare".repeat(3) + "91".repeat(2);
+      const bareLine = redact(`invalid api key ${bareKey} end`, "");
+      assert.equal(bareLine.includes(bareKey), false);
+      assert.match(bareLine, /invalid api key \[redacted\] end/);
+      const hexKey = "ab12".repeat(8);
+      const hexLine = redact(`project ${hexKey} end`, "");
+      assert.equal(hexKey.length, 32);
+      assert.equal(hexLine.includes(hexKey), false);
+      assert.match(hexLine, /project \[redacted\] end/);
+      const shortKey = "k7" + "m9".repeat(3);
+      const shortLine = redact(`path /v2/${shortKey} end`, "");
+      assert.equal(shortKey.length, 8);
+      assert.equal(shortLine.includes(shortKey), false);
+      assert.match(shortLine, /path \/v2\/\[redacted\] end/);
+      const dotted = redact(`path /v2/${shortKey}.tail end`, "");
+      assert.equal(dotted.includes(shortKey), false);
+      assert.equal(dotted.includes(".tail"), false);
+      const pathKey = "split".repeat(2) + "12";
+      const spaced = redact(`see https://rpc.invalid /v2/${pathKey} end`, "");
+      assert.equal(spaced.includes(pathKey), false);
+      assert.equal(spaced.includes("https://"), false);
+      assert.match(spaced, /see \[redacted-url\] end/);
+      const kept = redact("path /v2/ethereum end", "");
+      assert.equal(kept.includes("ethereum"), true);
+      const chainLabel = ["nd", "123", "456", "789"].join("-");
+      const chainHost = redact(`dial ${chainLabel}.rpc.invalid end`, "");
+      assert.equal(chainHost.includes(chainLabel), false);
+      assert.match(chainHost, /dial \[redacted-host\] end/);
+      const wordLabel = "quiet" + "harbor" + "stone";
+      const wordHost = redact(`dial ${wordLabel}.rpc.invalid end`, "");
+      assert.equal(wordHost.includes(wordLabel), false);
+      const hyphenLabel = ["quiet", "harbor"].join("-");
+      const hyphenHost = redact(`dial ${hyphenLabel}.rpc.invalid end`, "");
+      assert.equal(hyphenHost.includes(hyphenLabel), false);
+      const headKey = "ab12".repeat(8);
+      const tail = "TAILMARKER91";
+      const huge = `${headKey}${"m".repeat(32_000)}${tail}`;
+      const started = performance.now();
+      const clipped = redactShortMessage(huge, "");
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 50, `redact took ${elapsed}ms`);
+      assert.equal(clipped.includes(headKey), false);
+      assert.equal(clipped.includes(tail), false);
+      assert.ok(clipped.length < 600);
       running = await start({
         serve: true,
         port: 0,
@@ -877,7 +957,7 @@ describe("process entry", () => {
       const text = await response.text();
       assert.equal(text.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(text.includes(keyUrl), false);
-      assert.equal(text.includes("example-rpc.io"), false);
+      assert.equal(text.includes("rpc.invalid"), false);
       const body = JSON.parse(text);
       assert.equal(body.error, "rpc_error");
       assert.equal(body.ok, false);
@@ -885,7 +965,7 @@ describe("process entry", () => {
       assert.match(joined, /rpc_error/);
       assert.equal(joined.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(joined.includes(keyUrl), false);
-      assert.equal(joined.includes("example-rpc.io"), false);
+      assert.equal(joined.includes("rpc.invalid"), false);
       assert.equal(joined.includes("https://"), false);
     } finally {
       console.error = original;
@@ -896,10 +976,10 @@ describe("process entry", () => {
 
   it("does not print error messages or alternate URL forms from logFailure", async () => {
     const dir = dbDir();
-    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
-    const wssUrl = "wss://base-sepolia.example-rpc.io/v2/WSS_SECRET_KEY";
-    const encodedUrl = "https%3A%2F%2Fbase-sepolia.example-rpc.io%2Fv2%2FENC_SECRET_KEY";
-    const bareUrl = "base-sepolia.example-rpc.io/v2/BARE_SECRET_KEY";
+    const keyUrl = "https://base-sepolia.rpc.invalid/v2/FAKE_SECRET_KEY_abc123";
+    const wssUrl = "wss://base-sepolia.rpc.invalid/v2/WSS_SECRET_KEY";
+    const encodedUrl = "https%3A%2F%2Fbase-sepolia.rpc.invalid%2Fv2%2FENC_SECRET_KEY";
+    const bareUrl = "base-sepolia.rpc.invalid/v2/BARE_SECRET_KEY";
     const secretText = `${keyUrl} ${wssUrl} ${encodedUrl} ${bareUrl}`;
     const failure = new Error(`provider down ${secretText}`);
     failure.details = `details ${secretText}`;
@@ -999,41 +1079,60 @@ describe("process entry", () => {
     }
   });
 
-  it("runs the next pass after a pass rejects", async () => {
+  it("ends a network-error pass early and runs the next pass", async () => {
     const dir = dbDir();
     let mode = "idle";
-    const running = await start({
-      once: true,
-      env: {
-        CHAIN_ID: "84532",
-        POINTS_DB_PATH: join(dir, "ledger.sqlite"),
-        POINTS_LOG_RANGE: "5",
-      },
-      rpc: withCode({
-        async finalizedBlockNumber() {
-          if (mode === "idle") return ESCROW_START_BLOCK - 1;
-          return ESCROW_START_BLOCK + 4;
-        },
-        async getLogs() {
-          if (mode === "fail") {
-            const error = new Error("read ECONNRESET");
-            error.code = "ECONNRESET";
-            throw error;
-          }
-          return [];
-        },
-      }),
-    });
+    let current = 0;
+    const sleeps = [];
+    const paceNow = () => current;
+    const sleep = async (ms) => {
+      sleeps.push(ms);
+      current += ms;
+    };
+    const original = console.error;
+    console.error = () => {};
+    let running;
     try {
+      running = await start({
+        once: true,
+        paceNow,
+        sleep,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_LOG_RANGE: "5",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            if (mode === "idle") return ESCROW_START_BLOCK - 1;
+            return ESCROW_START_BLOCK + 4;
+          },
+          async getLogs() {
+            if (mode === "fail") {
+              const error = new Error("read ECONNRESET");
+              error.code = "ECONNRESET";
+              throw error;
+            }
+            return [];
+          },
+        }),
+      });
       mode = "fail";
-      await assert.rejects(() => running.pass(), /ECONNRESET/);
+      const failed = await running.pass();
+      assert.equal(failed.endedEarly, true);
+      assert.equal(failed.reason, "network_error");
+      assert.equal(failed.ok, true);
+      assert.equal(running.indexer.lastScannedBlock(), null);
+      assert.deepEqual(sleeps.filter((ms) => ms >= 1000), [1000, 2000, 4000]);
       mode = "ok";
       const again = await running.pass();
       assert.equal(again.skipped, false);
+      assert.equal(again.endedEarly, false);
       assert.equal(again.ok, true);
       assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
     } finally {
-      await running.stop();
+      console.error = original;
+      if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
