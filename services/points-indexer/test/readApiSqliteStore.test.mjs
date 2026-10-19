@@ -204,6 +204,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
     const store = createReadApiSqliteStore({ db: () => null });
     const config = store.getConfig();
     assert.equal(config.rule_version, null);
+    assert.equal(config.legal_notice_url, "");
     assert.deepEqual(config.weights, file.weights);
     assert.deepEqual(config.gates, file.gates);
     assert.ok(Object.values(config.weights).every((value) => value === null));
