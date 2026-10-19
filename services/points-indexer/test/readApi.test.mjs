@@ -2883,7 +2883,7 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(refused.allow(keyIp(0)).ok, false);
   });
 
-  it("sweeps a full fallback map at most once per window", () => {
+  it("sweeps a full map of under-limit fallback keys once when they expire and not again after the refill", () => {
     let now = 10_000;
     const limiter = createFallbackLimiter({
       clock: () => now,
@@ -2905,7 +2905,90 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + extra + i)).ok, true);
     }
     assert.ok(limiter.sweeps() - mid <= 1, `sweeps ${limiter.sweeps() - mid}`);
-    assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+    assert.equal(limiter.size(), extra);
+    const swept = limiter.sweeps();
+    const refillStart = DEFAULT_MAX_ENTRIES + extra * 2;
+    const refill = DEFAULT_MAX_ENTRIES - extra;
+    for (let i = 0; i < refill; i += 1) {
+      assert.equal(limiter.allow(keyIp(refillStart + i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(limiter.sweeps(), swept);
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(refillStart + refill + i)).ok, true);
+      assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+    }
+    assert.equal(limiter.sweeps(), swept);
+  });
+
+  it("admits a new fallback key after an at-limit map expires, refills, and one more window elapses", () => {
+    let now = 1_000_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 1,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    now += 60_000;
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    now += 60_000;
+    assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES * 2)).ok, true);
+  });
+
+  it("sweeps a full at-limit fallback map at most once for many new keys in that window", () => {
+    const limiter = createFallbackLimiter({
+      clock: () => 2_000_000,
+      rate: () => 1,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    const before = limiter.sweeps();
+    const extra = 256;
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, false);
+    }
+    assert.ok(limiter.sweeps() - before <= 1, `sweeps ${limiter.sweeps() - before}`);
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+  });
+
+  it("does not sweep again before the next expiry after a sweep that leaves fallback keys live", () => {
+    let now = 3_000_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 1,
+    });
+    const early = 8;
+    for (let i = 0; i < early; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    now += 30_000;
+    for (let i = early; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    now += 30_000;
+    const opened = limiter.sweeps();
+    assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES)).ok, true);
+    const afterSweep = limiter.sweeps();
+    assert.equal(afterSweep, opened + 1);
+    for (let i = 1; i < early; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(limiter.sweeps(), afterSweep);
+    const extra = 32;
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + early + i)).ok, false);
+    }
+    assert.equal(limiter.sweeps(), afterSweep);
+    assert.equal(limiter.allow(keyIp(early)).ok, false);
   });
 
   it("rejects a non-https origin, a tailed origin, and accepts one trailing slash", async () => {
