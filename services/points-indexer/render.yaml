@@ -10,6 +10,12 @@
 #
 # BASE_SEPOLIA_RPC_URL is a URL that may carry a key. It is dashboard-only
 # (sync: false) and has no value in this file. No signing key is read.
+#
+# POINTS_TRUSTED_PROXY_HOPS is 1: Render's load balancer is the one trusted
+# hop, and the client is the rightmost X-Forwarded-For entry. See the
+# indexer README for the Render article. POINTS_CLOUDFLARE_INGRESS is not
+# set. That flag must stay off for an origin that is reachable without
+# Cloudflare.
 
 services:
   - type: web
@@ -34,5 +40,7 @@ services:
         value: "200"
       - key: POINTS_MAX_WINDOWS_PER_PASS
         value: "500"
+      - key: POINTS_TRUSTED_PROXY_HOPS
+        value: "1"
       - key: BASE_SEPOLIA_RPC_URL
         sync: false

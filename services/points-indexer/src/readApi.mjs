@@ -15,7 +15,8 @@ export { pointsEnabled };
 export const DEFAULT_RATE_PER_MINUTE = 60;
 export const DEFAULT_PROXY_HOPS = 0;
 export const DEFAULT_WINDOW_MS = 60_000;
-export const DEFAULT_MAX_ENTRIES = 4096;
+export const DEFAULT_MAX_ENTRIES = 16384;
+export const COARSE_LIMIT_FACTOR = 8;
 export const DEFAULT_SWEEP_MS = 60_000;
 export const HISTORY_DEFAULT_LIMIT = 25;
 export const HISTORY_MAX_LIMIT = 100;
@@ -269,6 +270,42 @@ export function bucketClientAddress(address) {
   return `${prefix}::/64`;
 }
 
+/**
+ * A second limit for the whole prefix. IPv4 keys share a /24.
+ * IPv6 /64 buckets share a /48. Other keys have no coarse bucket.
+ * @param {string} key
+ * @returns {string | null}
+ */
+export function coarseBucket(key) {
+  if (typeof key !== "string" || key === "unknown") return null;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(key);
+  if (v4) return `${v4[1]}.${v4[2]}.${v4[3]}.0/24`;
+  const v6 = /^([0-9a-f]+):([0-9a-f]+):([0-9a-f]+):[0-9a-f]+::\/64$/.exec(key);
+  if (v6) return `${v6[1]}:${v6[2]}:${v6[3]}::/48`;
+  return null;
+}
+
+/**
+ * Config notice links are https URLs with no userinfo. Anything else is null.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function httpsNoticeUrl(value) {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (!url.hostname) return null;
+  return url.href;
+}
+
 function socketBucket(input) {
   const address = input?.remoteAddress ?? input?.socket?.remoteAddress;
   return bucketClientAddress(address) || "unknown";
@@ -302,29 +339,107 @@ export function clientIp(input, hops = DEFAULT_PROXY_HOPS, options = {}) {
   return bucketClientAddress(selected) || socket;
 }
 
+const OVERFLOW_KEY = "\0overflow";
+
+function liveStamps(map, id, now, windowMs) {
+  const stamps = map.get(id);
+  if (!stamps || stamps.length === 0) return [];
+  let start = 0;
+  while (start < stamps.length && now - stamps[start] >= windowMs) start += 1;
+  if (start === 0) return stamps;
+  if (start === stamps.length) return [];
+  return stamps.slice(start);
+}
+
+function retryAfter(stamps, now, windowMs) {
+  const retryAfterMs = stamps.length === 0 ? windowMs : Math.max(0, stamps[0] + windowMs - now);
+  return { ok: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
+}
+
 /**
  * In-memory window limiter. The sweep timer is unref'd so it does not
- * keep the process alive. Expired keys are dropped first. A new key is
- * refused when the map is still full, so a limited client is not reset.
- * @param {{ windowMs?: number, max?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
+ * keep the process alive. A request touches only its own key, its prefix
+ * key, and at most one eviction candidate. The timer drops expired keys.
+ * A limited key is never evicted. When every resident key is limited, new
+ * keys share one overflow bucket.
+ * @param {{ windowMs?: number, max?: number, coarseMax?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
  */
 export function createRateLimiter(options = {}) {
   const windowMs = Number.isInteger(options.windowMs) && options.windowMs > 0 ? options.windowMs : DEFAULT_WINDOW_MS;
   const max = Number.isInteger(options.max) && options.max > 0 ? options.max : DEFAULT_RATE_PER_MINUTE;
+  const coarseMax = Number.isInteger(options.coarseMax) && options.coarseMax > 0
+    ? options.coarseMax
+    : max * COARSE_LIMIT_FACTOR;
   const maxEntries = Number.isInteger(options.maxEntries) && options.maxEntries > 0
     ? options.maxEntries
     : DEFAULT_MAX_ENTRIES;
   const clock = typeof options.clock === "function" ? options.clock : Date.now;
   const sweepMs = Number.isInteger(options.sweepMs) && options.sweepMs > 0 ? options.sweepMs : DEFAULT_SWEEP_MS;
   const hits = new Map();
+  const coarseHits = new Map();
+  const idle = new Map();
+
+  const remember = (map, id, fresh, atCap) => {
+    if (map.has(id)) map.delete(id);
+    map.set(id, fresh);
+    if (map !== hits) return;
+    idle.delete(id);
+    if (!atCap && id !== OVERFLOW_KEY) idle.set(id, true);
+  };
+
+  const sweepMap = (map, now) => {
+    for (const [key, stamps] of map) {
+      const fresh = liveStamps(map, key, now, windowMs);
+      if (fresh.length === 0) {
+        map.delete(key);
+        if (map === hits) idle.delete(key);
+      } else if (fresh !== stamps) {
+        remember(map, key, fresh, map === hits && fresh.length >= max);
+      } else if (map === hits && fresh.length < max && key !== OVERFLOW_KEY) {
+        idle.set(key, true);
+      }
+    }
+  };
 
   const sweep = () => {
     const now = clock();
-    for (const [key, stamps] of hits) {
-      const fresh = stamps.filter((ts) => now - ts < windowMs);
-      if (fresh.length === 0) hits.delete(key);
-      else hits.set(key, fresh);
+    sweepMap(hits, now);
+    sweepMap(coarseHits, now);
+  };
+
+  const evictIdle = (now) => {
+    const nextIdle = idle.keys().next();
+    if (!nextIdle.done) {
+      hits.delete(nextIdle.value);
+      idle.delete(nextIdle.value);
+      return true;
     }
+    const oldest = hits.keys().next();
+    if (oldest.done) return false;
+    let id = oldest.value;
+    if (id === OVERFLOW_KEY) {
+      const rest = hits.keys();
+      rest.next();
+      const second = rest.next();
+      if (second.done) return false;
+      id = second.value;
+    }
+    const live = liveStamps(hits, id, now, windowMs);
+    if (live.length >= max) return false;
+    hits.delete(id);
+    idle.delete(id);
+    return true;
+  };
+
+  const chargeOverflow = (now) => {
+    const live = liveStamps(hits, OVERFLOW_KEY, now, windowMs);
+    if (live.length >= max) {
+      if (hits.has(OVERFLOW_KEY)) remember(hits, OVERFLOW_KEY, live, true);
+      return retryAfter(live, now, windowMs);
+    }
+    live.push(now);
+    remember(hits, OVERFLOW_KEY, live, live.length >= max);
+    return { ok: true };
   };
 
   const timer = setInterval(sweep, sweepMs);
@@ -339,24 +454,30 @@ export function createRateLimiter(options = {}) {
     },
     allow(key) {
       const now = clock();
-      for (const [entry, stamps] of hits) {
-        const live = stamps.filter((ts) => now - ts < windowMs);
-        if (live.length === 0) hits.delete(entry);
-        else if (live.length !== stamps.length) hits.set(entry, live);
-      }
       const id = String(key || "unknown");
-      const fresh = (hits.get(id) || []).filter((ts) => now - ts < windowMs);
-      if (fresh.length >= max) {
-        hits.set(id, fresh);
-        const retryAfterMs = Math.max(0, fresh[0] + windowMs - now);
-        return { ok: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
+      const clientLive = liveStamps(hits, id, now, windowMs);
+      if (clientLive.length >= max) {
+        remember(hits, id, clientLive, true);
+        return retryAfter(clientLive, now, windowMs);
       }
-      if (!hits.has(id) && hits.size >= maxEntries) {
-        return { ok: false, retryAfterSec: Math.max(1, Math.ceil(windowMs / 1000)) };
+      const coarse = coarseBucket(id);
+      let coarseLive = null;
+      if (coarse) {
+        coarseLive = liveStamps(coarseHits, coarse, now, windowMs);
+        if (coarseLive.length >= coarseMax) {
+          remember(coarseHits, coarse, coarseLive, false);
+          return retryAfter(coarseLive, now, windowMs);
+        }
       }
-      fresh.push(now);
-      if (hits.has(id)) hits.delete(id);
-      hits.set(id, fresh);
+      if (!hits.has(id) && hits.size >= maxEntries && !evictIdle(now)) {
+        return chargeOverflow(now);
+      }
+      clientLive.push(now);
+      remember(hits, id, clientLive, clientLive.length >= max);
+      if (coarse) {
+        coarseLive.push(now);
+        remember(coarseHits, coarse, coarseLive, false);
+      }
       return { ok: true };
     },
   };
@@ -368,13 +489,14 @@ export function createRateLimiter(options = {}) {
  * getLedgerSummary(address) returns points_total, rows_count, and first_activity_utc_day.
  * listLedgerRows(address, { limit, after }) returns row objects.
  * after is null or { block_number, log_index, action, utc_day }. seq is not a cursor.
- * getConfig() returns weights, gates, and rule_version.
+ * getConfig() returns weights, gates, rule_version, and legal_notice_url.
  * getCursor() may set stale when the last pass failed.
  */
 
-function disclaimer() {
+function disclaimer(config) {
   const links = {};
   for (const key of DISCLAIMER_LINK_SLOTS) links[key] = null;
+  links.legal_notice_url = httpsNoticeUrl(config?.legal_notice_url);
   return { text: DISCLAIMER_TEXT, links };
 }
 
@@ -609,6 +731,7 @@ export function createReadApi(options = {}) {
   const limiter = createRateLimiter({
     windowMs: config.windowMs,
     max: rateMax,
+    coarseMax: config.coarseMax,
     maxEntries: config.maxEntries,
     clock,
     sweepMs: config.sweepMs,
@@ -700,28 +823,17 @@ export function createReadApi(options = {}) {
     const pathname = String(input?.path || "/").replace(/\/+$/, "") || "/";
     const query = input?.query ?? {};
     const route = routeOf(pathname);
-    if (method === "OPTIONS" && route) {
+    if (method === "OPTIONS" && route && input?.duplicateQuery !== true) {
       return result(204, null, input, { allow: ALLOW });
     }
-    if (!route) {
-      if (method !== "OPTIONS") {
-        const limited = rateLimit(input);
-        if (limited) return finish(input, limited);
-      }
-      return finish(input, fail(404, "not_found", input));
-    }
+    const counted = rateLimit(input);
+    if (counted) return finish(input, counted);
+    if (input?.duplicateQuery === true) return finish(input, fail(400, "duplicate_query", input));
+    if (!route) return finish(input, fail(404, "not_found", input));
     if (method !== "GET" && !head) {
-      if (method !== "OPTIONS") {
-        const limited = rateLimit(input);
-        if (limited) return finish(input, limited);
-      }
       return finish(input, fail(405, "method_not_allowed", input, { allow: ALLOW }));
     }
-    if (!parseChain(query.chainId).ok) {
-      const limited = rateLimit(input);
-      if (limited) return finish(input, limited);
-      return finish(input, fail(400, "wrong_chain", input));
-    }
+    if (!parseChain(query.chainId).ok) return finish(input, fail(400, "wrong_chain", input));
 
     let wallet = null;
     let limit = null;
@@ -731,37 +843,21 @@ export function createReadApi(options = {}) {
       try {
         addressText = decodeURIComponent(route.address);
       } catch {
-        const limited = rateLimit(input);
-        if (limited) return finish(input, limited);
         return finish(input, fail(400, "invalid_address", input));
       }
-      if (!ADDRESS.test(addressText)) {
-        const limited = rateLimit(input);
-        if (limited) return finish(input, limited);
-        return finish(input, fail(400, "invalid_address", input));
-      }
+      if (!ADDRESS.test(addressText)) return finish(input, fail(400, "invalid_address", input));
       wallet = addressText.toLowerCase();
       if (route.kind === "history") {
         const parsedLimit = parseLimit(query.limit);
-        if (!parsedLimit.ok) {
-          const limited = rateLimit(input);
-          if (limited) return finish(input, limited);
-          return finish(input, fail(400, "invalid_limit", input));
-        }
+        if (!parsedLimit.ok) return finish(input, fail(400, "invalid_limit", input));
         const cursor = parseCursor(query.cursor);
-        if (!cursor.ok) {
-          const limited = rateLimit(input);
-          if (limited) return finish(input, limited);
-          return finish(input, fail(400, "invalid_cursor", input));
-        }
+        if (!cursor.ok) return finish(input, fail(400, "invalid_cursor", input));
         limit = parsedLimit.limit;
         after = cursor.after;
       }
     }
 
     if (breaker.blocked()) return finish(input, fail(503, "points_unavailable", input));
-    const limited = rateLimit(input);
-    if (limited) return finish(input, limited);
     breaker.begin();
     try {
       let outcome;
@@ -773,15 +869,16 @@ export function createReadApi(options = {}) {
           weights: points.weights,
           gates: points.gates,
           rule_version: points.rule_version,
-          disclaimer: disclaimer(),
+          disclaimer: disclaimer(points),
         }, input);
       } else {
         const sync = readSync(store);
+        const notice = disclaimer(store.getConfig());
         if (route.kind === "address") {
-          outcome = result(200, addressBody(sync, wallet, store.getLedgerSummary(wallet)), input);
+          outcome = result(200, { ...addressBody(sync, wallet, store.getLedgerSummary(wallet)), disclaimer: notice }, input);
         } else {
           const rows = store.listLedgerRows(wallet, { limit: limit + 1, after });
-          outcome = result(200, historyBody(sync, wallet, limit, rows), input);
+          outcome = result(200, { ...historyBody(sync, wallet, limit, rows), disclaimer: notice }, input);
         }
       }
       breaker.success();
@@ -795,7 +892,6 @@ export function createReadApi(options = {}) {
   function handle(input) {
     try {
       if (enabledFn() !== true) return finish(input, fail(503, "points_disabled", input));
-      if (input?.duplicateQuery === true) return finish(input, fail(400, "duplicate_query", input));
       try {
         return serve(input);
       } catch {

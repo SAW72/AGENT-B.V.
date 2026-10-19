@@ -9,13 +9,16 @@ import { ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { loadConfig, start } from "../src/main.mjs";
 import {
   bucketClientAddress,
+  coarseBucket,
   createRateLimiter,
   clientIp,
   createReadApi,
+  DEFAULT_MAX_ENTRIES,
   DISCLAIMER_TEXT,
   HISTORY_DEFAULT_LIMIT,
   HISTORY_MAX_LIMIT,
   historyRank,
+  httpsNoticeUrl,
   pointsEnabled,
   READ_ENV_ALLOWLIST,
   readSettings,
@@ -24,6 +27,7 @@ import {
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
 const SEPOLIA_FILE = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
+const RENDER_FILE = fileURLToPath(new URL("../render.yaml", import.meta.url));
 const README_FILE = fileURLToPath(new URL("../README.md", import.meta.url));
 const FLAG_SOURCE = fileURLToPath(new URL("../src/pointsFlag.mjs", import.meta.url));
 const READ_SOURCE = fileURLToPath(new URL("../src/readApi.mjs", import.meta.url));
@@ -735,33 +739,101 @@ describe("points read API", { concurrency: false }, () => {
     });
   });
 
-  it("refuses a new limiter key when the map is still full", async () => {
+  it("keeps limited keys and shares one overflow bucket when the map is full", async () => {
     await withServer({
       enabled: () => true,
-      config: { ratePerMinute: 1, maxEntries: 2, trustedProxyHops: 1 },
+      config: { ratePerMinute: 1, maxEntries: 2, coarseMax: 100, trustedProxyHops: 1 },
     }, async (base) => {
       const headers = (ip) => ({ "x-forwarded-for": ip });
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 200);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 429);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 200);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.3") })).response.status, 429);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 429);
+      const status = async (ip) => (await request(base, "/v1/points/config", { headers: headers(ip) })).response.status;
+      assert.equal(await status("10.0.0.1"), 200);
+      assert.equal(await status("10.0.0.1"), 429);
+      assert.equal(await status("10.0.0.2"), 200);
+      assert.equal(await status("10.1.0.3"), 200);
+      assert.equal(await status("10.2.0.4"), 429);
+      assert.equal(await status("10.0.0.1"), 429);
+      assert.equal(await status("10.0.0.2"), 429);
     });
   });
 
-  it("drops expired limiter keys before refusing a new one", async () => {
+  it("drops an expired limiter key before the map stays closed", async () => {
     let now = 0;
     await withServer({
       enabled: () => true,
       now: () => now,
-      config: { ratePerMinute: 1, maxEntries: 1, windowMs: 1_000, trustedProxyHops: 1 },
+      config: { ratePerMinute: 1, maxEntries: 1, coarseMax: 100, windowMs: 1_000, trustedProxyHops: 1 },
     }, async (base) => {
       const headers = (ip) => ({ "x-forwarded-for": ip });
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 200);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 429);
+      const status = async (ip) => (await request(base, "/v1/points/config", { headers: headers(ip) })).response.status;
+      assert.equal(await status("10.0.0.1"), 200);
+      assert.equal(await status("10.1.0.2"), 200);
+      assert.equal(await status("10.2.0.3"), 429);
       now = 1_000;
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 200);
+      assert.equal(await status("10.2.0.3"), 200);
     });
+  });
+
+  it("does not let one IPv6 /48 flood lock out a new IPv4 client", () => {
+    const limiter = createRateLimiter({
+      max: 5,
+      coarseMax: 4,
+      maxEntries: 64,
+      clock: () => 1_000,
+      sweepMs: 60_000,
+    });
+    try {
+      let admitted = 0;
+      for (let index = 0; index < 30; index += 1) {
+        const key = bucketClientAddress(`2001:db8:1:${index.toString(16)}::1`);
+        assert.equal(coarseBucket(key), "2001:db8:1::/48");
+        if (limiter.allow(key).ok) admitted += 1;
+      }
+      assert.equal(admitted, 4);
+      assert.ok(limiter.size() < 64);
+      const ipv4 = bucketClientAddress("198.51.100.7");
+      assert.equal(coarseBucket(ipv4), "198.51.100.0/24");
+      assert.equal(limiter.allow(ipv4).ok, true);
+      assert.equal(limiter.allow(bucketClientAddress("2001:db8:2:1::1")).ok, true);
+      let same24 = 0;
+      for (let host = 1; host <= 10; host += 1) {
+        if (limiter.allow(`203.0.113.${host}`).ok) same24 += 1;
+      }
+      assert.equal(same24, 4);
+      assert.equal(limiter.allow("203.0.114.1").ok, true);
+    } finally {
+      limiter.close();
+    }
+  });
+
+  it("keeps per-request limiter cost flat when the map is full", () => {
+    assert.equal(DEFAULT_MAX_ENTRIES, 16384);
+    function timeNewKeys(entries) {
+      const limiter = createRateLimiter({
+        max: 1,
+        coarseMax: 1_000_000,
+        maxEntries: entries,
+        clock: () => 0,
+        sweepMs: 1_000_000,
+      });
+      try {
+        for (let index = 0; index < entries; index += 1) {
+          assert.equal(limiter.allow(`k${index}`).ok, true);
+        }
+        assert.equal(limiter.size(), entries);
+        const start = performance.now();
+        for (let index = 0; index < 80; index += 1) limiter.allow(`new${index}`);
+        const elapsed = performance.now() - start;
+        assert.equal(limiter.allow("k0").ok, false);
+        assert.equal(limiter.size(), entries + 1);
+        return elapsed;
+      } finally {
+        limiter.close();
+      }
+    }
+    timeNewKeys(32);
+    const small = timeNewKeys(128);
+    const large = timeNewKeys(8192);
+    assert.ok(large < small * 4 + 25, `small ${small}ms large ${large}ms`);
   });
 
   it("resets the rate window from the injected clock", async () => {
@@ -1739,6 +1811,79 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(address.json.disclaimer.text, DISCLAIMER_TEXT);
       assert.equal(Object.hasOwn(config.json.disclaimer.links, "legal_notice_url"), true);
     });
+    await withServer({ enabled: () => true, config: { ratePerMinute: 3 } }, async (base) => {
+      for (let index = 0; index < 3; index += 1) {
+        const repeated = await request(base, "/v1/points/config?chainId=84532&chainId=1");
+        assert.equal(repeated.response.status, 400);
+        assert.equal(repeated.json.error, "duplicate_query");
+      }
+      const blocked = await request(base, "/v1/points/config");
+      assert.equal(blocked.response.status, 429);
+      const preflight = await request(base, "/v1/points/config", { method: "OPTIONS" });
+      assert.equal(preflight.response.status, 204);
+    });
+  });
+
+  it("reads an https legal notice from config and drops any other scheme", async () => {
+    assert.equal(httpsNoticeUrl("https://notice.invalid/legal"), "https://notice.invalid/legal");
+    assert.equal(httpsNoticeUrl("http://notice.invalid/legal"), null);
+    assert.equal(httpsNoticeUrl("https://user:secret@notice.invalid/legal"), null);
+    assert.equal(httpsNoticeUrl("https://user@notice.invalid/legal"), null);
+    assert.equal(httpsNoticeUrl(""), null);
+    assert.equal(httpsNoticeUrl("   "), null);
+    assert.equal(httpsNoticeUrl(null), null);
+    const notice = "https://notice.invalid/legal";
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        config: { weights: {}, gates: {}, rule_version: null, legal_notice_url: notice },
+      }),
+      config: { ratePerMinute: 20 },
+    }, async (base) => {
+      const config = await request(base, "/v1/points/config?chainId=84532");
+      assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
+      assert.equal(config.json.disclaimer.links.legal_notice_url, notice);
+      const address = await request(base, `/v1/points/${ADDRESS}?notice=http://notice.invalid/other`);
+      assert.equal(address.json.disclaimer.text, DISCLAIMER_TEXT);
+      assert.equal(address.json.disclaimer.links.legal_notice_url, notice);
+      const history = await request(base, `/v1/points/${ADDRESS}/history`);
+      assert.equal(history.json.disclaimer.links.legal_notice_url, notice);
+    });
+    await withServer({
+      enabled: () => true,
+      store: fakeStore({
+        config: { weights: {}, gates: {}, rule_version: null, legal_notice_url: "http://notice.invalid/legal" },
+      }),
+      config: { ratePerMinute: 10 },
+    }, async (base) => {
+      const config = await request(base, "/v1/points/config");
+      assert.equal(config.json.disclaimer.links.legal_notice_url, null);
+    });
+  });
+
+  it("loads render.yaml with one trusted proxy hop and no Cloudflare ingress flag", () => {
+    const text = readFileSync(RENDER_FILE, "utf8");
+    assert.equal(/^\s*- key:\s*POINTS_CLOUDFLARE_INGRESS\s*$/m.test(text), false);
+    const env = {};
+    let key = null;
+    for (const line of text.split("\n")) {
+      const keyMatch = /^\s*- key:\s*(\S+)\s*$/.exec(line);
+      if (keyMatch) {
+        key = keyMatch[1];
+        continue;
+      }
+      if (!key) continue;
+      const valueMatch = /^\s*value:\s*(?:"([^"]*)"|(\S+))\s*$/.exec(line);
+      if (valueMatch) {
+        env[key] = valueMatch[1] ?? valueMatch[2];
+        key = null;
+      }
+    }
+    assert.equal(env.POINTS_TRUSTED_PROXY_HOPS, "1");
+    assert.equal(Object.hasOwn(env, "POINTS_CLOUDFLARE_INGRESS"), false);
+    const settings = readSettings(env);
+    assert.equal(settings.trustedProxyHops, 1);
+    assert.equal(settings.cloudflareIngress, false);
   });
 
   it("reads CF-Connecting-IP only when Cloudflare ingress is declared", async () => {

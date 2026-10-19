@@ -35,6 +35,13 @@ function scalarOrNull(value) {
   return null;
 }
 
+function loadLegalNoticeUrl() {
+  const filePath = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
+  const raw = JSON.parse(readFileSync(filePath, "utf8"));
+  const value = raw?.disclaimer_links?.legal_notice_url;
+  return typeof value === "string" ? value : null;
+}
+
 function loadPointsFile() {
   const filePath = fileURLToPath(new URL("../config/points.json", import.meta.url));
   const raw = JSON.parse(readFileSync(filePath, "utf8"));
@@ -44,7 +51,12 @@ function loadPointsFile() {
   for (const key of GATE_KEYS) gates[key] = scalarOrNull(raw?.gates?.[key]);
   const rule = raw?.rule_version;
   const ruleVersion = rule == null ? null : (typeof rule === "string" ? rule : null);
-  return { weights, gates, rule_version: ruleVersion };
+  return {
+    weights,
+    gates,
+    rule_version: ruleVersion,
+    legal_notice_url: loadLegalNoticeUrl(),
+  };
 }
 
 function emptyCursor() {
