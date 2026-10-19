@@ -19,6 +19,7 @@ type HealthBody = {
   error?: string;
   removed_finalized?: number;
   rebuild_capped?: boolean;
+  error_backoff_ms?: number;
 };
 
 export class PointsObject extends DurableObject<Env> {
@@ -68,6 +69,8 @@ export class PointsObject extends DurableObject<Env> {
     const anomalies = metaInt(this.ctx.storage.sql, "removed_finalized");
     if (anomalies != null && anomalies > 0) body.removed_finalized = anomalies;
     if (metaGet(this.ctx.storage.sql, "rebuild_capped") === "1") body.rebuild_capped = true;
+    const backoff = metaInt(this.ctx.storage.sql, "error_backoff_ms");
+    if (backoff != null && backoff > 0) body.error_backoff_ms = backoff;
     const lastError = metaGet(this.ctx.storage.sql, "last_error");
     const early = metaGet(this.ctx.storage.sql, "early_reason");
     if (!decision.ok && lastError) body.error = lastError;

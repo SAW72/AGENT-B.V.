@@ -50,13 +50,14 @@ class_name = "PointsObject"
 # counters stay separate. Deploy does not create them. They are not account
 # ids and not secrets. Two bindings that reuse one id share counters.
 # 1001 is the number in Cloudflare's docs; do not use it.
-# /v1/points is 60 per 60 seconds, one bucket per client address.
+# /v1/points is 20 per 60 seconds, one bucket per client address.
+# One client stays under the location's 50 per minute global wake cap.
 [[ratelimits]]
 name = "POINTS_RATE_LIMITER"
 namespace_id = "84532001"
 
 [ratelimits.simple]
-limit = 60
+limit = 20
 period = 60
 
 # Enabled /health is 12 per 60 seconds, one bucket per client address.

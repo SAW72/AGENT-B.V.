@@ -12,6 +12,12 @@ describe("legal notice link", () => {
     assert.equal(httpsLink(""), null);
     assert.equal(httpsLink("   "), null);
     assert.equal(httpsLink(null), null);
+    assert.equal(httpsLink("data:text/html,hi"), null);
+    assert.equal(httpsLink("/legal"), null);
+    assert.equal(httpsLink("legal"), null);
+    assert.equal(httpsLink("https:example.com"), null);
+    assert.equal(httpsLink("https://user:pass@example.com/legal"), null);
+    assert.equal(httpsLink("HTTPS://Example.com/Legal"), "https://example.com/Legal");
 
     const raw = JSON.parse(readFileSync(new URL("../../config/reputation/sepolia.json", import.meta.url), "utf8"));
     raw.effective_from_block = 0;
@@ -23,5 +29,11 @@ describe("legal notice link", () => {
     assert.equal(normalizeVersion(raw).disclaimer_links.legal_notice_url, null);
     raw.disclaimer_links.legal_notice_url = "https://example.com/legal";
     assert.equal(normalizeVersion(raw).disclaimer_links.legal_notice_url, "https://example.com/legal");
+    raw.disclaimer_links.as_is = "http://example.com/as-is";
+    assert.equal(normalizeVersion(raw).disclaimer_links.as_is, null);
+    raw.disclaimer_links.master_disclaimer = "data:text/html,hi";
+    assert.equal(normalizeVersion(raw).disclaimer_links.master_disclaimer, null);
+    raw.disclaimer_links.not_investment = "HTTPS://Example.com/Legal";
+    assert.equal(normalizeVersion(raw).disclaimer_links.not_investment, "https://example.com/Legal");
   });
 });

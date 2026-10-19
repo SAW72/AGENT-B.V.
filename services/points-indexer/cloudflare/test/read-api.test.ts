@@ -144,14 +144,22 @@ describe("points read API", () => {
 
   it("rejects a repeated query param and a missing client address", async () => {
     const address = await wallet();
+    const origin = "https://agent-bv.pages.dev";
     const repeated = await SELF.fetch(`https://points.test/v1/points/${address}?cursor=a&cursor=b`, {
-      headers: { "CF-Connecting-IP": "203.0.113.30" },
+      headers: { "CF-Connecting-IP": "203.0.113.30", Origin: origin },
     });
     expect(repeated.status).toBe(400);
     expect(await repeated.json()).toEqual({ ok: false, error: "duplicate_query" });
-    const options = await SELF.fetch(`https://points.test/v1/points/${address}?x=1&x=2`, { method: "OPTIONS" });
+    expect(repeated.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(repeated.headers.get("access-control-allow-methods")).toContain("GET");
+    const options = await SELF.fetch(`https://points.test/v1/points/${address}?x=1&x=2`, {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
     expect(options.status).toBe(400);
     expect(await options.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expect(options.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(options.headers.get("access-control-allow-methods")).toContain("GET");
     const missing = await SELF.fetch(`https://points.test/v1/points/${address}`);
     expect(missing.status).toBe(400);
     expect(await missing.json()).toEqual({ ok: false, error: "client_address_required" });
@@ -160,10 +168,17 @@ describe("points read API", () => {
     expect(await unknownPath.json()).toEqual({ ok: false, error: "duplicate_query" });
   });
 
-  it("accepts only an https legal notice link", () => {
+  it("accepts only an https link with a host and no userinfo", () => {
     expect(httpsUrl("https://example.com/legal")).toBe("https://example.com/legal");
     expect(httpsUrl("http://example.com/legal")).toBeNull();
     expect(httpsUrl("")).toBeNull();
+    expect(httpsUrl("data:text/html,hi")).toBeNull();
+    expect(httpsUrl("/legal")).toBeNull();
+    expect(httpsUrl("legal")).toBeNull();
+    expect(httpsUrl("https:example.com")).toBeNull();
+    expect(httpsUrl("https://user:pass@example.com/legal")).toBeNull();
+    expect(httpsUrl("https://user@example.com/legal")).toBeNull();
+    expect(httpsUrl("HTTPS://Example.com/Legal")).toBe("https://example.com/Legal");
   });
 
   it("drops client addresses and header secrets from log details", () => {
@@ -179,12 +194,21 @@ describe("points read API", () => {
     expect(detail).not.toContain("abcdef");
     expect(detail).not.toContain("rpc.test");
     expect(detail).toContain("[redacted]");
+    const tail = "dead";
+    const addressHex = "00".repeat(18) + tail;
+    const padded = `0x${"00".repeat(12)}${addressHex}`;
+    expect(addressHex).toHaveLength(40);
+    expect(padded).toHaveLength(66);
+    const paddedDetail = publicDetail(`word ${padded} end`);
+    expect(paddedDetail).not.toContain(tail);
+    expect(paddedDetail).not.toContain(addressHex);
+    expect(paddedDetail).toContain("[redacted]");
   });
 
   it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {
     const address = await wallet();
     const path = `https://points.test/v1/points/${address}`;
-    for (let index = 0; index < 60; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       const response = await SELF.fetch(path, {
         headers: {
           "CF-Connecting-IP": "203.0.113.8",

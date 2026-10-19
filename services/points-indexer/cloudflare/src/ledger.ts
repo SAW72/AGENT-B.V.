@@ -341,7 +341,13 @@ function upsertRaw(sql: Sql, chainId: number, log: ReturnType<typeof normalizeLo
   return 0;
 }
 
-export function commitScanWindow(storage: Storage, logs: unknown[], scannedThrough: number, chainId = CHAIN_ID) {
+export function commitScanWindow(
+  storage: Storage,
+  logs: unknown[],
+  scannedThrough: number,
+  chainId = CHAIN_ID,
+  finalizedHead: number | null = null,
+) {
   if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
   if (!Number.isInteger(scannedThrough) || scannedThrough < 0) throw new PointsError("bad_cursor");
   const previous = lastScannedBlock(storage.sql);
@@ -350,7 +356,8 @@ export function commitScanWindow(storage: Storage, logs: unknown[], scannedThrou
   let inserted = 0;
   let removed = 0;
   let anomalies = 0;
-  const finalized = finalizedBlock(storage.sql);
+  // This alarm's RPC finalized head. The stored head is behind the window, so it cannot decide.
+  const finalized = Number.isInteger(finalizedHead) && (finalizedHead as number) >= 0 ? finalizedHead : null;
   storage.transactionSync(() => {
     for (const log of normalized) {
       if (log.removed) {

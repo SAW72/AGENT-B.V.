@@ -29,6 +29,7 @@ export function createSubrequestMeter(max = SUBREQUEST_BUDGET) {
 
 const URL_PATTERN = /https?:\/\/\S+/gi;
 
+const WORD_32 = /0x[0-9a-f]{64}\b/gi;
 const WALLET_ADDRESS = /0x[0-9a-f]{40}\b/gi;
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const IPV6 = /(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}/gi;
@@ -44,6 +45,7 @@ export function redact(text: string, rpcUrl?: string) {
 export function publicDetail(text: string, rpcUrl?: string) {
   return redact(text, rpcUrl)
     .replace(SENSITIVE_HEADER, "[redacted]")
+    .replace(WORD_32, "[redacted]")
     .replace(WALLET_ADDRESS, "[redacted]")
     .replace(IPV4, "[redacted]")
     .replace(IPV6, "[redacted]");

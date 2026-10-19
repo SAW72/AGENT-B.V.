@@ -31,16 +31,19 @@ function guessWei(node, label) {
   return BigInt(value);
 }
 
-/** Keep an https link. http, garbage, and empty become null. */
+/** Keep an https URL with a host and no userinfo. Anything else becomes null. */
 export function httpsLink(value) {
   const text = String(value ?? "").trim();
-  if (!text) return null;
+  if (!text || !/^https:\/\//i.test(text)) return null;
   try {
-    if (new URL(text).protocol !== "https:") return null;
+    const url = new URL(text);
+    if (url.protocol !== "https:") return null;
+    if (url.username !== "" || url.password !== "") return null;
+    if (!url.hostname) return null;
+    return url.href;
   } catch {
     return null;
   }
-  return text;
 }
 
 export function normalizeVersion(raw) {
@@ -113,12 +116,12 @@ export function normalizeVersion(raw) {
     season: normalizeSeason(raw),
     disclaimer: String(raw.display?.disclaimer || ""),
     disclaimer_links: {
-      master_disclaimer: String(raw.disclaimer_links?.master_disclaimer || ""),
+      master_disclaimer: httpsLink(raw.disclaimer_links?.master_disclaimer),
       legal_notice_url: httpsLink(raw.disclaimer_links?.legal_notice_url),
-      as_is: String(raw.disclaimer_links?.as_is || ""),
-      not_investment: String(raw.disclaimer_links?.not_investment || ""),
-      eligibility_notice: String(raw.disclaimer_links?.eligibility_notice || ""),
-      abuse_policy: String(raw.disclaimer_links?.abuse_policy || ""),
+      as_is: httpsLink(raw.disclaimer_links?.as_is),
+      not_investment: httpsLink(raw.disclaimer_links?.not_investment),
+      eligibility_notice: httpsLink(raw.disclaimer_links?.eligibility_notice),
+      abuse_policy: httpsLink(raw.disclaimer_links?.abuse_policy),
     },
     caps_label: String(raw.display?.caps_label || "DRAFT/GUESS"),
     read_api: {

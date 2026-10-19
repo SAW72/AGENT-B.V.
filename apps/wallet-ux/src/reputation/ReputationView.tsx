@@ -89,9 +89,13 @@ function markIntroduced(): void {
 
 function safeHref(value: string | null): string | null {
   if (!value) return null
+  const text = value.trim()
+  if (!/^https:\/\//i.test(text)) return null
   try {
-    const url = new URL(value)
+    const url = new URL(text)
     if (url.protocol !== "https:") return null
+    if (url.username !== "" || url.password !== "") return null
+    if (!url.hostname) return null
     return url.toString()
   } catch {
     return null

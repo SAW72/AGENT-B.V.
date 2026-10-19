@@ -25,6 +25,8 @@ type Storage = {
 
 const CATCH_UP_MS = 1_000;
 const STEADY_MS = 15_000;
+const ERROR_BACKOFF_START_MS = 1_000;
+const ERROR_BACKOFF_CAP_MS = 15 * 60 * 1000;
 export const MAX_ALARM_WALL_MS = 20_000;
 
 function numericCode(value: unknown) {
@@ -147,9 +149,32 @@ export async function runAlarm(options: {
   let pollMs = STEADY_MS;
   let deferMs = 0;
 
+  const fast = String(env.POINTS_FAST_PACE) === "1";
+
   const schedule = async (behind: number) => {
     const base = behind > 0 ? CATCH_UP_MS : pollMs;
     const delay = Math.max(base, deferMs);
+    await storage.setAlarm(now() + delay);
+    return delay;
+  };
+
+  // Non-config failures wait 1s, then double, and stop at 15 minutes.
+  // Config errors stay on POINTS_POLL_MS and do not grow this counter.
+  const scheduleError = async (defer: number) => {
+    let prior = 0;
+    try {
+      prior = metaInt(storage.sql, "error_backoff_ms") ?? 0;
+    } catch {
+      prior = 0;
+    }
+    const base = prior > 0 ? Math.min(ERROR_BACKOFF_CAP_MS, prior * 2) : ERROR_BACKOFF_START_MS;
+    const jitter = fast ? 0 : jitterMs();
+    const delay = Math.min(ERROR_BACKOFF_CAP_MS, Math.max(base + jitter, defer));
+    try {
+      metaSet(storage.sql, "error_backoff_ms", String(delay));
+    } catch {
+      // Schema or storage failed. Still reschedule below.
+    }
     await storage.setAlarm(now() + delay);
     return delay;
   };
@@ -162,7 +187,6 @@ export async function runAlarm(options: {
     if (String(env.CHAIN_ID ?? "").trim() !== String(CHAIN_ID)) {
       throw new Error(`CHAIN_ID must be ${CHAIN_ID}`);
     }
-    const fast = env.POINTS_FAST_PACE === "1";
     if (!rpcUrl) throw new Error("missing_rpc");
 
     const scan = createScanPacer({
@@ -205,10 +229,11 @@ export async function runAlarm(options: {
       if (storedChain == null || rpcHead > storedChain) metaSet(storage.sql, "chain_head", String(rpcHead));
     }
     const head = rpcHead;
-    const previousCursor = lastScannedBlock(storage.sql);
+    const storedCursor = lastScannedBlock(storage.sql);
+    const previousCursor = storedCursor == null ? null : Math.max(storedCursor, ESCROW_START_BLOCK - 1);
     const origin = previousCursor == null ? ESCROW_START_BLOCK - 1 : previousCursor;
     const scanHead = Math.min(head, origin + maxWindows * logRange);
-    let from = previousCursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, previousCursor + 1);
+    let from = previousCursor == null ? ESCROW_START_BLOCK : previousCursor + 1;
     let window = metaInt(storage.sql, "learned_window") ?? logRange;
     const storedCeiling = metaInt(storage.sql, "window_ceiling");
     if (storedCeiling != null) window = Math.min(window, storedCeiling);
@@ -246,7 +271,7 @@ export async function runAlarm(options: {
         }
         throw error;
       }
-      const committed = commitScanWindow(storage, logs, to, CHAIN_ID);
+      const committed = commitScanWindow(storage, logs, to, CHAIN_ID, head);
       inserted += committed.inserted;
       removed += committed.removed;
       committedWindows += 1;
@@ -279,8 +304,7 @@ export async function runAlarm(options: {
           message: "ledger_error",
           detail: publicDetail(error instanceof Error ? error.message : "", rpcUrl),
         }));
-        const cursor = lastScannedBlock(storage.sql);
-        await schedule(Math.max(1, blocksBehind(head, cursor)));
+        await scheduleError(0);
         return { ok: false, error: "ledger_error", rebuilds: 0 };
       }
     }
@@ -292,14 +316,16 @@ export async function runAlarm(options: {
       metaSet(storage.sql, "stale", "1");
       metaSet(storage.sql, "pass_completed", "1");
       console.error(JSON.stringify({ message: "pass_ended_early", reason: earlyReason }));
+      await scheduleError(deferMs);
     } else {
       metaSet(storage.sql, "last_error", "");
       metaSet(storage.sql, "early_reason", stopReason ?? "");
       metaSet(storage.sql, "stale", "0");
       metaSet(storage.sql, "pass_completed", "1");
       metaSet(storage.sql, "last_pass_at", String(now()));
+      metaSet(storage.sql, "error_backoff_ms", "0");
+      await schedule(behind);
     }
-    await schedule(behind);
     return {
       ok: true,
       endedEarly: earlyReason != null || stopReason != null,
@@ -321,10 +347,8 @@ export async function runAlarm(options: {
       message: code,
       detail: publicDetail(error instanceof Error ? error.message : "", rpcUrl),
     }));
-    const cursor = lastScannedBlock(storage.sql);
-    const storedHead = finalizedBlock(storage.sql);
-    const behind = code === "config_error" ? 0 : (storedHead == null ? 1 : Math.max(1, blocksBehind(storedHead, cursor)));
-    await schedule(behind);
+    if (code === "config_error") await schedule(0);
+    else await scheduleError(0);
     return { ok: false, error: code };
   }
 }

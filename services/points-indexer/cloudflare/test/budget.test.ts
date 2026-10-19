@@ -25,7 +25,7 @@ describe("points request budget", () => {
     expect(await healthOther.json()).toEqual({ ok: false, error: "duplicate_query" });
 
     const readHeaders = { "CF-Connecting-IP": "203.0.113.60" };
-    for (let index = 0; index < 60; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       const response = await SELF.fetch("https://points.test/v1/points/config?x=1&x=2", { headers: readHeaders });
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ ok: false, error: "duplicate_query" });

@@ -111,25 +111,23 @@ function encodeCursor(row: { block_number: number; log_index: number; action: st
 
 export function httpsUrl(value: unknown) {
   const text = String(value ?? "").trim();
-  if (!text) return null;
+  if (!text || !/^https:\/\//i.test(text)) return null;
   try {
-    if (new URL(text).protocol !== "https:") return null;
+    const url = new URL(text);
+    if (url.protocol !== "https:") return null;
+    if (url.username !== "" || url.password !== "") return null;
+    if (!url.hostname) return null;
+    return url.href;
   } catch {
     return null;
   }
-  return text;
 }
 
 function disclaimer() {
   const links: Record<string, string | null> = {};
   const source = sepolia.disclaimer_links as Record<string, string>;
   for (const key of DISCLAIMER_LINK_SLOTS) {
-    const value = source?.[key];
-    if (key === "legal_notice_url") {
-      links[key] = httpsUrl(value);
-      continue;
-    }
-    links[key] = value == null || String(value).trim() === "" ? null : String(value);
+    links[key] = httpsUrl(source?.[key]);
   }
   if (sepolia.display.disclaimer !== DISCLAIMER) {
     throw new Error("display.disclaimer mismatch");
