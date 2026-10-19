@@ -440,7 +440,9 @@ function retryAfter(stamps, now, windowMs) {
  * key, and at most one eviction candidate. The timer drops expired keys.
  * A limited key is never evicted. When every resident key is limited, new
  * keys share one overflow bucket.
- * The prefix map has its own cap. A new prefix past that cap is refused.
+ * The prefix map has its own cap. When it is full, the least recently seen
+ * prefix that is under its limit is evicted. A prefix at its limit stays.
+ * If every resident prefix is at its limit, a new prefix is refused.
  * Evicting an under-limit key clears that key's count.
  * @param {{ windowMs?: number, max?: number, coarseMax?: number, coarseMaxEntries?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
  */
@@ -461,33 +463,36 @@ export function createRateLimiter(options = {}) {
   const hits = createTouchMap();
   const coarseHits = createTouchMap();
   const idle = createTouchMap();
+  const coarseIdle = createTouchMap();
 
   const remember = (map, id, fresh, atCap) => {
     if (map.has(id)) map.delete(id);
     map.set(id, fresh);
-    if (map !== hits) return;
-    idle.delete(id);
-    if (!atCap && id !== OVERFLOW_KEY) idle.set(id, true);
+    const idleMap = map === hits ? idle : (map === coarseHits ? coarseIdle : null);
+    if (!idleMap) return;
+    idleMap.delete(id);
+    if (!atCap && id !== OVERFLOW_KEY) idleMap.set(id, true);
   };
 
-  const sweepMap = (map, now) => {
+  const sweepMap = (map, now, limit) => {
+    const idleMap = map === hits ? idle : coarseIdle;
     for (const [key, stamps] of map) {
       const fresh = liveStamps(map, key, now, windowMs);
       if (fresh.length === 0) {
         map.delete(key);
-        if (map === hits) idle.delete(key);
+        idleMap.delete(key);
       } else if (fresh !== stamps) {
-        remember(map, key, fresh, map === hits && fresh.length >= max);
-      } else if (map === hits && fresh.length < max && key !== OVERFLOW_KEY) {
-        idle.set(key, true);
+        remember(map, key, fresh, fresh.length >= limit);
+      } else if (fresh.length < limit && key !== OVERFLOW_KEY) {
+        idleMap.set(key, true);
       }
     }
   };
 
   const sweep = () => {
     const now = clock();
-    sweepMap(hits, now);
-    sweepMap(coarseHits, now);
+    sweepMap(hits, now, max);
+    sweepMap(coarseHits, now, coarseMax);
   };
 
   const evictIdle = (now) => {
@@ -514,6 +519,14 @@ export function createRateLimiter(options = {}) {
     return true;
   };
 
+  const evictCoarse = () => {
+    const nextIdle = coarseIdle.keys().next();
+    if (nextIdle.done) return false;
+    coarseHits.delete(nextIdle.value);
+    coarseIdle.delete(nextIdle.value);
+    return true;
+  };
+
   const chargeOverflow = (now) => {
     const live = liveStamps(hits, OVERFLOW_KEY, now, windowMs);
     if (live.length >= max) {
@@ -533,7 +546,7 @@ export function createRateLimiter(options = {}) {
     sweep,
     size: () => hits.size,
     coarseSize: () => coarseHits.size,
-    touchCount: () => hits.touches + coarseHits.touches + idle.touches,
+    touchCount: () => hits.touches + coarseHits.touches + idle.touches + coarseIdle.touches,
     close() {
       clearInterval(timer);
     },
@@ -548,12 +561,12 @@ export function createRateLimiter(options = {}) {
       const coarse = coarseBucket(id);
       let coarseLive = null;
       if (coarse) {
-        if (!coarseHits.has(coarse) && coarseHits.size >= coarseMaxEntries) {
+        if (!coarseHits.has(coarse) && coarseHits.size >= coarseMaxEntries && !evictCoarse()) {
           return retryAfter([], now, windowMs);
         }
         coarseLive = liveStamps(coarseHits, coarse, now, windowMs);
         if (coarseLive.length >= coarseMax) {
-          remember(coarseHits, coarse, coarseLive, false);
+          remember(coarseHits, coarse, coarseLive, true);
           return retryAfter(coarseLive, now, windowMs);
         }
       }
@@ -564,7 +577,7 @@ export function createRateLimiter(options = {}) {
       remember(hits, id, clientLive, clientLive.length >= max);
       if (coarse) {
         coarseLive.push(now);
-        remember(coarseHits, coarse, coarseLive, false);
+        remember(coarseHits, coarse, coarseLive, coarseLive.length >= coarseMax);
       }
       return { ok: true };
     },
@@ -619,11 +632,11 @@ function syncFields(sync) {
 }
 
 /**
- * History order. Matches the rank used by the sqlite adapter.
+ * History order. Matches the order used by the sqlite adapter.
  * seq is assigned again on rebuild, so it is not part of this key.
  * @param {string} action
  */
-export function historyRank(action) {
+export function historyOrder(action) {
   return HISTORY_ACTIONS[action] ?? 9;
 }
 
@@ -633,8 +646,8 @@ export function historyRank(action) {
  */
 export function rowFollowsCursor(row, after) {
   if (!after) return true;
-  const key = [row.block_number, row.log_index, historyRank(row.action), row.utc_day];
-  const bound = [after.block_number, after.log_index, historyRank(after.action), after.utc_day];
+  const key = [row.block_number, row.log_index, historyOrder(row.action), row.utc_day];
+  const bound = [after.block_number, after.log_index, historyOrder(after.action), after.utc_day];
   for (let index = 0; index < key.length; index += 1) {
     if (key[index] > bound[index]) return true;
     if (key[index] < bound[index]) return false;
@@ -914,15 +927,20 @@ export function createReadApi(options = {}) {
     const pathname = String(input?.path || "/").replace(/\/+$/, "") || "/";
     const query = input?.query ?? {};
     const route = routeOf(pathname);
-    if (configUnavailable) return finish(input, fail(503, "config_unavailable", input));
-    if (headerTooLong(input, hops, { cloudflareIngress })) {
-      return finish(input, fail(400, "header_too_long", input));
-    }
-    if (method === "OPTIONS" && route && input?.duplicateQuery !== true) {
+    const tooLong = headerTooLong(input, hops, { cloudflareIngress });
+    if (
+      method === "OPTIONS"
+      && route
+      && input?.duplicateQuery !== true
+      && !configUnavailable
+      && !tooLong
+    ) {
       return result(204, null, input, { allow: ALLOW });
     }
     const counted = rateLimit(input);
     if (counted) return finish(input, counted);
+    if (configUnavailable) return finish(input, fail(503, "config_unavailable", input));
+    if (tooLong) return finish(input, fail(400, "header_too_long", input));
     if (input?.duplicateQuery === true) return finish(input, fail(400, "duplicate_query", input));
     if (!route) return finish(input, fail(404, "not_found", input));
     if (method !== "GET" && !head) {

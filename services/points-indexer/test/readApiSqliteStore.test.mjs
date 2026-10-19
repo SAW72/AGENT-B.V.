@@ -275,6 +275,14 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         },
       });
       assert.equal(missing.configAvailable, false);
+      writeFileSync(points, JSON.stringify({ weights: {}, gates: {} }));
+      writeFileSync(notice, JSON.stringify({ disclaimer_links: { legal_notice_url: 1 } }));
+      const nonString = createReadApiSqliteStore({
+        db: () => null,
+        configPaths: { points, notice, noticeFallback: join(root, "nope.json") },
+      });
+      assert.equal(nonString.configAvailable, false);
+      assert.throws(() => nonString.getConfig(), /config_unavailable/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

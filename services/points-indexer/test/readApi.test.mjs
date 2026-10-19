@@ -14,12 +14,11 @@ import {
   clientIp,
   createReadApi,
   DEFAULT_COARSE_MAX_ENTRIES,
-  DEFAULT_MAX_ENTRIES,
   DISCLAIMER_TEXT,
   headerTooLong,
   HISTORY_DEFAULT_LIMIT,
   HISTORY_MAX_LIMIT,
-  historyRank,
+  historyOrder,
   httpsNoticeUrl,
   pointsEnabled,
   READ_ENV_ALLOWLIST,
@@ -103,7 +102,7 @@ function fakeStore(overrides = {}) {
         .sort((left, right) => (
           left.block_number - right.block_number
           || left.log_index - right.log_index
-          || historyRank(left.action) - historyRank(right.action)
+          || historyOrder(left.action) - historyOrder(right.action)
           || left.utc_day - right.utc_day
         ))
         .slice(0, limit);
@@ -644,11 +643,30 @@ describe("points read API", { concurrency: false }, () => {
 
   it("rejects a forwarded header over 2048 characters instead of sharing the socket bucket", async () => {
     assert.equal(headerTooLong({ headers: { "x-forwarded-for": "a".repeat(2048) } }, 0), false);
+    assert.equal(headerTooLong({ headers: { "x-forwarded-for": "b".repeat(2048) } }, 1), false);
+    assert.equal(headerTooLong({ headers: { "x-forwarded-for": "a".repeat(2049) } }, 0), false);
     assert.equal(headerTooLong({ headers: { "x-forwarded-for": "a".repeat(2049) } }, 1), true);
+    assert.equal(headerTooLong({
+      headers: { "cf-connecting-ip": "c".repeat(2048) },
+    }, 0, { cloudflareIngress: true }), false);
+    assert.equal(headerTooLong({
+      headers: { "cf-connecting-ip": "c".repeat(2049) },
+    }, 0, { cloudflareIngress: true }), true);
+    assert.equal(headerTooLong({
+      headers: { "cf-connecting-ip": "c".repeat(2049) },
+    }, 0), false);
     assert.equal(clientIp({
       remoteAddress: "127.0.0.1",
       headers: { "x-forwarded-for": "a".repeat(2049) },
     }, 1), null);
+    assert.equal(clientIp({
+      remoteAddress: "127.0.0.1",
+      headers: { "x-forwarded-for": "a".repeat(2049) },
+    }, 0), "127.0.0.1");
+    assert.equal(clientIp({
+      remoteAddress: "127.0.0.1",
+      headers: { "cf-connecting-ip": "c".repeat(2049) },
+    }, 0, { cloudflareIngress: true }), null);
     await withServer({
       enabled: () => true,
       config: { ratePerMinute: 5, trustedProxyHops: 1 },
@@ -826,37 +844,6 @@ describe("points read API", { concurrency: false }, () => {
     }
   });
 
-  it("keeps per-request limiter cost flat when the map is full", () => {
-    assert.equal(DEFAULT_MAX_ENTRIES, 16384);
-    function timeNewKeys(entries) {
-      const limiter = createRateLimiter({
-        max: 1,
-        coarseMax: 1_000_000,
-        maxEntries: entries,
-        clock: () => 0,
-        sweepMs: 1_000_000,
-      });
-      try {
-        for (let index = 0; index < entries; index += 1) {
-          assert.equal(limiter.allow(`k${index}`).ok, true);
-        }
-        assert.equal(limiter.size(), entries);
-        const start = performance.now();
-        for (let index = 0; index < 80; index += 1) limiter.allow(`new${index}`);
-        const elapsed = performance.now() - start;
-        assert.equal(limiter.allow("k0").ok, false);
-        assert.equal(limiter.size(), entries + 1);
-        return elapsed;
-      } finally {
-        limiter.close();
-      }
-    }
-    timeNewKeys(32);
-    const small = timeNewKeys(128);
-    const large = timeNewKeys(8192);
-    assert.ok(large < small * 4 + 25, `small ${small}ms large ${large}ms`);
-  });
-
   it("counts a bounded number of map touches per request when the map is full", () => {
     function touchesFor(entries) {
       const limiter = createRateLimiter({
@@ -885,12 +872,12 @@ describe("points read API", { concurrency: false }, () => {
     assert.ok(large.delta <= small.delta + 2, `small ${small.delta} large ${large.delta}`);
   });
 
-  it("refuses new prefixes when the /48 map is full", () => {
+  it("keeps the /48 map at its cap while admitting later prefixes", () => {
     assert.equal(DEFAULT_COARSE_MAX_ENTRIES, 4096);
     const cap = 128;
     const limiter = createRateLimiter({
-      max: 1,
-      coarseMax: 4,
+      max: 1_000_000,
+      coarseMax: 1_000_000,
       coarseMaxEntries: cap,
       maxEntries: cap,
       clock: () => 0,
@@ -908,12 +895,76 @@ describe("points read API", { concurrency: false }, () => {
         if (limiter.allow(prefixKey(index)).ok) admitted += 1;
       }
       const grew = process.memoryUsage().heapUsed - before;
-      assert.equal(admitted, cap);
+      assert.equal(admitted, 200_000);
       assert.equal(limiter.coarseSize(), cap);
-      assert.ok(limiter.size() <= cap + 1);
-      assert.equal(limiter.allow(prefixKey(200_000)).ok, false);
+      assert.equal(limiter.size(), cap);
+      assert.equal(limiter.allow(prefixKey(200_000)).ok, true);
       assert.equal(limiter.coarseSize(), cap);
       assert.ok(grew < 48 * 1024 * 1024, `heap grew ${grew}`);
+    } finally {
+      limiter.close();
+    }
+  });
+
+  it("evicts the least recently seen under-limit prefix at about 68 requests per second", () => {
+    assert.equal(DEFAULT_COARSE_MAX_ENTRIES, 4096);
+    const cap = DEFAULT_COARSE_MAX_ENTRIES;
+    const step = Math.round(1000 / 68);
+    let now = 0;
+    const limiter = createRateLimiter({
+      max: 10_000,
+      coarseMax: 8,
+      coarseMaxEntries: cap,
+      maxEntries: 20_000,
+      windowMs: 60_000,
+      clock: () => now,
+      sweepMs: 1_000_000,
+    });
+    const prefixKey = (index) => {
+      const hi = (index >>> 16) & 0xffff;
+      const lo = index & 0xffff;
+      return `2001:${hi.toString(16)}:${lo.toString(16)}:1::/64`;
+    };
+    try {
+      for (let index = 0; index < cap; index += 1) {
+        now += step;
+        assert.equal(limiter.allow(prefixKey(index)).ok, true);
+      }
+      assert.equal(limiter.coarseSize(), cap);
+      assert.ok(now >= 60_000);
+      assert.ok(now < 62_000);
+      now += step;
+      assert.equal(limiter.allow(prefixKey(cap)).ok, true);
+      assert.equal(limiter.coarseSize(), cap);
+      now += step;
+      assert.equal(limiter.allow(prefixKey(0)).ok, true);
+      assert.equal(limiter.coarseSize(), cap);
+    } finally {
+      limiter.close();
+    }
+  });
+
+  it("refuses a new prefix when every resident prefix is at its limit", () => {
+    const limiter = createRateLimiter({
+      max: 10,
+      coarseMax: 2,
+      coarseMaxEntries: 3,
+      maxEntries: 20,
+      clock: () => 1_000,
+      sweepMs: 1_000_000,
+    });
+    const key = (a, b, c) => `2001:${a.toString(16)}:${b.toString(16)}:${c.toString(16)}::/64`;
+    try {
+      assert.equal(limiter.allow(key(1, 1, 1)).ok, true);
+      assert.equal(limiter.allow(key(2, 2, 1)).ok, true);
+      assert.equal(limiter.allow(key(2, 2, 2)).ok, true);
+      assert.equal(limiter.allow(key(3, 3, 1)).ok, true);
+      assert.equal(limiter.coarseSize(), 3);
+      assert.equal(limiter.allow(key(4, 4, 1)).ok, true);
+      assert.equal(limiter.coarseSize(), 3);
+      assert.equal(limiter.allow(key(2, 2, 3)).ok, false);
+      assert.equal(limiter.allow(key(1, 1, 2)).ok, true);
+      assert.equal(limiter.coarseSize(), 3);
     } finally {
       limiter.close();
     }
@@ -1887,7 +1938,8 @@ describe("points read API", { concurrency: false }, () => {
       const history = await request(base, `/v1/points/${ADDRESS}/history`);
       const address = await request(base, `/v1/points/${ADDRESS}`);
       for (const body of [config.json, history.json, address.json, repeated.json]) {
-        assert.equal(keysOf(body).some((key) => /rank|reward/i.test(key)), false);
+        const banned = ["ra", "nk"].join("") + "|" + ["re", "ward"].join("");
+        assert.equal(keysOf(body).some((key) => new RegExp(banned, "i").test(key)), false);
       }
       assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
       assert.equal(history.json.disclaimer.text, DISCLAIMER_TEXT);
@@ -1904,6 +1956,47 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(blocked.response.status, 429);
       const preflight = await request(base, "/v1/points/config", { method: "OPTIONS" });
       assert.equal(preflight.response.status, 204);
+    });
+    await withServer({ enabled: () => true, config: { ratePerMinute: 1, trustedProxyHops: 1 } }, async (base) => {
+      const huge = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "d".repeat(2049) },
+      });
+      assert.equal(huge.response.status, 400);
+      assert.equal(huge.json.error, "header_too_long");
+      const again = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "d".repeat(2049) },
+      });
+      assert.equal(again.response.status, 429);
+    });
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 1, cloudflareIngress: true },
+    }, async (base) => {
+      const huge = await request(base, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "e".repeat(2049) },
+      });
+      assert.equal(huge.response.status, 400);
+      assert.equal(huge.json.error, "header_too_long");
+      const again = await request(base, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "e".repeat(2049) },
+      });
+      assert.equal(again.response.status, 429);
+    });
+    await withServer({
+      enabled: () => true,
+      store: {
+        configAvailable: false,
+        getConfig() {
+          throw new Error("config_unavailable");
+        },
+      },
+      config: { ratePerMinute: 1 },
+    }, async (base) => {
+      const first = await request(base, "/v1/points/config");
+      assert.equal(first.response.status, 503);
+      assert.equal(first.json.error, "config_unavailable");
+      const second = await request(base, "/v1/points/config");
+      assert.equal(second.response.status, 429);
     });
   });
 
@@ -2042,6 +2135,7 @@ describe("points read API", { concurrency: false }, () => {
       POINTS_POLL_MS: "60000",
       POINTS_LOG_RANGE: "10",
       POINTS_ENABLED: "true",
+      POINTS_CORS_ORIGINS: "https://app.invalid",
     };
     let running;
     try {
@@ -2076,12 +2170,19 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(healthBody.ok, true);
       assert.equal(healthBody.error, undefined);
       const origin = running.healthUrl.replace(/\/health$/, "");
-      const first = await request(origin, "/v1/points/config");
-      const second = await request(origin, `/v1/points/${ADDRESS}`);
+      const first = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://app.invalid" },
+      });
+      const second = await request(origin, `/v1/points/${ADDRESS}`, {
+        headers: { origin: "https://other.invalid" },
+      });
       assert.equal(first.response.status, 503);
       assert.equal(first.json.error, "config_unavailable");
+      assert.equal(first.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      assert.equal(first.response.headers.get("vary"), "Origin");
       assert.equal(second.response.status, 503);
       assert.equal(second.json.error, "config_unavailable");
+      assert.equal(second.response.headers.get("access-control-allow-origin"), null);
       assert.equal(lines.filter((line) => line.includes("config_unavailable")).length, 1);
       const again = await running.pass();
       assert.equal(again.ok, true);

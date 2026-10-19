@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHAIN_ID } from "./constants.mjs";
-import { historyRank } from "./readApi.mjs";
+import { historyOrder } from "./readApi.mjs";
 
 const WEIGHT_KEYS = [
   "first_activity",
@@ -117,7 +117,7 @@ function emptyCursor() {
   };
 }
 
-const ACTION_RANK_SQL = `CASE action
+const ACTION_ORDER_SQL = `CASE action
         WHEN 'fund' THEN 1
         WHEN 'release_or_refund' THEN 2
         WHEN 'dispute_open_or_vote' THEN 3
@@ -192,7 +192,7 @@ export function createReadApiSqliteStore(source = {}) {
         return database.prepare(
           `SELECT * FROM ledger_rows
            WHERE wallet = ? AND chain_id = ?
-           ORDER BY block_number ASC, log_index ASC, (${ACTION_RANK_SQL}) ASC, utc_day ASC
+           ORDER BY block_number ASC, log_index ASC, (${ACTION_ORDER_SQL}) ASC, utc_day ASC
            LIMIT ?`,
         ).all(address, CHAIN_ID, limit);
       }
@@ -202,17 +202,17 @@ export function createReadApiSqliteStore(source = {}) {
            AND (
              block_number > @block
              OR (block_number = @block AND log_index > @logIndex)
-             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_RANK_SQL}) > @rank)
-             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_RANK_SQL}) = @rank AND utc_day > @utcDay)
+             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_ORDER_SQL}) > @actionOrder)
+             OR (block_number = @block AND log_index = @logIndex AND (${ACTION_ORDER_SQL}) = @actionOrder AND utc_day > @utcDay)
            )
-         ORDER BY block_number ASC, log_index ASC, (${ACTION_RANK_SQL}) ASC, utc_day ASC
+         ORDER BY block_number ASC, log_index ASC, (${ACTION_ORDER_SQL}) ASC, utc_day ASC
          LIMIT @limit`,
       ).all({
         wallet: address,
         chain: CHAIN_ID,
         block: after.block_number,
         logIndex: after.log_index,
-        rank: historyRank(after.action),
+        actionOrder: historyOrder(after.action),
         utcDay: after.utc_day,
         limit,
       });

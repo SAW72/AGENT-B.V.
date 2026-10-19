@@ -24,7 +24,7 @@ const KEYS = Object.freeze([
   "source_log_index",
 ]);
 
-const ACTION_RANK = Object.freeze({
+const ACTION_ORDER = Object.freeze({
   fund: 1,
   release_or_refund: 2,
   dispute_open_or_vote: 3,
@@ -36,7 +36,7 @@ export function compareRows(a, b) {
   return (
     a.block_number - b.block_number ||
     a.log_index - b.log_index ||
-    (ACTION_RANK[a.action] ?? 9) - (ACTION_RANK[b.action] ?? 9) ||
+    (ACTION_ORDER[a.action] ?? 9) - (ACTION_ORDER[b.action] ?? 9) ||
     String(a.wallet).localeCompare(String(b.wallet)) ||
     String(a.source_action ?? "").localeCompare(String(b.source_action ?? ""))
   );
