@@ -1106,7 +1106,7 @@ export async function start(options = {}) {
               lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
               finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
               passCompleted: () => status.lastPassAt != null,
-              stale: () => status.lastError != null,
+              stale: () => status.ledgerStale === true || status.lastError != null,
             }),
             config: mod.readSettings(env),
             now: () => Date.now(),

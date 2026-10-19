@@ -10,7 +10,9 @@ import { loadConfig, start } from "../src/main.mjs";
 import {
   bucketClientAddress,
   createRateLimiter,
+  clientIp,
   createReadApi,
+  DISCLAIMER_TEXT,
   HISTORY_DEFAULT_LIMIT,
   HISTORY_MAX_LIMIT,
   historyRank,
@@ -209,18 +211,23 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(config.chainId, 84532);
     assert.equal(config.dbPath, "points-indexer.sqlite");
     assert.equal(Object.hasOwn(config, "pointsEnabled"), false);
-    assert.equal(Object.hasOwn(loadConfig({ POINTS_ENABLED: "1" }), "pointsEnabled"), false);
+    assert.equal(Object.hasOwn(loadConfig({ POINTS_ENABLED: "true" }), "pointsEnabled"), false);
     assert.equal(pointsEnabled({}), false);
-    assert.equal(pointsEnabled({ POINTS_ENABLED: "1" }), true);
     assert.equal(pointsEnabled({ POINTS_ENABLED: "true" }), true);
-    assert.equal(pointsEnabled({ POINTS_ENABLED: "on" }), true);
-    assert.equal(pointsEnabled({ POINTS_ENABLED: "yes" }), true);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "TRUE" }), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: " true " }), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "1" }), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "yes" }), false);
+    assert.equal(pointsEnabled({ POINTS_ENABLED: "on" }), false);
     assert.equal(pointsEnabled({ POINTS_ENABLED: "0" }), false);
     assert.equal(pointsEnabled({ POINTS_ENABLED: "false" }), false);
     assert.equal(pointsEnabled({ POINTS_READ_API_ENABLED: "1" }), false);
     const settings = readSettings({});
     assert.equal(settings.ratePerMinute, 60);
     assert.equal(settings.trustedProxyHops, 0);
+    assert.equal(settings.cloudflareIngress, false);
+    assert.equal(readSettings({ POINTS_CLOUDFLARE_INGRESS: "true" }).cloudflareIngress, true);
+    assert.equal(readSettings({ POINTS_CLOUDFLARE_INGRESS: "TRUE" }).cloudflareIngress, false);
     assert.equal(settings.breakerFailures, 5);
     assert.equal(settings.breakerCooldownMs, 30_000);
     assert.deepEqual(settings.corsOrigins, []);
@@ -412,11 +419,11 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(body.json.behind, 0);
       assert.equal(body.json.syncing, false);
       const sepolia = JSON.parse(readFileSync(SEPOLIA_FILE, "utf8"));
+      assert.equal(body.json.disclaimer.text, DISCLAIMER_TEXT);
       assert.equal(body.json.disclaimer.text, sepolia.display.disclaimer);
-      assert.equal(
-        body.json.disclaimer.text,
-        "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.",
-      );
+      assert.equal(Object.hasOwn(body.json.disclaimer.links, "legal_notice_url"), true);
+      assert.equal(Object.hasOwn(body.json.disclaimer.links, "bvt_securities_disclaimer"), false);
+      assert.equal(body.json.disclaimer.links.legal_notice_url, null);
       assert.equal(body.json.disclaimer.links.master_disclaimer, null);
       assert.ok(Object.values(body.json.disclaimer.links).every((value) => value === null));
       const history = await request(base, `/v1/points/${wallet}/history?chainId=84532`);
@@ -728,7 +735,7 @@ describe("points read API", { concurrency: false }, () => {
     });
   });
 
-  it("evicts the oldest limiter entry at the map cap", async () => {
+  it("refuses a new limiter key when the map is still full", async () => {
     await withServer({
       enabled: () => true,
       config: { ratePerMinute: 1, maxEntries: 2, trustedProxyHops: 1 },
@@ -737,8 +744,23 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 200);
       assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 429);
       assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 200);
-      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.3") })).response.status, 200);
+      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.3") })).response.status, 429);
+      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 429);
+    });
+  });
+
+  it("drops expired limiter keys before refusing a new one", async () => {
+    let now = 0;
+    await withServer({
+      enabled: () => true,
+      now: () => now,
+      config: { ratePerMinute: 1, maxEntries: 1, windowMs: 1_000, trustedProxyHops: 1 },
+    }, async (base) => {
+      const headers = (ip) => ({ "x-forwarded-for": ip });
       assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.1") })).response.status, 200);
+      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 429);
+      now = 1_000;
+      assert.equal((await request(base, "/v1/points/config", { headers: headers("10.0.0.2") })).response.status, 200);
     });
   });
 
@@ -853,6 +875,7 @@ describe("points read API", { concurrency: false }, () => {
       "POINTS_READ_RATE_PER_MINUTE",
       "POINTS_BREAKER_FAILURES",
       "POINTS_BREAKER_COOLDOWN_MS",
+      "POINTS_CLOUDFLARE_INGRESS",
     ]);
     const code = source
       .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -1160,7 +1183,7 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(hidden.response.headers.get("cache-control"), "no-store");
       assert.equal(hidden.response.headers.get("x-content-type-options"), "nosniff");
       assert.equal(hidden.response.headers.get("access-control-allow-origin"), null);
-      env.POINTS_ENABLED = "1";
+      env.POINTS_ENABLED = "true";
       const syncing = await request(origin, `/v1/points/${ADDRESS}`);
       assert.equal(syncing.response.status, 200);
       assert.equal(syncing.json.syncing, true);
@@ -1201,7 +1224,7 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(off.response.headers.get("access-control-allow-origin"), null);
       const stillHealthy = await request(origin, "/health");
       assert.deepEqual(stillHealthy.json, { ok: true, chainId: 84532 });
-      env.POINTS_ENABLED = "1";
+      env.POINTS_ENABLED = "true";
       const secret = "SECRET https://evil.example/x /tmp/ledger.sqlite";
       running.indexer.db.prepare = () => {
         const error = new Error(secret);
@@ -1244,7 +1267,7 @@ describe("points read API", { concurrency: false }, () => {
       POINTS_POLL_MS: "60000",
       POINTS_LOG_RANGE: String(logRange),
       POINTS_MAX_WINDOWS_PER_PASS: "2",
-      POINTS_ENABLED: "1",
+      POINTS_ENABLED: "true",
     };
     const codeRpc = (head, getLogs) => ({
       async chainId() {
@@ -1424,7 +1447,8 @@ describe("points read API", { concurrency: false }, () => {
       config: { ratePerMinute: 30 },
     }, async (base) => {
       const config = await request(base, "/v1/points/config?chainId=84532");
-      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "gates", "rule_version", "status", "weights"]);
+      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "disclaimer", "gates", "rule_version", "status", "weights"]);
+      assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
       const address = await request(base, `/v1/points/${ADDRESS}?chainId=84532`);
       assert.deepEqual(Object.keys(address.json).sort(), [
         "address",
@@ -1451,6 +1475,7 @@ describe("points read API", { concurrency: false }, () => {
         "address",
         "behind",
         "chainId",
+        "disclaimer",
         "finalized_block",
         "indexed_to_block",
         "items",
@@ -1537,7 +1562,7 @@ describe("points read API", { concurrency: false }, () => {
   it("spells Agent-B.V. in the read API notes and reads the disclaimer from config", () => {
     const source = readFileSync(READ_SOURCE, "utf8");
     assert.equal(source.includes("It cannot be transferred"), false);
-    assert.equal(source.includes("config/reputation/sepolia.json"), true);
+    assert.equal(source.includes(DISCLAIMER_TEXT), true);
     const readme = readFileSync(README_FILE, "utf8");
     const section = readme.split("## Read API")[1].split("## What it stores")[0];
     const shortName = JSON.parse(readFileSync(SEPOLIA_FILE, "utf8")).product.name;
@@ -1549,7 +1574,8 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(main.includes("function pointsGate"), false);
     assert.equal(main.includes('from "./pointsFlag.mjs"'), true);
     assert.equal(main.includes('text === "on"'), false);
-    assert.equal(flag.includes('text === "on"'), true);
+    assert.equal(flag.includes('text === "on"'), false);
+    assert.equal(flag.includes('POINTS_ENABLED === "true"'), true);
     assert.equal(flag.includes("node:sqlite"), false);
   });
 
@@ -1560,7 +1586,7 @@ describe("points read API", { concurrency: false }, () => {
       POINTS_POLL_MS: "60000",
       POINTS_LOG_RANGE: "10",
       POINTS_MAX_WINDOWS_PER_PASS: "1",
-      POINTS_ENABLED: "1",
+      POINTS_ENABLED: "true",
     };
     const running = await start({
       once: false,
@@ -1605,7 +1631,7 @@ describe("points read API", { concurrency: false }, () => {
       POINTS_POLL_MS: "60000",
       POINTS_LOG_RANGE: "10",
       POINTS_MAX_WINDOWS_PER_PASS: "1",
-      POINTS_ENABLED: "1",
+      POINTS_ENABLED: "true",
     };
     const running = await start({
       once: true,
@@ -1679,6 +1705,118 @@ describe("points read API", { concurrency: false }, () => {
     } finally {
       await running.stop();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a repeated query parameter and carries the shared disclaimer", async () => {
+    function keysOf(value, found = []) {
+      if (!value || typeof value !== "object") return found;
+      if (Array.isArray(value)) {
+        for (const item of value) keysOf(item, found);
+        return found;
+      }
+      for (const key of Object.keys(value)) {
+        found.push(key);
+        keysOf(value[key], found);
+      }
+      return found;
+    }
+    await withServer({ enabled: () => true, config: { ratePerMinute: 20 } }, async (base) => {
+      const repeated = await request(base, "/v1/points/config?chainId=84532&chainId=84532");
+      assert.equal(repeated.response.status, 400);
+      assert.equal(repeated.json.error, "duplicate_query");
+      const historyRepeated = await request(base, `/v1/points/${ADDRESS}/history?limit=1&limit=2`);
+      assert.equal(historyRepeated.response.status, 400);
+      assert.equal(historyRepeated.json.error, "duplicate_query");
+      const config = await request(base, "/v1/points/config");
+      const history = await request(base, `/v1/points/${ADDRESS}/history`);
+      const address = await request(base, `/v1/points/${ADDRESS}`);
+      for (const body of [config.json, history.json, address.json, repeated.json]) {
+        assert.equal(keysOf(body).some((key) => /rank|reward/i.test(key)), false);
+      }
+      assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
+      assert.equal(history.json.disclaimer.text, DISCLAIMER_TEXT);
+      assert.equal(address.json.disclaimer.text, DISCLAIMER_TEXT);
+      assert.equal(Object.hasOwn(config.json.disclaimer.links, "legal_notice_url"), true);
+    });
+  });
+
+  it("reads CF-Connecting-IP only when Cloudflare ingress is declared", async () => {
+    const input = {
+      remoteAddress: "127.0.0.1",
+      headers: { "cf-connecting-ip": "10.9.9.9", "x-forwarded-for": "10.8.8.8" },
+    };
+    assert.equal(clientIp(input, 0), "127.0.0.1");
+    assert.equal(clientIp(input, 0, { cloudflareIngress: true }), "10.9.9.9");
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 1, cloudflareIngress: true },
+    }, async (base) => {
+      const first = await request(base, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "10.9.9.9" },
+      });
+      const other = await request(base, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "10.9.9.8" },
+      });
+      assert.equal(first.response.status, 200);
+      assert.equal(other.response.status, 200);
+    });
+  });
+
+  it("keeps a stale ledger on the read API after a window commit", async () => {
+    let head = ESCROW_START_BLOCK - 1;
+    let failRebuild = true;
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+    };
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      env,
+      onIndexer(indexer) {
+        const original = indexer.rebuild.bind(indexer);
+        indexer.rebuild = () => {
+          if (failRebuild) throw new Error("rebuild failed");
+          return original();
+        };
+      },
+      rpc: {
+        async chainId() {
+          return 84532;
+        },
+        async getCode() {
+          return "0x6001600055";
+        },
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          return [];
+        },
+      },
+    });
+    try {
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      head = ESCROW_START_BLOCK + 4;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      const failed = await request(origin, `/v1/points/${ADDRESS}`);
+      assert.equal(failed.json.stale, true);
+      head = ESCROW_START_BLOCK + 20;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      const still = await request(origin, `/v1/points/${ADDRESS}`);
+      assert.equal(still.json.stale, true);
+      failRebuild = false;
+      const healed = await running.pass();
+      assert.equal(healed.ok, true);
+      const fresh = await request(origin, `/v1/points/${ADDRESS}`);
+      assert.equal(fresh.json.stale, false);
+    } finally {
+      await running.stop();
     }
   });
 });
