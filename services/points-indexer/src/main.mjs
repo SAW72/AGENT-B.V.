@@ -354,7 +354,7 @@ export async function start(options = {}) {
         throw error;
       }
       dirty = true;
-      const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      const committed = indexer.commitScanWindow(logs, to, { chainId: cfg.chainId });
       inserted += committed.inserted;
       committedWindows += 1;
       ranges.push({ fromBlock: from, toBlock: to });

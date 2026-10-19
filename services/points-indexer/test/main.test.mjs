@@ -323,6 +323,59 @@ describe("process entry", () => {
     }
   });
 
+  for (const [label, malformed] of [
+    ["null", null],
+    ["undefined", undefined],
+    ["object", {}],
+    ["array-like object", { length: 0 }],
+    ["string", "[]"],
+    ["boolean", false],
+    ["number", 0],
+  ]) {
+    it(`keeps the cursor on a ${label} log response and retries the same window`, async () => {
+      const dir = dbDir();
+      let head = ESCROW_START_BLOCK;
+      let response = [];
+      const calls = [];
+      let running;
+      try {
+        running = await start({
+          once: true,
+          env: { POINTS_DB_PATH: join(dir, "ledger.sqlite"), POINTS_LOG_RANGE: "1" },
+          rpc: withCode({
+            async finalizedBlockNumber() {
+              return head;
+            },
+            async getLogs({ fromBlock, toBlock }) {
+              calls.push({ fromBlock, toBlock });
+              return response;
+            },
+          }),
+        });
+        assert.equal(running.indexer.lastScannedBlock(), head);
+        head += 1;
+        response = malformed;
+        await assert.rejects(() => running.pass(), (error) =>
+          error instanceof PointsError && error.reason === "unverifiable_log",
+        );
+        assert.equal(running.indexer.lastScannedBlock(), head - 1);
+        assert.equal(running.indexer.rawCount(), 0);
+
+        response = [];
+        await running.pass();
+        assert.deepEqual(calls.slice(-2), [
+          { fromBlock: head, toBlock: head },
+          { fromBlock: head, toBlock: head },
+        ]);
+        assert.equal(running.indexer.lastScannedBlock(), head);
+        assert.equal(running.indexer.rawCount(), 0);
+      } finally {
+        if (running) await running.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("halves the window after a range error and does not move the cursor past a failed block", async () => {
     const dir = dbDir();
     const head = ESCROW_START_BLOCK + 3;
