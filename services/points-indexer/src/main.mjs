@@ -133,12 +133,13 @@ export function assertConfig(cfg) {
   return { ...cfg, escrowAddress: escrow, chainId: CHAIN_ID, logRange, pollMs, maxWindows };
 }
 
-function writeJson(res, status, body) {
+function writeJson(res, status, body, extra = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...extra,
     "content-length": Buffer.byteLength(payload),
   });
   res.end(payload);
@@ -534,75 +535,41 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   };
 }
 
-export const DEFAULT_HEALTH_RATE_PER_MINUTE = 120;
+export const HEALTH_CACHE_MS = 15_000;
 
-/**
- * Fixed-window limit for /health. A new address is refused when the map is full.
- * @param {{ max?: number, windowMs?: number, maxEntries?: number, clock?: () => number }} [options]
- */
-export function createHealthLimiter(options = {}) {
-  const max = Number.isInteger(options.max) && options.max > 0 ? options.max : DEFAULT_HEALTH_RATE_PER_MINUTE;
-  const windowMs = Number.isInteger(options.windowMs) && options.windowMs > 0 ? options.windowMs : 60_000;
-  const maxEntries = Number.isInteger(options.maxEntries) && options.maxEntries > 0 ? options.maxEntries : 1024;
-  const clock = typeof options.clock === "function" ? options.clock : Date.now;
-  const hits = new Map();
+function healthSnapshot(status) {
+  const decision = healthDecision({
+    lastPassAt: status.lastPassAt,
+    pollMs: status.pollMs,
+    now: status.now(),
+    behind: status.behind,
+  });
+  const body = { ok: decision.ok, chainId: status.chainId };
+  if (decision.ok && decision.behind > 0) body.behind = decision.behind;
+  if (!decision.ok && status.lastError) body.error = status.lastError;
   return {
-    size: () => hits.size,
-    allow(key) {
-      const now = clock();
-      const id = String(key || "unknown");
-      let row = hits.get(id);
-      if (row && now - row.start >= windowMs) {
-        hits.delete(id);
-        row = undefined;
-      }
-      if (!row) {
-        if (hits.size >= maxEntries) {
-          return { ok: false, retryAfterSec: Math.max(1, Math.ceil(windowMs / 1000)) };
-        }
-        hits.set(id, { start: now, count: 1 });
-        return { ok: true };
-      }
-      if (row.count >= max) {
-        return { ok: false, retryAfterSec: Math.max(1, Math.ceil((row.start + windowMs - now) / 1000)) };
-      }
-      row.count += 1;
-      return { ok: true };
-    },
+    statusCode: decision.statusCode,
+    payload: JSON.stringify(body),
+    stamp: `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}`,
   };
 }
 
-function listenHealth(port, status, onPoints, healthLimiter) {
+function listenHealth(port, status, onPoints, cache) {
+  const cacheClock = cache.clock;
+  const cacheMs = cache.ms;
+  let cached = null;
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
       if (path === "/health" || path === "/health/") {
-        const limited = healthLimiter.allow(req.socket?.remoteAddress || "unknown");
-        if (!limited.ok) {
-          const payload = JSON.stringify({ ok: false, error: "rate_limited" });
-          res.writeHead(429, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-            "retry-after": String(limited.retryAfterSec),
-            "content-length": Buffer.byteLength(payload),
-          });
-          res.end(payload);
-          return;
+        const at = cacheClock();
+        const stamp = `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}`;
+        if (!cached || cached.stamp !== stamp || at - cached.at >= cacheMs) {
+          const fresh = healthSnapshot(status);
+          cached = { at, ...fresh };
         }
-        const decision = healthDecision({
-          lastPassAt: status.lastPassAt,
-          pollMs: status.pollMs,
-          freshnessPolls: status.freshnessPolls,
-          now: status.now(),
-          behind: status.behind,
-          ledgerStale: status.ledgerStale,
-        });
-        const body = { ok: decision.ok, chainId: status.chainId };
-        if (decision.ok && decision.behind > 0) body.behind = decision.behind;
-        if (!decision.ok && status.lastError) body.error = status.lastError;
-        else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
-        res.writeHead(decision.statusCode, { "content-type": "application/json" });
-        res.end(JSON.stringify(body));
+        res.writeHead(cached.statusCode, { "content-type": "application/json" });
+        res.end(cached.payload);
         return;
       }
       if (path === "/v1/points" || path.startsWith("/v1/points/")) {
@@ -1070,7 +1037,7 @@ export async function start(options = {}) {
       return;
     }
     if (configFailed) {
-      writeJson(res, 503, { ok: false, error: "config_unavailable" });
+      writeJson(res, 503, { ok: false, error: "config_unavailable" }, await readCorsHeaders(req, env));
       return;
     }
     try {
@@ -1078,22 +1045,23 @@ export async function start(options = {}) {
     } catch {
       configFailed = true;
       console.error(redact("points_read config_unavailable", cfg.rpcUrl));
-      writeJson(res, 503, { ok: false, error: "config_unavailable" });
+      writeJson(res, 503, { ok: false, error: "config_unavailable" }, await readCorsHeaders(req, env));
       return;
     }
     readApi(req, res);
   }
 
-  const healthLimiter = createHealthLimiter({
-    max: options.healthRateMax,
-    windowMs: options.healthWindowMs,
-    maxEntries: options.healthMaxEntries,
-    clock: options.healthNow,
-  });
+  const healthCacheMs = Number.isInteger(options.healthCacheMs) && options.healthCacheMs >= 0
+    ? options.healthCacheMs
+    : HEALTH_CACHE_MS;
+  const healthCacheClock = typeof options.healthCacheNow === "function" ? options.healthCacheNow : now;
 
   if (options.serve) {
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status, handlePoints, healthLimiter);
+    const health = await listenHealth(port, status, handlePoints, {
+      clock: healthCacheClock,
+      ms: healthCacheMs,
+    });
     if (pointsEnabled(env)) {
       try {
         await ensureReadApi();
@@ -1173,6 +1141,29 @@ export async function start(options = {}) {
       indexer?.close();
     },
   };
+}
+
+const READ_ALLOW = "GET, HEAD, OPTIONS";
+
+async function readCorsHeaders(req, env) {
+  const headers = {
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": READ_ALLOW,
+    vary: "Origin",
+  };
+  try {
+    const mod = await import("./readApi.mjs");
+    const origins = new Set(mod.parseCorsList(env?.POINTS_CORS_ORIGINS));
+    const origin = req?.headers?.origin;
+    if (typeof origin !== "string") return headers;
+    const parsed = mod.parseExactHttpsOrigin(origin);
+    if (parsed.ok && origins.has(parsed.origin)) {
+      headers["access-control-allow-origin"] = parsed.origin;
+    }
+  } catch {
+    // A config failure still answers. Missing CORS helpers omit the origin.
+  }
+  return headers;
 }
 
 function invokedDirectly() {

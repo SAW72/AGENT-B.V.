@@ -1,0 +1,8 @@
+.git
+**/.git
+**/node_modules
+**/*.sqlite
+**/*.sqlite-journal
+**/coverage
+**/.DS_Store
+services/points-indexer/test

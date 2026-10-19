@@ -11,22 +11,27 @@
 # BASE_SEPOLIA_RPC_URL is a URL that may carry a key. It is dashboard-only
 # (sync: false) and has no value in this file. No signing key is read.
 #
-# POINTS_TRUSTED_PROXY_HOPS stays 0 until an operator sets it at enable
-# time, after a live X-Forwarded-For echo check on Render. That check needs
-# two real client addresses each seen correctly, forged X-Forwarded-For
-# values ignored, and the chosen address outside a Cloudflare range.
+# A live echo check is required before POINTS_ENABLED is set, and again
+# before POINTS_TRUSTED_PROXY_HOPS is raised. Run it from an IPv4 client
+# and from an IPv6 client. Forge X-Forwarded-For, CF-Connecting-IP, and
+# True-Client-IP. Echo the socket address, record the result, and remove
+# the echo afterwards. The hop value below stays 0. The check needs two
+# real client addresses each seen correctly, forged forwarded values
+# ignored, and the chosen address outside a Cloudflare range.
 # POINTS_CLOUDFLARE_INGRESS is not set. That flag must stay off for an
 # origin that is reachable without Cloudflare.
 #
 # The image is built from the repository root so the notice file is copied
 # from config/reputation/sepolia.json:
 #   docker build -f services/points-indexer/Dockerfile .
+# Render resolves dockerfilePath from the repo root when rootDir is unset
+# (https://render.com/docs/blueprint-spec). This service does not set rootDir.
 
 services:
   - type: web
     name: points-indexer
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./services/points-indexer/Dockerfile
     dockerContext: .
     plan: free
     numInstances: 1
@@ -46,7 +51,7 @@ services:
       - key: POINTS_MAX_WINDOWS_PER_PASS
         value: "500"
       - key: POINTS_TRUSTED_PROXY_HOPS
-        # Chosen at enable time, after a live X-Forwarded-For echo check on Render.
+        # Stays 0. A live echo check is required before POINTS_ENABLED, and again before this is raised.
         value: "0"
       - key: BASE_SEPOLIA_RPC_URL
         sync: false

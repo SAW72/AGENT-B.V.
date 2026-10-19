@@ -16,6 +16,7 @@ import {
   DEFAULT_POLL_MS,
   DEFAULT_RPC_URL,
   createDefaultRpc,
+  HEALTH_CACHE_MS,
   isRangeError,
   loadConfig,
   redact,
@@ -628,6 +629,7 @@ describe("process entry", () => {
       serve: true,
       port: 0,
       now: () => clock,
+      healthCacheMs: 0,
       onListening(info) {
         health = info;
       },
@@ -1342,22 +1344,22 @@ describe("process entry", () => {
     }
   });
 
-  it("rate limits /health without stopping the process", async () => {
+  it("serves /health from one short cache for every address", async () => {
+    assert.equal(HEALTH_CACHE_MS, 15_000);
     const dir = dbDir();
-    let now = 0;
+    let clock = 0;
     let running;
     try {
       running = await start({
         serve: true,
         once: true,
         port: 0,
-        healthRateMax: 2,
-        healthWindowMs: 1_000,
-        healthNow: () => now,
+        now: () => clock,
+        healthCacheNow: () => clock,
         env: {
           CHAIN_ID: "84532",
           POINTS_DB_PATH: join(dir, "ledger.sqlite"),
-          POINTS_POLL_MS: "60000",
+          POINTS_POLL_MS: "1000",
           POINTS_LOG_RANGE: "10",
         },
         rpc: withCode({
@@ -1369,19 +1371,33 @@ describe("process entry", () => {
           },
         }),
       });
-      const first = await fetch(running.healthUrl);
-      const second = await fetch(running.healthUrl);
-      const third = await fetch(running.healthUrl);
-      assert.equal(first.status, 200);
-      assert.equal(second.status, 200);
-      assert.equal(third.status, 429);
-      assert.equal(third.headers.get("retry-after"), "1");
-      assert.deepEqual(await third.json(), { ok: false, error: "rate_limited" });
-      now = 1_000;
-      const again = await fetch(running.healthUrl);
-      assert.equal(again.status, 200);
+      for (let index = 0; index < 2000; index += 1) {
+        const response = await fetch(running.healthUrl, {
+          headers: {
+            "x-forwarded-for": `198.51.${(index >> 8) & 255}.${index & 255}`,
+            "cf-connecting-ip": `2001:db8:${index.toString(16)}::1`,
+            "true-client-ip": `203.0.113.${index % 250}`,
+          },
+        });
+        assert.equal(response.status, 200);
+        await response.text();
+      }
+      clock = HEALTH_CACHE_MS - 1;
+      const held = await fetch(running.healthUrl, {
+        headers: { "x-forwarded-for": "203.0.113.9" },
+      });
+      assert.equal(held.status, 200);
+      await held.text();
+      clock = HEALTH_CACHE_MS;
+      const refreshed = await fetch(running.healthUrl);
+      assert.equal(refreshed.status, 503);
+      const body = await refreshed.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.error, undefined);
       const passed = await running.pass();
       assert.equal(passed.ok, true);
+      const afterPass = await fetch(running.healthUrl);
+      assert.equal(afterPass.status, 200);
     } finally {
       if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
