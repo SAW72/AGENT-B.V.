@@ -6,12 +6,26 @@ import { baseSepolia } from "viem/chains";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
 import {
   DEFAULT_ESCROW_ADDRESS,
+  DEFAULT_HTTP_TIMEOUT_MS,
+  DEFAULT_USER_AGENT,
   createDefaultRpc,
   createPointsHttpTransport,
+  errorCode,
   isRangeError,
+  loadPaceSettings,
   start,
 } from "../src/main.mjs";
-import { parseRetryAfter } from "../src/pace.mjs";
+import {
+  GETLOGS_MIN_GAP_MS,
+  MAX_RETRY_AFTER_MS,
+  MAX_SCAN_RETRIES,
+  RETRY_BACKOFF_MS,
+  createRateLimiter,
+  jitterMs,
+  parseRetryAfter,
+  retryWaitMs,
+  scanErrorClass,
+} from "../src/pace.mjs";
 import { createdLog } from "./support.mjs";
 
 function fakeClock(start = 0) {
@@ -98,8 +112,8 @@ describe("getLogs pace", () => {
       }),
     });
     try {
-      assert.deepEqual(stamps, [1_000, 1_200, 1_400]);
-      assert.deepEqual(clock.sleeps, [200, 200]);
+      assert.deepEqual(stamps, [1_800, 2_000, 2_200]);
+      assert.deepEqual(clock.sleeps, [200, 200, 200, 200, 200, 200]);
       assert.equal(running.ingested.endedEarly, false);
       assert.equal(running.indexer.lastScannedBlock(), head);
     } finally {
@@ -125,9 +139,9 @@ describe("getLogs pace", () => {
       },
       {
         label: "http-date",
-        // The first window waits out the 200 ms gap, so start 200 ms early and
-        // fail on a whole second. HTTP-date has no milliseconds.
-        start: origin - 200,
+        // Startup reads and the first window each take the 200 ms gap, so the
+        // failing call lands 1000 ms after the start. HTTP-date has no milliseconds.
+        start: origin - 1_000,
         header: (now) => new Date(now + 12_000).toUTCString(),
         expectWait: 12_000,
       },
@@ -154,6 +168,7 @@ describe("getLogs pace", () => {
       const running = await start({
         once: true,
         paceNow: clock.now,
+        wallNow: clock.now,
         sleep: clock.sleep,
         now: () => 5_000_000,
         env: env(),
@@ -271,7 +286,7 @@ describe("getLogs pace", () => {
       assert.equal(running.ingested.endedEarly, true);
       assert.equal(running.ingested.reason, "server_error");
       assert.equal(fails, 4);
-      assert.deepEqual(clock.sleeps, [1_000, 2_000, 4_000]);
+      assert.deepEqual(clock.sleeps.filter((ms) => ms >= 1_000), [1_000, 2_000, 4_000]);
       assert.equal(running.indexer.lastScannedBlock(), null);
       assert.equal(running.indexer.rawCount(), 0);
       const response = await fetch(running.healthUrl);
@@ -566,5 +581,485 @@ describe("getLogs pace", () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  it("keeps the pace defaults and falls back when an env value is invalid", () => {
+    const pace = loadPaceSettings({});
+    assert.equal(pace.minGapMs, GETLOGS_MIN_GAP_MS);
+    assert.equal(pace.minGapMs, 200);
+    assert.deepEqual(pace.backoffMs, [...RETRY_BACKOFF_MS]);
+    assert.deepEqual(pace.backoffMs, [1_000, 2_000, 4_000]);
+    assert.equal(pace.maxRetries, MAX_SCAN_RETRIES);
+    assert.equal(pace.maxRetries, 3);
+    assert.equal(pace.maxRetryAfterMs, MAX_RETRY_AFTER_MS);
+    assert.equal(pace.maxRetryAfterMs, 30_000);
+    assert.equal(pace.gapJitterMs, 0);
+    assert.equal(pace.backoffJitterMs, 0);
+    assert.equal(pace.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
+    assert.equal(pace.httpTimeoutMs, 10_000);
+    assert.equal(pace.freshnessPolls, 3);
+    assert.equal(pace.maxWindowsPerRun, null);
+    assert.equal(pace.userAgent, DEFAULT_USER_AGENT);
+
+    const bad = loadPaceSettings({
+      POINTS_GETLOGS_MIN_GAP_MS: "nope",
+      POINTS_RETRY_BACKOFF_MS: "1,x,3",
+      POINTS_MAX_SCAN_RETRIES: "0",
+      POINTS_MAX_RETRY_AFTER_MS: "-5",
+      POINTS_GETLOGS_GAP_JITTER_MS: "abc",
+      POINTS_RETRY_BACKOFF_JITTER_MS: "-1",
+      POINTS_HTTP_TIMEOUT_MS: "10.5",
+      POINTS_HEALTH_FRESHNESS_POLLS: "0",
+      POINTS_MAX_WINDOWS_PER_RUN: "nope",
+      POINTS_USER_AGENT: "   ",
+    });
+    assert.equal(bad.minGapMs, 200);
+    assert.deepEqual(bad.backoffMs, [1_000, 2_000, 4_000]);
+    assert.equal(bad.maxRetries, 3);
+    assert.equal(bad.maxRetryAfterMs, 30_000);
+    assert.equal(bad.gapJitterMs, 0);
+    assert.equal(bad.backoffJitterMs, 0);
+    assert.equal(bad.httpTimeoutMs, 10_000);
+    assert.equal(bad.freshnessPolls, 3);
+    assert.equal(bad.maxWindowsPerRun, null);
+    assert.equal(bad.userAgent, DEFAULT_USER_AGENT);
+
+    const custom = loadPaceSettings({
+      POINTS_GETLOGS_MIN_GAP_MS: "200",
+      POINTS_RETRY_BACKOFF_MS: "1000,2000,4000",
+      POINTS_MAX_SCAN_RETRIES: "3",
+      POINTS_MAX_RETRY_AFTER_MS: "30000",
+      POINTS_HTTP_TIMEOUT_MS: "10000",
+      POINTS_HEALTH_FRESHNESS_POLLS: "3",
+      POINTS_MAX_WINDOWS_PER_RUN: "40",
+    });
+    assert.equal(custom.minGapMs, 200);
+    assert.deepEqual(custom.backoffMs, [1_000, 2_000, 4_000]);
+    assert.equal(custom.maxRetries, 3);
+    assert.equal(custom.maxRetryAfterMs, 30_000);
+    assert.equal(custom.httpTimeoutMs, 10_000);
+    assert.equal(custom.freshnessPolls, 3);
+    assert.equal(custom.maxWindowsPerRun, 40);
+  });
+
+  it("uses the gap from POINTS_GETLOGS_MIN_GAP_MS", async () => {
+    const clock = fakeClock(0);
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_GETLOGS_MIN_GAP_MS: "50", POINTS_LOG_RANGE: "10" }),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK + 9;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.deepEqual(clock.sleeps, [50, 50, 50, 50]);
+      assert.equal(running.ingested.endedEarly, false);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("adds jitter on top of the gap and the schedule, not on Retry-After", async () => {
+    assert.equal(jitterMs(0, () => 0.9), 0);
+    assert.equal(jitterMs(10, () => 0), 0);
+    assert.equal(jitterMs(10, () => 0.5), 5);
+    const clock = fakeClock(0);
+    const limiter = createRateLimiter({
+      now: clock.now,
+      sleep: clock.sleep,
+      minGapMs: 200,
+      gapJitterMs: 10,
+      random: () => 0.5,
+    });
+    await limiter.wait();
+    await limiter.wait();
+    assert.deepEqual(clock.sleeps, [205]);
+    const paced = httpError(429, { retryAfter: "7" });
+    assert.equal(retryWaitMs(paced, 0, 0, { backoffJitterMs: 50, random: () => 0.9 }), 7_000);
+    const bare = httpError(500, {});
+    assert.equal(retryWaitMs(bare, 0, 0, { backoffJitterMs: 50, random: () => 0.5 }), 1_025);
+    assert.equal(retryWaitMs(bare, 1, 0, {}), 2_000);
+  });
+
+  it("retries -32005 request rate exceeded without shrinking the window", async () => {
+    const coded = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32005, message: "request rate exceeded" },
+      url: "http://127.0.0.1",
+    });
+    assert.match(String(coded.details), /rate exceeded/);
+    assert.equal(isRangeError(coded), false);
+    assert.equal(scanErrorClass(coded), "rate_limited");
+    assert.equal(errorCode(coded), "rate_limited");
+    for (const details of ["compute units exhausted", "over capacity"]) {
+      const error = new Error("slow");
+      error.details = details;
+      assert.equal(isRangeError(error), false, details);
+      assert.equal(scanErrorClass(error), "rate_limited", details);
+    }
+
+    const clock = fakeClock(0);
+    const spans = [];
+    let failed = false;
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_LOG_RANGE: "8" }),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK + 7;
+        },
+        async getLogs(args) {
+          spans.push(args.toBlock - args.fromBlock + 1);
+          if (!failed) {
+            failed = true;
+            throw coded;
+          }
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.deepEqual(spans, [8, 8]);
+      assert.equal(running.ingested.endedEarly, false);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 7);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("waits on -32602 beyond the current head and does not shrink the window", async () => {
+    const lag = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32602, message: "block range extends beyond current head block" },
+      url: "http://127.0.0.1",
+    });
+    assert.equal(isRangeError(lag), false);
+    assert.equal(scanErrorClass(lag), "head_lag");
+    assert.equal(errorCode(lag), "head_lag");
+    const tooLarge = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32602, message: "block range is too large" },
+      url: "http://127.0.0.1",
+    });
+    assert.equal(isRangeError(tooLarge), true);
+    assert.equal(scanErrorClass(tooLarge), null);
+
+    const clock = fakeClock(0);
+    const spans = [];
+    let failed = false;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        once: true,
+        paceNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 1,
+        env: env({ POINTS_LOG_RANGE: "8" }),
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK + 7;
+          },
+          async getLogs(args) {
+            spans.push(args.toBlock - args.fromBlock + 1);
+            if (!failed) {
+              failed = true;
+              throw lag;
+            }
+            return [];
+          },
+        }),
+      });
+      assert.deepEqual(spans, [8, 8]);
+      assert.equal(running.ingested.endedEarly, false);
+      assert.deepEqual(clock.sleeps.filter((ms) => ms >= 1_000), [1_000]);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 7);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
+  it("retries one 429 from chainId and from getCode without stopping", async () => {
+    const clock = fakeClock(0);
+    let chains = 0;
+    let codes = 0;
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_LOG_RANGE: "10" }),
+      rpc: withCode({
+        async chainId() {
+          chains += 1;
+          if (chains === 1) throw httpError(429, { details: "slow down" });
+          return 84532;
+        },
+        async getCode() {
+          codes += 1;
+          if (codes === 1) throw httpError(429, { details: "slow down" });
+          return "0x6001600055";
+        },
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK - 1;
+        },
+        async getLogs() {
+          throw new Error("logs should not be read");
+        },
+      }),
+    });
+    try {
+      assert.equal(chains, 2);
+      assert.equal(codes, 3);
+      assert.equal(running.ingested.endedEarly, false);
+      assert.deepEqual(clock.sleeps.filter((ms) => ms >= 1_000), [1_000, 1_000]);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("ends the pass when the finalized head stays rate limited", async () => {
+    const clock = fakeClock(0);
+    let heads = 0;
+    let logs = 0;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        once: true,
+        paceNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 1,
+        env: env(),
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            heads += 1;
+            throw httpError(429, { details: "slow down" });
+          },
+          async getLogs() {
+            logs += 1;
+            return [];
+          },
+        }),
+      });
+      assert.equal(running.ingested.ok, true);
+      assert.equal(running.ingested.endedEarly, true);
+      assert.equal(running.ingested.reason, "rate_limited");
+      assert.equal(heads, 4);
+      assert.equal(logs, 0);
+      assert.equal(running.indexer, null);
+      assert.equal(running.ingested.scannedThrough, null);
+      assert.deepEqual(clock.sleeps.filter((ms) => ms >= 1_000), [1_000, 2_000, 4_000]);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
+  it("keeps the getLogs gap when the wall clock jumps", async () => {
+    let mono = 5_000;
+    let wall = Date.parse("2026-01-15T00:00:00.000Z");
+    const sleeps = [];
+    const stamps = [];
+    const paceNow = () => mono;
+    const wallNow = () => wall;
+    const sleep = async (ms) => {
+      sleeps.push(ms);
+      mono += ms;
+    };
+    const head = ESCROW_START_BLOCK + 29;
+    const running = await start({
+      once: true,
+      paceNow,
+      wallNow,
+      sleep,
+      now: () => mono,
+      env: env(),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          wall += 86_400_000;
+          stamps.push(mono);
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.deepEqual(stamps, [5_800, 6_000, 6_200]);
+      assert.deepEqual(sleeps, [200, 200, 200, 200, 200, 200]);
+      assert.equal(running.ingested.endedEarly, false);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("sends a User-Agent and keeps status on a non-JSON 429 or 502 body", async () => {
+    let mode = "429";
+    const agents = [];
+    const server = createServer(async (req, res) => {
+      agents.push(req.headers["user-agent"]);
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+      const send = (payload) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, ...payload }));
+      };
+      if (body.method === "eth_chainId") return send({ result: "0x14a34" });
+      if (body.method === "eth_getCode") return send({ result: "0x60016000" });
+      if (body.method === "eth_blockNumber") return send({ result: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` });
+      if (body.method === "eth_getLogs") {
+        if (mode === "429") {
+          res.writeHead(429, { "content-type": "text/plain", "retry-after": "3" });
+          res.end("request rate exceeded but not json");
+          return;
+        }
+        if (mode === "502") {
+          res.writeHead(502, { "content-type": "text/plain" });
+          res.end("bad gateway");
+          return;
+        }
+        return send({ result: [] });
+      }
+      send({ error: { code: -32601, message: "unhandled" } });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const url = `http://127.0.0.1:${address.port}`;
+    const clock = fakeClock(0);
+    let running;
+    try {
+      const rpc = createDefaultRpc(url);
+      const limited = await rpc.getLogs({
+        fromBlock: ESCROW_START_BLOCK,
+        toBlock: ESCROW_START_BLOCK,
+        address: DEFAULT_ESCROW_ADDRESS,
+      }).then(() => null, (caught) => caught);
+      assert.equal(limited.status, 429);
+      assert.equal(limited.details, "request rate exceeded but not json");
+      assert.equal(isRangeError(limited), false);
+      assert.equal(scanErrorClass(limited), "rate_limited");
+      assert.equal(errorCode(limited), "rate_limited");
+      mode = "502";
+      const unavailable = await rpc.getLogs({
+        fromBlock: ESCROW_START_BLOCK,
+        toBlock: ESCROW_START_BLOCK,
+        address: DEFAULT_ESCROW_ADDRESS,
+      }).then(() => null, (caught) => caught);
+      assert.equal(unavailable.status, 502);
+      assert.equal(unavailable.details, "bad gateway");
+      assert.equal(scanErrorClass(unavailable), "server_error");
+      assert.ok(agents.length >= 2);
+      assert.ok(agents.every((agent) => agent === DEFAULT_USER_AGENT));
+
+      let logs = 0;
+      const flaky = createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+        const send = (payload) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, ...payload }));
+        };
+        if (body.method === "eth_chainId") return send({ result: "0x14a34" });
+        if (body.method === "eth_getCode") return send({ result: "0x60016000" });
+        if (body.method === "eth_blockNumber") return send({ result: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` });
+        if (body.method === "eth_getLogs") {
+          logs += 1;
+          if (logs === 1) {
+            res.writeHead(429, { "content-type": "text/plain" });
+            res.end("nope not json");
+            return;
+          }
+          if (logs === 2) {
+            res.writeHead(502, { "content-type": "text/plain" });
+            res.end("still not json");
+            return;
+          }
+          return send({ result: [] });
+        }
+        send({ error: { code: -32601, message: "unhandled" } });
+      });
+      await new Promise((resolve) => flaky.listen(0, "127.0.0.1", resolve));
+      const flakyUrl = `http://127.0.0.1:${flaky.address().port}`;
+      try {
+        running = await start({
+          once: true,
+          paceNow: clock.now,
+          wallNow: clock.now,
+          sleep: clock.sleep,
+          now: () => 1,
+          env: env({ BASE_SEPOLIA_RPC_URL: flakyUrl, POINTS_LOG_RANGE: "10" }),
+        });
+        assert.equal(running.ingested.endedEarly, false);
+        assert.equal(logs, 3);
+        assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
+        assert.equal(clock.sleeps.includes(1_000), true);
+        assert.equal(clock.sleeps.includes(2_000), true);
+      } finally {
+        await new Promise((resolve) => flaky.close(resolve));
+      }
+    } finally {
+      if (running) await running.stop();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("stops further windows after POINTS_MAX_WINDOWS_PER_RUN in the same process", async () => {
+    const clock = fakeClock(0);
+    const head = ESCROW_START_BLOCK + 99;
+    let calls = 0;
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_MAX_WINDOWS_PER_RUN: "2", POINTS_LOG_RANGE: "10" }),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          calls += 1;
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(calls, 2);
+      assert.equal(running.ingested.endedEarly, false);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19);
+      const again = await running.pass();
+      assert.equal(again.endedEarly, false);
+      assert.equal(again.ranges.length, 0);
+      assert.equal(calls, 2);
+      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 19);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("leaves the HTTP timeout at 10000 unless the transport is told otherwise", () => {
+    const built = createPointsHttpTransport("http://127.0.0.1:9")({
+      chain: baseSepolia,
+    });
+    assert.equal(built.config.retryCount, 0);
+    assert.equal(built.config.timeout, 10_000);
   });
 });

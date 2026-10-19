@@ -44,27 +44,29 @@ export function sleepMs(ms) {
 }
 
 /**
- * @param {{ now: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number }} options
+ * @param {{ now: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number, gapJitterMs?: number, random?: () => number }} options
  */
 export function createRateLimiter(options) {
   const now = options.now;
   const sleep = options.sleep;
   const minGapMs = options.minGapMs ?? GETLOGS_MIN_GAP_MS;
+  const gapJitterMs = options.gapJitterMs ?? 0;
+  const random = options.random ?? Math.random;
   let nextAt = 0;
   let armed = false;
   return {
     async wait() {
       const current = now();
       if (armed && current < nextAt) await sleep(nextAt - current);
-      nextAt = now() + minGapMs;
+      nextAt = now() + minGapMs + jitterMs(gapJitterMs, random);
       armed = true;
     },
   };
 }
 
-function clampRetryAfter(ms) {
+function clampRetryAfter(ms, cap = MAX_RETRY_AFTER_MS) {
   if (!Number.isFinite(ms) || ms <= 0) return 0;
-  if (ms > MAX_RETRY_AFTER_MS) return MAX_RETRY_AFTER_MS;
+  if (ms > cap) return cap;
   return Math.floor(ms);
 }
 
@@ -73,23 +75,24 @@ function clampRetryAfter(ms) {
  * Returns milliseconds, or null when the header is missing or not one of those two forms.
  * A past HTTP-date is 0. Values above {@link MAX_RETRY_AFTER_MS} clamp to that cap.
  * @param {unknown} value
- * @param {number} nowMs
+ * @param {number} nowMs wall-clock epoch milliseconds, for an HTTP-date only
+ * @param {number} [cap]
  * @returns {number | null}
  */
-export function parseRetryAfter(value, nowMs) {
+export function parseRetryAfter(value, nowMs, cap = MAX_RETRY_AFTER_MS) {
   if (value == null) return null;
   const text = String(value).trim();
   if (!text) return null;
   if (/^\d+$/.test(text)) {
     const seconds = Number(text);
     if (!Number.isSafeInteger(seconds)) return null;
-    return clampRetryAfter(seconds * 1000);
+    return clampRetryAfter(seconds * 1000, cap);
   }
   const dated = Date.parse(text);
   if (Number.isNaN(dated)) return null;
   const delta = dated - nowMs;
   if (!Number.isFinite(delta)) return null;
-  return clampRetryAfter(Math.max(0, delta));
+  return clampRetryAfter(Math.max(0, delta), cap);
 }
 
 function walk(error) {
@@ -151,12 +154,43 @@ export function textIsRateLimit(text) {
   const value = String(text ?? "").toLowerCase();
   if (!value) return false;
   if (value.includes("rate limit") || value.includes("rate-limit") || value.includes("ratelimit")) return true;
+  if (value.includes("rate exceeded")) return true;
   if (value.includes("too many requests")) return true;
   if (value.includes("request limit") || value.includes("requests per")) return true;
   if (value.includes("throttl")) return true;
   if (value.includes("quota")) return true;
+  if (value.includes("compute units")) return true;
+  if (value.includes("capacity")) return true;
   if (/\b429\b/.test(value)) return true;
   return false;
+}
+
+/**
+ * The provider head has not reached the requested block yet.
+ * This is a wait, not a window shrink. "block range is too large" does not match.
+ * @param {string} text
+ */
+export function textIsHeadLag(text) {
+  const value = String(text ?? "").toLowerCase();
+  if (!value) return false;
+  if (value.includes("beyond current head")) return true;
+  if (value.includes("extends beyond") && value.includes("head")) return true;
+  return false;
+}
+
+/**
+ * Extra delay added on top of a gap or a schedule slot. A span of 0 is 0.
+ * The roll is in [0, 1). The result is never negative, so the minimum gap stays put.
+ * @param {number} span
+ * @param {() => number} [random]
+ */
+export function jitterMs(span, random = Math.random) {
+  const width = Number(span);
+  if (!Number.isFinite(width) || width <= 0) return 0;
+  const roll = Number(random());
+  if (!Number.isFinite(roll) || roll <= 0) return 0;
+  if (roll >= 1) return Math.floor(width);
+  return Math.floor(roll * width);
 }
 
 function detailText(error) {
@@ -181,14 +215,16 @@ function isNetworkError(error) {
  * Class for a retryable getLogs failure.
  * Range errors are not classified here; the caller must reject those first.
  * @param {unknown} error
- * @returns {"rate_limited" | "server_error" | "network_error" | null}
+ * @returns {"rate_limited" | "server_error" | "network_error" | "head_lag" | null}
  */
 export function scanErrorClass(error) {
   if (!error || typeof error !== "object") return null;
   const status = statusFrom(error);
   if (status === 429) return "rate_limited";
   if (status != null && status >= 500 && status <= 599) return "server_error";
-  if (textIsRateLimit(detailText(error))) return "rate_limited";
+  const text = detailText(error);
+  if (textIsHeadLag(text)) return "head_lag";
+  if (textIsRateLimit(text)) return "rate_limited";
   if (isNetworkError(error)) return "network_error";
   return null;
 }
@@ -201,28 +237,37 @@ export function scanErrorClass(error) {
  */
 export function retryWaitMs(error, attempt, nowMs, options = {}) {
   const schedule = options.backoffMs ?? RETRY_BACKOFF_MS;
+  const cap = options.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS;
   const header = headerFrom(error, "retry-after");
   if (header != null) {
-    const parsed = parseRetryAfter(header, nowMs);
+    const parsed = parseRetryAfter(header, nowMs, cap);
     if (parsed != null) return parsed;
   }
   const index = Math.min(Math.max(attempt, 0), schedule.length - 1);
-  return schedule[index];
+  const random = options.random ?? Math.random;
+  return schedule[index] + jitterMs(options.backoffJitterMs ?? 0, random);
 }
 
 /**
  * Pace every call and retry retryable failures. A non-retryable error is rethrown.
- * @param {{ now: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number, backoffMs?: number[], maxRetries?: number, classify?: (error: unknown) => string | null }} options
+ * `now` is the monotonic gap clock. `wallNow` is epoch milliseconds and is used
+ * only when Retry-After is an HTTP-date. Jitter is added on top of the gap and
+ * the schedule. A readable Retry-After is not jittered.
+ * @param {{ now: () => number, wallNow?: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number, gapJitterMs?: number, backoffMs?: number[], backoffJitterMs?: number, maxRetries?: number, maxRetryAfterMs?: number, random?: () => number, classify?: (error: unknown) => string | null }} options
  */
 export function createScanPacer(options) {
   const now = options.now;
+  const wallNow = options.wallNow ?? (() => Date.now());
   const sleep = options.sleep;
   const classify = options.classify ?? scanErrorClass;
   const maxRetries = options.maxRetries ?? MAX_SCAN_RETRIES;
+  const random = options.random ?? Math.random;
   const limiter = createRateLimiter({
     now,
     sleep,
     minGapMs: options.minGapMs ?? GETLOGS_MIN_GAP_MS,
+    gapJitterMs: options.gapJitterMs ?? 0,
+    random,
   });
   return {
     async run(fn) {
@@ -235,8 +280,11 @@ export function createScanPacer(options) {
           const reason = classify(error);
           if (!reason) throw error;
           if (attempt >= maxRetries) return { ok: false, reason, error };
-          const wait = retryWaitMs(error, attempt, now(), {
+          const wait = retryWaitMs(error, attempt, wallNow(), {
             backoffMs: options.backoffMs,
+            maxRetryAfterMs: options.maxRetryAfterMs,
+            backoffJitterMs: options.backoffJitterMs ?? 0,
+            random,
           });
           if (wait > 0) await sleep(wait);
           attempt += 1;

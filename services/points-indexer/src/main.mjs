@@ -7,7 +7,17 @@ import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
 import { openIndexer } from "./indexer.mjs";
-import { createScanPacer, scanErrorClass, sleepMs, textIsRateLimit } from "./pace.mjs";
+import {
+  GETLOGS_MIN_GAP_MS,
+  MAX_RETRY_AFTER_MS,
+  MAX_SCAN_RETRIES,
+  RETRY_BACKOFF_MS,
+  createScanPacer,
+  scanErrorClass,
+  sleepMs,
+  textIsHeadLag,
+  textIsRateLimit,
+} from "./pace.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -15,6 +25,11 @@ export const DEFAULT_POLL_MS = 15_000;
 export const DEFAULT_LOG_RANGE = 200;
 export const DEFAULT_MAX_WINDOWS = 500;
 export const DEFAULT_DB_PATH = "points-indexer.sqlite";
+export const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
+export const DEFAULT_HEALTH_FRESHNESS_POLLS = 3;
+export const DEFAULT_USER_AGENT = "Agent-B.V. points-indexer";
+
+const PACE_REASONS = new Set(["rate_limited", "server_error", "network_error", "head_lag"]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -38,6 +53,20 @@ function positiveInt(value, name) {
   if (!/^[1-9][0-9]*$/.test(text)) throw new Error(`${name} must be a positive integer`);
   const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+
+function nonNegativeInt(value) {
+  const text = String(value ?? "").trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(text)) return null;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) return null;
+  return parsed;
+}
+
+function positiveOrNull(value) {
+  const parsed = nonNegativeInt(value);
+  if (parsed == null || parsed < 1) return null;
   return parsed;
 }
 
@@ -105,6 +134,63 @@ export function loadConfig(env = process.env) {
   return assertConfig({ chainId, rpcUrl, escrowAddress, dbPath, pollMs, logRange, maxWindows });
 }
 
+/**
+ * Pace settings. A missing or invalid value falls back to the default.
+ * This does not throw. Defaults stay 200 ms, three retries at 1/2/4 s,
+ * a 30 s Retry-After cap, no jitter, a 10 s HTTP timeout, and three poll
+ * intervals of health freshness. POINTS_MAX_WINDOWS_PER_RUN is unset unless
+ * it is a positive integer.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function loadPaceSettings(env = process.env) {
+  const minGapMs = blank(env.POINTS_GETLOGS_MIN_GAP_MS)
+    ? GETLOGS_MIN_GAP_MS
+    : (nonNegativeInt(env.POINTS_GETLOGS_MIN_GAP_MS) ?? GETLOGS_MIN_GAP_MS);
+
+  let backoffMs = [...RETRY_BACKOFF_MS];
+  if (!blank(env.POINTS_RETRY_BACKOFF_MS)) {
+    const parts = String(env.POINTS_RETRY_BACKOFF_MS).split(",").map((part) => part.trim()).filter((part) => part !== "");
+    const parsed = parts.map((part) => positiveOrNull(part));
+    if (parts.length > 0 && parsed.every((item) => item != null)) backoffMs = parsed;
+  }
+
+  const maxRetries = blank(env.POINTS_MAX_SCAN_RETRIES)
+    ? MAX_SCAN_RETRIES
+    : (positiveOrNull(env.POINTS_MAX_SCAN_RETRIES) ?? MAX_SCAN_RETRIES);
+  const maxRetryAfterMs = blank(env.POINTS_MAX_RETRY_AFTER_MS)
+    ? MAX_RETRY_AFTER_MS
+    : (nonNegativeInt(env.POINTS_MAX_RETRY_AFTER_MS) ?? MAX_RETRY_AFTER_MS);
+  const gapJitterMs = blank(env.POINTS_GETLOGS_GAP_JITTER_MS)
+    ? 0
+    : (nonNegativeInt(env.POINTS_GETLOGS_GAP_JITTER_MS) ?? 0);
+  const backoffJitterMs = blank(env.POINTS_RETRY_BACKOFF_JITTER_MS)
+    ? 0
+    : (nonNegativeInt(env.POINTS_RETRY_BACKOFF_JITTER_MS) ?? 0);
+  const httpTimeoutMs = blank(env.POINTS_HTTP_TIMEOUT_MS)
+    ? DEFAULT_HTTP_TIMEOUT_MS
+    : (nonNegativeInt(env.POINTS_HTTP_TIMEOUT_MS) ?? DEFAULT_HTTP_TIMEOUT_MS);
+  const freshnessPolls = blank(env.POINTS_HEALTH_FRESHNESS_POLLS)
+    ? DEFAULT_HEALTH_FRESHNESS_POLLS
+    : (positiveOrNull(env.POINTS_HEALTH_FRESHNESS_POLLS) ?? DEFAULT_HEALTH_FRESHNESS_POLLS);
+  const maxWindowsPerRun = blank(env.POINTS_MAX_WINDOWS_PER_RUN)
+    ? null
+    : positiveOrNull(env.POINTS_MAX_WINDOWS_PER_RUN);
+  const userAgent = blank(env.POINTS_USER_AGENT) ? DEFAULT_USER_AGENT : String(env.POINTS_USER_AGENT).trim();
+
+  return {
+    minGapMs,
+    backoffMs,
+    maxRetries,
+    maxRetryAfterMs,
+    gapJitterMs,
+    backoffJitterMs,
+    httpTimeoutMs,
+    freshnessPolls,
+    maxWindowsPerRun,
+    userAgent,
+  };
+}
+
 function rangeText(error) {
   const parts = [error.details, error.shortMessage];
   return parts.filter((part) => part != null && part !== "").join(" ").toLowerCase();
@@ -139,6 +225,7 @@ export function isRangeError(error) {
   if (code === -32614) return true;
   if (status === 413 || code === 413) return true;
   const text = rangeText(error);
+  if (textIsHeadLag(text)) return false;
   if (textIsRateLimit(text)) return false;
   if (code === -32005 || code === -32602) return textIsRange(text);
   return textIsRange(text);
@@ -180,6 +267,9 @@ export function emptyCode(value) {
 export function errorCode(error) {
   if (!error || typeof error !== "object") return "rpc_error";
   if (isRangeError(error)) return "range_error";
+  if (typeof error.scanReason === "string" && PACE_REASONS.has(error.scanReason)) return error.scanReason;
+  const paced = scanErrorClass(error);
+  if (paced) return paced;
   if (error instanceof PointsError || error.name === "PointsError") return "ledger_error";
   const name = String(error.name ?? "");
   if (/sqlite/i.test(name) || (typeof error.code === "string" && /SQLITE/i.test(error.code))) return "ledger_error";
@@ -214,7 +304,10 @@ function logFailure(error, rpcUrl) {
  * @param {{ lastPassAt: number | null, pollMs: number, now: number, behind?: number }} status
  */
 export function healthDecision(status) {
-  const fresh = status.lastPassAt != null && status.now - status.lastPassAt <= 3 * status.pollMs;
+  const polls = Number.isInteger(status.freshnessPolls) && status.freshnessPolls >= 1
+    ? status.freshnessPolls
+    : DEFAULT_HEALTH_FRESHNESS_POLLS;
+  const fresh = status.lastPassAt != null && status.now - status.lastPassAt <= polls * status.pollMs;
   const behind = Number.isSafeInteger(status.behind) ? Math.max(0, status.behind) : 0;
   return { ok: fresh, statusCode: fresh ? 200 : 503, behind };
 }
@@ -233,8 +326,14 @@ function blocksBehind(head, cursor) {
  * viem otherwise turns a JSON-RPC body into an RPC error and drops the header.
  * HTTP 413 is left on viem's path so a range code still surfaces.
  */
-async function pointsFetch(url, init) {
-  const response = await fetch(url, init);
+function withUserAgent(init, userAgent) {
+  const headers = new Headers(init?.headers ?? undefined);
+  if (userAgent) headers.set("user-agent", userAgent);
+  return { ...(init ?? {}), headers };
+}
+
+async function pointsFetch(url, init, userAgent = DEFAULT_USER_AGENT) {
+  const response = await fetch(url, withUserAgent(init, userAgent));
   const status = response.status;
   if (status !== 429 && (status < 500 || status > 599)) return response;
   const text = await response.text();
@@ -257,14 +356,18 @@ async function pointsFetch(url, init) {
 }
 
 /** viem retries stay off. The scan pacer is the only retry layer. */
-export function createPointsHttpTransport(rpcUrl) {
-  return http(rpcUrl, { retryCount: 0, fetchFn: pointsFetch });
+export function createPointsHttpTransport(rpcUrl, { timeout = DEFAULT_HTTP_TIMEOUT_MS, userAgent = DEFAULT_USER_AGENT } = {}) {
+  return http(rpcUrl, {
+    retryCount: 0,
+    timeout,
+    fetchFn: (url, init) => pointsFetch(url, init, userAgent),
+  });
 }
 
-export function createDefaultRpc(rpcUrl) {
+export function createDefaultRpc(rpcUrl, transportOptions) {
   const client = createPublicClient({
     chain: baseSepolia,
-    transport: createPointsHttpTransport(rpcUrl),
+    transport: createPointsHttpTransport(rpcUrl, transportOptions),
   });
   return {
     chainId: () => client.getChainId(),
@@ -286,6 +389,7 @@ function listenHealth(port, status) {
         const decision = healthDecision({
           lastPassAt: status.lastPassAt,
           pollMs: status.pollMs,
+          freshnessPolls: status.freshnessPolls,
           now: status.now(),
           behind: status.behind,
         });
@@ -315,9 +419,17 @@ function listenHealth(port, status) {
   });
 }
 
-async function assertContractCode(rpc, address, label) {
+async function pacedCall(pacer, fn) {
+  const result = await pacer.run(fn);
+  if (result.ok) return result.value;
+  const error = result.error instanceof Error ? result.error : new Error("rpc failed");
+  error.scanReason = result.reason;
+  throw error;
+}
+
+async function assertContractCode(rpc, address, label, pacer) {
   if (typeof rpc.getCode !== "function") throw new Error(`RPC getCode is required for ${label}`);
-  const code = await rpc.getCode({ address });
+  const code = await pacedCall(pacer, () => rpc.getCode({ address }));
   if (emptyCode(code)) throw new Error(`${label} contract code is empty`);
 }
 
@@ -328,32 +440,48 @@ async function assertContractCode(rpc, address, label) {
  * does not reject the pass: after the bounded retries the pass returns at the
  * last committed window and the timer continues. Other scan failures still
  * reject when `once` is set. Without `once`, a thrown scan failure stays in the
- * process: /health stays up and the timer retries. Chain id, contract code,
- * and config failures still reject.
- * `paceNow` and `sleep` drive the getLogs gap and the retry waits. They default
- * to the wall clock and a real timer.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
+ * process: /health stays up and the timer retries. Chain id and contract code
+ * use the same pacer. A retryable failure there that does not recover still
+ * rejects. A retryable failure on the finalized head ends the pass instead.
+ * Config failures still reject.
+ * `paceNow` times the gap and defaults to `performance.now`. `wallNow` defaults
+ * to `Date.now` and is used only to read an HTTP-date Retry-After. `sleep`
+ * defaults to a real timer.
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
+  const paceEnv = options.env ?? (options.config ? {} : process.env);
+  const pace = loadPaceSettings(paceEnv);
   const now = options.now ?? (() => performance.now());
-  const paceNow = options.paceNow ?? (() => Date.now());
+  const paceNow = options.paceNow ?? (() => performance.now());
+  const wallNow = options.wallNow ?? (() => Date.now());
   const sleep = options.sleep ?? sleepMs;
   const pacer = createScanPacer({
     now: paceNow,
+    wallNow,
     sleep,
+    minGapMs: pace.minGapMs,
+    gapJitterMs: pace.gapJitterMs,
+    backoffMs: pace.backoffMs,
+    backoffJitterMs: pace.backoffJitterMs,
+    maxRetries: pace.maxRetries,
+    maxRetryAfterMs: pace.maxRetryAfterMs,
     classify(error) {
       if (isRangeError(error)) return null;
       return scanErrorClass(error);
     },
   });
-  const rpc = options.rpc ?? createDefaultRpc(cfg.rpcUrl);
-  const reportedChain = asChainId(await rpc.chainId());
+  const rpc = options.rpc ?? createDefaultRpc(cfg.rpcUrl, {
+    timeout: pace.httpTimeoutMs,
+    userAgent: pace.userAgent,
+  });
+  const reportedChain = asChainId(await pacedCall(pacer, () => rpc.chainId()));
   if (!isAcceptedChain(reportedChain)) {
     throw new Error(`RPC chain id is ${String(reportedChain)}, expected ${CHAIN_ID}`);
   }
-  await assertContractCode(rpc, cfg.escrowAddress, "escrow");
-  await assertContractCode(rpc, PANEL, "panel");
+  await assertContractCode(rpc, cfg.escrowAddress, "escrow", pacer);
+  await assertContractCode(rpc, PANEL, "panel", pacer);
 
   if (cfg.dbPath !== ":memory:") mkdirSync(dirname(cfg.dbPath), { recursive: true });
 
@@ -366,9 +494,11 @@ export async function start(options = {}) {
   let skippedTicks = 0;
   let learnedWindow = cfg.logRange;
   let dirty = false;
+  let runWindows = 0;
   const status = {
     chainId: cfg.chainId,
     pollMs: cfg.pollMs,
+    freshnessPolls: pace.freshnessPolls,
     lastPassAt: null,
     lastError: null,
     earlyReason: null,
@@ -377,7 +507,25 @@ export async function start(options = {}) {
   };
 
   const runOnce = async () => {
-    const reported = asChainId(await rpc.finalizedBlockNumber());
+    const headRead = await pacer.run(() => rpc.finalizedBlockNumber());
+    if (!headRead.ok) {
+      const reason = headRead.reason;
+      status.earlyReason = reason;
+      status.lastError = reason;
+      console.error(`${reason} pass_ended_early`);
+      return {
+        ok: true,
+        endedEarly: true,
+        reason,
+        inserted: 0,
+        rebuilds: 0,
+        ranges: [],
+        skipped: false,
+        scannedThrough: indexer ? indexer.lastScannedBlock() : null,
+        behind: status.behind,
+      };
+    }
+    const reported = asChainId(headRead.value);
     if (!Number.isSafeInteger(reported) || reported < 0) throw new Error("RPC finalized block is not a safe integer");
     if (!indexer) {
       indexer = openIndexer({ path: cfg.dbPath, finalizedBlock: reported, chainId: cfg.chainId });
@@ -392,7 +540,11 @@ export async function start(options = {}) {
     let earlyReason = null;
     const ranges = [];
     status.behind = blocksBehind(head, cursor);
-    while (from <= head && committedWindows < cfg.maxWindows) {
+    while (
+      from <= head
+      && committedWindows < cfg.maxWindows
+      && (pace.maxWindowsPerRun == null || runWindows < pace.maxWindowsPerRun)
+    ) {
       const to = Math.min(head, from + window - 1);
       let logs;
       try {
@@ -418,6 +570,7 @@ export async function start(options = {}) {
       const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
       inserted += committed.inserted;
       committedWindows += 1;
+      runWindows += 1;
       ranges.push({ fromBlock: from, toBlock: to });
       from = to + 1;
       learnedWindow = Math.min(cfg.logRange, window * 2);

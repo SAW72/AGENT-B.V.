@@ -49,9 +49,9 @@ function blockOf(log) {
 }
 
 async function until(pred) {
-  for (let i = 0; i < 100; i += 1) {
+  for (let i = 0; i < 200; i += 1) {
     if (pred()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timed out");
 }
@@ -551,6 +551,7 @@ describe("process entry", () => {
     });
     try {
       const pending = running.pass();
+      await until(() => typeof release === "function");
       const skipped = await running.pass();
       assert.equal(skipped.skipped, true);
       assert.equal(running.skippedTicks, 1);
@@ -644,7 +645,7 @@ describe("process entry", () => {
     });
     let running;
     try {
-      await until(() => health);
+      await until(() => health && typeof release === "function");
       const early = await fetch(health.url);
       assert.equal(early.status, 503);
       const earlyBody = await early.json();
@@ -751,6 +752,11 @@ describe("process entry", () => {
       [new RpcRequestError({
         body: { method: "eth_getLogs" },
         error: { code: -32602, message: "missing required field" },
+        url: "https://sepolia.base.org",
+      }), false],
+      [new RpcRequestError({
+        body: { method: "eth_getLogs" },
+        error: { code: -32602, message: "block range extends beyond current head block" },
         url: "https://sepolia.base.org",
       }), false],
       [new RpcRequestError({
