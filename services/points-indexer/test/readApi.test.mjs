@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,11 +21,19 @@ import {
   HISTORY_MAX_LIMIT,
   historyOrder,
   httpsNoticeUrl,
+  parseExactHttpsOrigin,
+  parseRatePerMinute as readRatePerMinute,
   pointsEnabled,
   READ_ENV_ALLOWLIST,
   readSettings,
   rowFollowsCursor,
 } from "../src/readApi.mjs";
+import {
+  DEFAULT_MAX_ENTRIES,
+  createFallbackLimiter,
+  parseExactHttpsOrigin as edgeOrigin,
+  parseRatePerMinute,
+} from "../src/readEdge.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
 const SEPOLIA_FILE = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
@@ -2614,5 +2622,267 @@ describe("points read API", { concurrency: false }, () => {
     } finally {
       await running.stop();
     }
+  });
+
+  function keyIp(n) {
+    return `127.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}`;
+  }
+
+  function httpResult(url, headers) {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(url, { headers }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({
+          status: res.statusCode,
+          retry: res.headers["retry-after"] ?? null,
+          acao: res.headers["access-control-allow-origin"] ?? null,
+        }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  async function fillKeys(url, start, count) {
+    const width = 64;
+    for (let n = start; n < start + count; n += width) {
+      const end = Math.min(start + count, n + width);
+      const batch = [];
+      for (let i = n; i < end; i += 1) {
+        batch.push(httpResult(url, { "x-forwarded-for": keyIp(i) }));
+      }
+      const rows = await Promise.all(batch);
+      for (const row of rows) assert.equal(row.status, 503);
+    }
+  }
+
+  const fallbackRpc = {
+    async chainId() {
+      return 84532;
+    },
+    async getCode() {
+      return "0x6001600055";
+    },
+    async finalizedBlockNumber() {
+      return ESCROW_START_BLOCK;
+    },
+    async getLogs() {
+      return [];
+    },
+  };
+
+  async function withFallback(env, hooks, fn) {
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        env,
+        paceNow: () => 0,
+        sleep: async () => {},
+        readApiImport() {
+          throw new Error("load failed");
+        },
+        rpc: fallbackRpc,
+        ...hooks,
+      });
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      await fn(origin, running);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  }
+
+  it("parses the fallback rate the same way as the read API, including unset and invalid", async () => {
+    for (const value of [undefined, null, "", "   ", "abc", "1e2", "08", "0", "2", "60"]) {
+      assert.equal(parseRatePerMinute(value), readRatePerMinute(value));
+    }
+    assert.equal(parseRatePerMinute(undefined), 60);
+    assert.equal(parseRatePerMinute("1e2"), 60);
+    assert.equal(parseRatePerMinute("08"), 60);
+    const base = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+    };
+    for (const rate of [undefined, "abc", "1e2", "08"]) {
+      const env = { ...base };
+      if (rate != null) env.POINTS_READ_RATE_PER_MINUTE = rate;
+      await withFallback(env, {}, async (origin) => {
+        const url = `${origin}/v1/points/config`;
+        for (let i = 0; i < 60; i += 1) {
+          assert.equal((await httpResult(url)).status, 503);
+        }
+        assert.equal((await httpResult(url)).status, 429);
+      });
+    }
+  });
+
+  it("expires a fallback window on the 60 second boundary and reports Retry-After", async () => {
+    let now = 5_000_000;
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+      POINTS_READ_RATE_PER_MINUTE: "1",
+    };
+    await withFallback(env, { fallbackNow: () => now }, async (origin) => {
+      const url = `${origin}/v1/points/config`;
+      assert.equal((await httpResult(url)).status, 503);
+      const blocked = await httpResult(url);
+      assert.equal(blocked.status, 429);
+      assert.equal(blocked.retry, "60");
+      now += 20_000;
+      const later = await httpResult(url);
+      assert.equal(later.status, 429);
+      assert.equal(later.retry, "40");
+      now += 39_999;
+      const edge = await httpResult(url);
+      assert.equal(edge.status, 429);
+      assert.equal(edge.retry, "1");
+      now += 1;
+      assert.equal((await httpResult(url)).status, 503);
+    });
+  });
+
+  it("does not lock out a new fallback key after the window when the map is full", async () => {
+    let now = 5_000_000;
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+      POINTS_READ_RATE_PER_MINUTE: "1",
+      POINTS_TRUSTED_PROXY_HOPS: "1",
+    };
+    await withFallback(env, { fallbackNow: () => now }, async (origin, running) => {
+      const url = `${origin}/v1/points/config`;
+      await fillKeys(url, 0, DEFAULT_MAX_ENTRIES);
+      const refused = await httpResult(url, { "x-forwarded-for": keyIp(DEFAULT_MAX_ENTRIES) });
+      assert.equal(refused.status, 429);
+      const resident = await httpResult(url, { "x-forwarded-for": keyIp(0) });
+      assert.equal(resident.status, 429);
+      now += 60_000;
+      const admitted = await httpResult(url, { "x-forwarded-for": keyIp(DEFAULT_MAX_ENTRIES + 1) });
+      assert.equal(admitted.status, 503);
+      const health = await httpResult(running.healthUrl);
+      assert.equal(health.status, 200);
+    });
+  });
+
+  it("evicts the least recently seen under-limit fallback key and keeps one at its limit", () => {
+    let now = 1_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 3,
+    });
+    assert.equal(limiter.allow(keyIp(0)).ok, true);
+    assert.equal(limiter.allow(keyIp(1)).ok, true);
+    assert.equal(limiter.allow(keyIp(1)).ok, true);
+    assert.equal(limiter.allow(keyIp(1)).ok, true);
+    assert.equal(limiter.allow(keyIp(1)).ok, false);
+    for (let i = 2; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    for (let i = 2; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES)).ok, true);
+    assert.equal(limiter.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(limiter.allow(keyIp(1)).ok, false);
+    assert.equal(limiter.allow(keyIp(0)).ok, true);
+    assert.equal(limiter.allow(keyIp(0)).ok, true);
+    assert.equal(limiter.allow(keyIp(0)).ok, true);
+    assert.equal(limiter.allow(keyIp(0)).ok, false);
+  });
+
+  it("rejects a non-https origin, a tailed origin, and accepts one trailing slash", async () => {
+    const samples = [
+      ["http://app.invalid", false],
+      ["ftp://app.invalid", false],
+      ["javascript://app.invalid", false],
+      ["https://app.invalid/path", false],
+      ["https://app.invalid?x=1", false],
+      ["https://app.invalid#frag", false],
+      ["https://app.invalid/", true],
+    ];
+    for (const [raw, ok] of samples) {
+      const edge = edgeOrigin(raw);
+      const read = parseExactHttpsOrigin(raw);
+      assert.equal(edge.ok, ok);
+      assert.deepEqual(edge, read);
+      if (ok) assert.equal(edge.origin, "https://app.invalid");
+    }
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+      POINTS_CORS_ORIGINS: "https://app.invalid",
+      POINTS_READ_RATE_PER_MINUTE: "20",
+    };
+    await withFallback(env, {}, async (origin) => {
+      const url = `${origin}/v1/points/config`;
+      for (const [raw, ok] of samples) {
+        const row = await httpResult(url, { origin: raw });
+        assert.equal(row.status, 503);
+        assert.equal(row.acao, ok ? "https://app.invalid" : null);
+      }
+    });
+  });
+
+  it("keys a failed read-module load by the hop count and ignores X-Forwarded-For at hop 0", async () => {
+    const base = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+      POINTS_READ_RATE_PER_MINUTE: "1",
+    };
+    await withFallback({ ...base, POINTS_TRUSTED_PROXY_HOPS: "0" }, {}, async (origin) => {
+      const url = `${origin}/v1/points/config`;
+      const first = await httpResult(url, { "x-forwarded-for": "127.0.0.5" });
+      const second = await httpResult(url, { "x-forwarded-for": "127.0.0.6" });
+      assert.equal(first.status, 503);
+      assert.equal(second.status, 429);
+    });
+    await withFallback({ ...base, POINTS_TRUSTED_PROXY_HOPS: "1" }, {}, async (origin) => {
+      const url = `${origin}/v1/points/config`;
+      const first = await httpResult(url, { "x-forwarded-for": "127.0.0.5" });
+      const second = await httpResult(url, { "x-forwarded-for": "127.0.0.6" });
+      const again = await httpResult(url, { "x-forwarded-for": "127.0.0.5" });
+      assert.equal(first.status, 503);
+      assert.equal(second.status, 503);
+      assert.equal(again.status, 429);
+    });
+    await withFallback({ ...base, POINTS_CLOUDFLARE_INGRESS: "true" }, {}, async (origin) => {
+      const url = `${origin}/v1/points/config`;
+      const first = await httpResult(url, { "cf-connecting-ip": "127.0.0.9" });
+      const second = await httpResult(url, { "cf-connecting-ip": "127.0.0.10" });
+      const again = await httpResult(url, { "cf-connecting-ip": "127.0.0.9" });
+      assert.equal(first.status, 503);
+      assert.equal(second.status, 503);
+      assert.equal(again.status, 429);
+    });
+  });
+
+  it("tells the operator to restart after a read module load failure", () => {
+    const section = readFileSync(README_FILE, "utf8").split("## Read API")[1].split("## What it stores")[0];
+    assert.match(section, /configFailed/);
+    assert.match(section, /evaluation error/);
+    assert.match(section, /GET \/health` stays `200/);
+    assert.match(section, /until the process restarts/);
   });
 });
