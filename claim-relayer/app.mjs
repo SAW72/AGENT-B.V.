@@ -57,12 +57,17 @@ export function createCors(allowedOrigins) {
 
 function sendJson(res, req, status, body, corsHeaders) {
   const payload = JSON.stringify(body);
-  res.writeHead(status, {
+  const headers = {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "content-length": Buffer.byteLength(payload),
     ...corsHeaders(req),
-  });
+  };
+  const retryAfter = Number(body?.retryAfter);
+  if (status === 429 && Number.isInteger(retryAfter) && retryAfter > 0) {
+    headers["retry-after"] = String(retryAfter);
+  }
+  res.writeHead(status, headers);
   res.end(payload);
 }
 
@@ -149,6 +154,7 @@ function errorBody(err) {
     "senderNote",
     "fixture",
     "revert_data",
+    "retryAfter",
   ]) {
     if (err[key] !== undefined) body[key] = err[key];
   }

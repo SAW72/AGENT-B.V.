@@ -30,6 +30,7 @@ export function startServer(env = process.env) {
     ? createSepoliaBroadcaster({
         rpcUrl,
         privateKey: env.RELAYER_PRIVATE_KEY,
+        gasCaps: config.abuse,
       })
     : null;
   const server = createClaimRelayer({

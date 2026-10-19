@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { RpcRequestError, keccak256 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { assertSepoliaRawTx, createSepoliaBroadcaster } from "../broadcast.mjs";
+import { assertPreparedGasCaps, assertSepoliaRawTx, createSepoliaBroadcaster } from "../broadcast.mjs";
 import { BOOKED_SEPOLIA_ESCROW } from "../config.mjs";
 import { MAX_REVERT_DATA_BYTES } from "../revertData.mjs";
 
@@ -139,6 +139,52 @@ describe("sepolia broadcaster", () => {
     assertSepoliaRawTx(raw);
     assert.equal(String(raw).toLowerCase().includes(KEY.slice(2)), false);
     assert.equal(JSON.stringify(result).includes(KEY.slice(2)), false);
+  });
+
+  it("refuses each gas cap before it signs or broadcasts", async () => {
+    const caps = [
+      { field: "gas", gasCaps: { maxGas: 1, maxFeePerGasWei: "9000000000", maxPriorityFeePerGasWei: "9000000000" } },
+      {
+        field: "maxFeePerGas",
+        gasCaps: { maxGas: 5_000_000, maxFeePerGasWei: "1", maxPriorityFeePerGasWei: "9000000000" },
+      },
+      {
+        field: "maxPriorityFeePerGas",
+        gasCaps: { maxGas: 5_000_000, maxFeePerGasWei: "9000000000", maxPriorityFeePerGasWei: "1" },
+      },
+    ];
+    for (const spec of caps) {
+      const seen = [];
+      const broadcaster = createSepoliaBroadcaster({
+        privateKey: KEY,
+        gasCaps: spec.gasCaps,
+        request: async ({ method, params }) => {
+          seen.push(method);
+          if (method === "eth_chainId") return "0x14a34";
+          if (method === "eth_fillTransaction") throw new Error("eth_fillTransaction is not available");
+          if (method === "eth_getTransactionCount") return "0x0";
+          if (method === "eth_getBlockByNumber") return sepoliaBlock();
+          if (method === "eth_maxPriorityFeePerGas") return "0x59682f00";
+          if (method === "eth_gasPrice") return "0x3b9aca00";
+          if (method === "eth_estimateGas") return "0x030d40";
+          if (method === "eth_call") return "0x";
+          if (method === "eth_sendRawTransaction") return params[0];
+          throw new Error(`unexpected ${method}`);
+        },
+      });
+      await assert.rejects(
+        () =>
+          broadcaster.send({
+            chainId: 84532,
+            to: BOOKED_SEPOLIA_ESCROW,
+            data: "0x" + "12".repeat(4) + ESCROW_ID.slice(2),
+            valueWei: "0",
+          }),
+        (err) => err.error === "gas_cap" && err.field === spec.field && err.txHash === null,
+      );
+      assert.equal(seen.includes("eth_sendRawTransaction"), false, spec.field);
+    }
+    assert.equal(typeof assertPreparedGasCaps, "function");
   });
 
   it("rebroadcasts the same raw transaction after a timeout", async () => {
