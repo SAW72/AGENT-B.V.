@@ -18,7 +18,7 @@ Counsel should review before any of this is published.
 2. **No consideration.** No purchase, no referral bonus, no holding requirement.
 3. **Disclaimer.** The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything." No dollar amount is attached to a point.
 4. **Verifiable ledger.** Append-only, keyed by wallet. Unique on (wallet, action, tx_hash). On-chain actions store the transaction hash.
-5. **Connected wallet.** The dashboard reads the connected wallet. Points are tied to that wallet. Signup is open on the public Base Sepolia beta.
+5. **Connected wallet.** The dashboard reads the connected wallet. Points are tied to that wallet. Signup will be open on the public Base Sepolia beta.
 6. **Pause.** If the points program ends or pauses, Agent-B.V. says so at least 14 days ahead, stops new writes at the stated time, and keeps the off-chain record readable so anyone can still look up a wallet's activity. Nothing is paid out or transferred. The record may be archived or deleted later under the privacy policy.
 
 Points are recorded for activity.
@@ -130,7 +130,7 @@ A signature added after the action already ran is a confirmation, not prior auth
 
 ### Terminal approver
 
-If the action moves, locks, or irreversibly commits funds — transfer, swap, stake, deploy, or anything else with a financial consequence — the last approver must be a verified human.
+If the action moves, locks, or irreversibly commits funds (transfer, swap, stake, deploy, or anything else with a financial consequence), the last approver must be a verified human.
 
 An AI may propose and recommend. It may approve ordinary work inside an explicit scope that does not touch funds. It may not be the last signature on money. If it tries, Agent-B.V. blocks the action and logs the full chain.
 

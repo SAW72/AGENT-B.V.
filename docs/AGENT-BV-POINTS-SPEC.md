@@ -27,7 +27,7 @@ From `docs/POINTS-AND-ACCOUNTABILITY.md`:
 - There is no purchase, no referral bonus, and no holding requirement.
 - `deployments/base-sepolia.json` has `BVT.address` set to `null`. No dollar amount is attached to a point.
 - The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
-- The dashboard reads the connected wallet. Points are tied to that wallet. Signup is open on this public testnet beta. This spec does not add a dashboard.
+- The dashboard reads the connected wallet. Points are tied to that wallet. Signup will be open on this public testnet beta. This spec does not add a dashboard.
 
 ## Where the events come from
 
@@ -335,7 +335,7 @@ Whether large transfers need more than one human signature is undecided in both 
 
 The escrow contract does not read the chain. The check lives in the points writer. That split is intentional and is restated for Blockchain Builder under "No contract change".
 
-## Checklist #7 — OFAC screening
+## Checklist #7: OFAC screening
 
 **Open.** Scoring stays 0 until OFAC screening is configured. That is fail-closed. Definition from `docs/reputation-ledger.md`: OFAC / sanctions before soft launch. The screen hook fails closed, as that ledger doc decided. Every row keeps `points` at 0 until a real screen is plugged in.
 
@@ -352,7 +352,7 @@ Interaction with the append-only ledger: a #7 zero row still occupies `UNIQUE(wa
 
 The reputation doc's test hook that bypasses the screen is not a production path for this ledger.
 
-## Checklist #9 — Enforcer
+## Checklist #9: Enforcer
 
 **Open.** Definition from `docs/reputation-ledger.md`: name the sybil / abuse enforcer and write the policy. The `enforcer` hook has no named owner, so flags do not auto-cancel. `O5_REPEAT` and `DISPUTE_PREDATES_ESCROW` are review only. Burns and listings are signals. Cancels are ADJ. Checklist #7 stays fail closed.
 
@@ -369,7 +369,7 @@ Hook shape from `docs/reputation/INDEXER_SPEC.md`, still open (Spencer names the
 
 No owner is named, so this spec does not auto-cancel. ADJ lives on the reputation ledger (`config/reputation/adjustments.json`, pull request only, no admin write endpoint). Whether an ADJ row can target an action in this spec is **TBD**. Until that exists, abuse handling on this ledger is the closed cap: the extra row is not committed. Flags do not mint a negative point.
 
-## Checklist #12 — Caps
+## Checklist #12: Caps
 
 **Open.** Definition from `docs/reputation-ledger.md`: lock caps before soft launch. The numbers in `config/reputation/sepolia.json` are labeled `DRAFT/GUESS`. `GET /v1/reputation/config` returns `status: "draft"` on the body and on each cap and threshold. `config/reputation/sepolia.json` says every figure under `points`, `floors`, `caps`, and `flags` is a GUESS until Spencer locks checklist #12, and it must not be used against live data until Blockchain Verifier APPROVE and Spencer's GO via BOB.
 
@@ -420,19 +420,19 @@ Two separate systems exist on `main` at `6b67ad26aa35a3c87e980acfce12aab89ab21d7
 
 The older one is the O1–O5 and A1–A2 reputation read API in the claim-relayer. The routes are `GET /v1/reputation/config`, `GET /v1/reputation/:address`, and `GET /v1/reputation/:address/history` (`claim-relayer/app.mjs:219-240`, `claim-relayer/reputation/runtime.mjs:63-64`). `config/reputation/sepolia.json:3-4` names `config_version` `sepolia-draft-1` and `rule_version` `design-v2.2`. On 2026-10-17 a read-only GET of the claim-relayer `/health` route returned HTTP 200, `chainId` 84532, `mode` `live`, `liveSubmit` true, and `build.commit` `6b67ad26aa35a3c87e980acfce12aab89ab21d76`. `GET /v1/reputation/config?chainId=84532` on that host returned `status` `draft`. `GET /v1/reputation/0x0000000000000000000000000000000000000001?chainId=84532` returned `final` 0 and `provisional` 0 on both ledgers, `eligibility.status` `unverified`, `points_withheld` true, and `indexed_to_block` null. That address is the only live balance read recorded here. `docs/reputation-ledger.md:28` says there is no durable store and the in-memory batch is empty unless a caller injects one. The wallet UI is under `apps/wallet-ux/src/reputation/`. `ReputationView` appears only inside the collapsed "System status" details (`apps/wallet-ux/src/App.tsx:325-330` and `apps/wallet-ux/src/App.tsx:422-428`) and only when that wallet is connected on chain 84532 (`apps/wallet-ux/src/reputation/ReputationView.tsx:364`). The address it sends is `account.address` (`apps/wallet-ux/src/App.tsx:426`). "What points are" uses that same rule: wallet connect is in, and points are tied to the connected wallet. There is no typed-address lookup.
 
-The new ledger is this spec plus `services/points-indexer`. Its HTTP surface is `GET /health` and `GET /health/` only. Every other path returns 404 (`services/points-indexer/src/main.mjs:247-261`). There is no read API on that process.
+The new ledger is this spec plus `services/points-indexer`. `GET /health` and `GET /health/` stay on that process (`services/points-indexer/src/main.mjs:480`). The read routes below are on the same Node process and on the Worker. They answer only when `POINTS_ENABLED` is the exact string `true`.
 
 (b) There is no write path, so as specced no real user can get even a zero-point row.
 
-`setOrigin`, `submitChain`, `issueNonce`, and `submitLink` are methods on the in-process indexer (`services/points-indexer/src/indexer.mjs:255`, `services/points-indexer/src/indexer.mjs:384`, `services/points-indexer/src/indexer.mjs:405`, and `services/points-indexer/src/indexer.mjs:487`). A search of `services/points-indexer/src/main.mjs` finds none of those four names. A search of `apps/` and `claim-relayer/` for `PointsLink`, `DecisionEntry`, `submitChain`, `issueNonce`, and `submitLink` found no match, so nothing in the wallet signs them. `rebuild` skips a candidate unless the chain is accepted and the link is accepted (`services/points-indexer/src/indexer.mjs:682-690`). A human entry is accepted only when the server origin has an identity anchor and behavioral signals (`services/points-indexer/src/signature.mjs:203-206`). Without those stored rows, `rebuild` commits nothing.
+`setOrigin`, `submitChain`, `issueNonce`, and `submitLink` are methods on the in-process indexer (`services/points-indexer/src/indexer.mjs:318`, `services/points-indexer/src/indexer.mjs:447`, `services/points-indexer/src/indexer.mjs:468`, and `services/points-indexer/src/indexer.mjs:550`). A search of `services/points-indexer/src/main.mjs` finds none of those four names. A search of `apps/` and `claim-relayer/` for `PointsLink`, `DecisionEntry`, `submitChain`, `issueNonce`, and `submitLink` found no match, so nothing in the wallet signs them. `rebuild` skips a candidate unless the chain is accepted and the link is accepted (`services/points-indexer/src/indexer.mjs:745-753`). A human entry is accepted only when the server origin has an identity anchor and behavioral signals (`services/points-indexer/src/signature.mjs:203-206`). Without those stored rows, `rebuild` commits nothing.
 
 ### Storage (plan pending)
 
-The indexer host is Cloudflare: D1 plus a Worker or a Durable Object. That choice replaces the earlier host list. The storage design is plan pending. This document does not design it.
+The indexer host is Cloudflare: D1 plus a Worker or a Durable Object. That choice replaces the earlier host list. The storage design is plan pending. This document does not design it. One alarm on the Worker does at most 45 subrequests.
 
 ### Read API contract
 
-Design only. Nothing in this section is implemented.
+The Node process and the Worker both implement this contract. Public reads stay off unless `POINTS_ENABLED` is the exact string `true`. `TRUE`, a space-padded `true`, `1`, `yes`, and `on` leave the reads off.
 
 The routes are on the points-indexer process, not on the claim-relayer. The claim-relayer is the submit process: the health read in "Two systems on main" returned `mode` `live`. `claim-relayer/README.md:21` says `RELAYER_PRIVATE_KEY` is a runtime environment variable only. The indexer process does not read a signing key.
 
@@ -442,30 +442,30 @@ The routes are on the points-indexer process, not on the claim-relayer. The clai
 
 Chain id `84532` only. Any other chain id is rejected, including `1` and `8453`. An address that is not `0x` plus 40 hexadecimal digits is rejected, and a stored address is lowercase. The reputation route already uses that shape (`claim-relayer/reputation/runtime.mjs:64-71`).
 
-There is no authentication. The body is public data derived from chain logs plus the connected wallet. The limit below is not an auth control, which is also what `claim-relayer/reputation/rateLimit.mjs:1-3` says about its own limiter. The limit is 60 requests per minute per IP, in memory (`claim-relayer/reputation/rateLimit.mjs:5`), and it is empty again after a restart. The IP for this design is the rightmost `X-Forwarded-For` hop. `clientIp` already takes that hop (`claim-relayer/app.mjs:77-83`). The reputation route as written does not call `clientIp`. It passes `req.socket.remoteAddress` (`claim-relayer/app.mjs:229-230`). This design uses the rightmost hop, not that socket line.
+There is no authentication. The body is public data derived from chain logs plus the connected wallet. The limit below is not an auth control, which is also what `claim-relayer/reputation/rateLimit.mjs:1-3` says about its own limiter. The limit is 60 requests per minute per IP, in memory (`claim-relayer/reputation/rateLimit.mjs:5`), and it is empty again after a restart. On the Node process the client IP is the socket address. `X-Forwarded-For` is used only when `POINTS_TRUSTED_PROXY_HOPS` is a positive hop count, counted from the right. Hop 0, the default, ignores that header. `CF-Connecting-IP` is used only when `POINTS_CLOUDFLARE_INGRESS` is the exact string `true`. The Worker uses `CF-Connecting-IP` only and does not read `X-Forwarded-For`.
 
-CORS is an exact-origin allowlist. The default origin is `https://agent-bv.pages.dev` (`claim-relayer/config.mjs:18-19`). Methods are GET and OPTIONS only (`claim-relayer/reputation/cors.mjs:67`). There is no wildcard. Responses send `Cache-Control: no-store`, as `claim-relayer/app.mjs:62` already does for JSON. There is no write route and no admin route. `GET /health` stays as it is. `setOrigin`, `submitChain`, `issueNonce`, and `submitLink` stay off HTTP.
+CORS is an exact-origin allowlist on both runtimes. Unset `POINTS_CORS_ORIGINS` is an empty allowlist, so no origin is allowed. That is separate from the claim-relayer default. Methods are GET, HEAD, and OPTIONS. There is no wildcard. Responses send `Cache-Control: no-store`. There is no write route and no admin route. `GET /health` stays as it is. `setOrigin`, `submitChain`, `issueNonce`, and `submitLink` stay off HTTP. A repeated query parameter is HTTP 400 `duplicate_query` on every runtime.
 
-`GET /v1/points/config` returns chain id `84532`, `status` `draft`, and the weights and gates in `services/points-indexer/config/points.json`. Every weight and every gate in that file is null. This draft does not set them. That file has no rule-version field. Adding one is **TBD**.
+`GET /v1/points/config` returns chain id `84532`, `status` `draft`, `rule_version`, and the weights and gates in `services/points-indexer/config/points.json`. Every weight and every gate in that file is null. This draft does not set them. The response also carries `disclaimer`, with `text` and `links`.
 
-`GET /v1/points/:address` is the scope S read for the connected wallet. `points_total` is 0. `points_withheld` is true. `eligibility.status` is `unverified`. `eligibility.reason` is `ofac_unconfigured`. Scoring stays 0 until OFAC screening is configured. `indexed_to_block` is the cursor `last_scanned_block` (`services/points-indexer/src/indexer.mjs:223-224`, written inside `commitScanWindow` at `services/points-indexer/src/indexer.mjs:323`). It is not `finalized_block`. `setFinalizedBlock` stores the finalized head and only moves that head forward (`services/points-indexer/src/indexer.mjs:213-217`). The pass computes that head at `services/points-indexer/src/main.mjs:331`, reads the cursor at `services/points-indexer/src/main.mjs:332`, and stores the head at `services/points-indexer/src/main.mjs:368` even when the cursor is still behind. `GET /v1/points/:address/history` returns committed `ledger_rows` only. A page default and a page maximum are **TBD**. The reputation read API uses 25 and 100 (`config/reputation/sepolia.json:160-161`). Those two figures are not locked for these routes.
+`GET /v1/points/:address` is the scope S read for the connected wallet. `points_total` is 0. `points_withheld` is true. `eligibility.status` is `unverified`. `eligibility.reason` is `ofac_unconfigured`. Scoring stays 0 until OFAC screening is configured. `indexed_to_block` is the cursor `last_scanned_block` (`services/points-indexer/src/indexer.mjs:274`, written inside `commitScanWindow` at `services/points-indexer/src/indexer.mjs:386`). It is not `finalized_block`. `setFinalizedBlock` stores the finalized head and only moves that head forward (`services/points-indexer/src/indexer.mjs:263-269`). The pass computes that head at `services/points-indexer/src/main.mjs:742`, reads the cursor at `services/points-indexer/src/main.mjs:743`, and stores the head at `services/points-indexer/src/main.mjs:815` even when the cursor is still behind. The address and history responses also include `finalized_block`, `stale`, and `disclaimer`. `GET /v1/points/:address/history` returns committed `ledger_rows` only. A page is 25 rows by default and 100 at most (`config/reputation/sepolia.json:160-161`).
 
 Open decision, not made here. This spec defines committed rows. `attributeLogs` (`services/points-indexer/src/attribute.mjs:30`) can name candidates in `raw_logs` that were not committed. Whether the address route may also return a count of activity seen on chain, with no points attached, is open. Until that is decided, the contract is committed rows only.
 
-Disclaimer link slots stay empty while checklist #11 is open (`config/reputation/sepolia.json:145-146`). This draft does not fill them.
+Disclaimer link slots stay empty while checklist #11 is open (`config/reputation/sepolia.json:145-152`). The display sentence is `config/reputation/sepolia.json:155`. This draft does not fill the slots. `disclaimer.links` includes `legal_notice_url`, and each slot is empty until Lawyer confirms the surface.
 
 ### Pacing before the first deploy
 
-This is a requirement before the first deploy. The work is PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, uses the numbers below.
+This is a requirement before the first deploy. The work is PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, uses the numbers proposed in PR #103. Those numbers are still Spencer's decision.
 
-The current default waits 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows. The final pacing numbers are Spencer's decision and are still pending.
+The values proposed in PR #103 wait 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows. The final pacing numbers are Spencer's decision and are still pending.
 
 The only measured evidence recorded here is the figure from the soft-launch plan, which attributes it to the PR #100 Verifier verdict: 50 HTTP 429 responses in 1,055 requests, at 25 to 35 requests per second, on the public RPC. That count is not in the git tree. Pull request #100 on GitHub had no reviews and no comments when those lists were read for this draft. The count was not measured again here.
 
 Two other items stay parked. They are not planned. Grok Bot's ruling still covers both.
 
 - Storing `finalized_block` as the minimum of the reported head and the cursor. Today the stored head can move while `last_scanned_block` is behind, as cited in the read API section.
-- Removing the `DATABASE_URL` fallback at `services/points-indexer/src/main.mjs:94-96`.
+- Removing the `DATABASE_URL` fallback at `services/points-indexer/src/main.mjs:150-152`.
 
 ### Open items and owners
 
@@ -485,7 +485,7 @@ PR-1 is this docs amendment. Each item below waits until PR-1 is merged and unti
 - PR-2. The indexer read API in the contract above. It waits for PR-1 merged plus Grok Bot's ruling.
 - PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. It waits for PR-1 merged plus Spencer's ruling on the pacing numbers. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
 - PR-4. Storage on Cloudflare (D1 plus a Worker or a Durable Object) is plan pending. A later pull request may add that design. This file does not design it and it does not hold a secret.
-- PR-5. A wallet surface for the connected wallet on chain `84532`. Points are tied to that wallet. Signup is open. It waits for PR-1 merged plus Grok Bot's ruling. The Pages upload stays with Spencer.
+- PR-5. A wallet surface for the connected wallet on chain `84532`. Points are tied to that wallet. Signup will be open. It waits for PR-1 merged plus Grok Bot's ruling. The Pages upload stays with Spencer.
 
 Scope M and scope L are not in that list. Each needs its own plan. They are not the soft launch.
 

@@ -6,4 +6,6 @@ The points rules are in [AGENT-BV-POINTS-SPEC.md](AGENT-BV-POINTS-SPEC.md). Poin
 
 Lawyer reviews the first announcement text and a screenshot before any public post. Later posts reuse that approved text.
 
+The STRANDED trading site is never paired with points wording.
+
 A public post must not use: airdrop; the word token except inside the disclaimer sentence "Not a token"; reward; earn; value; early; early-adopter; "points may matter later"; conversion; snapshot; eligibility; leaderboard-for-prizes; or any hint of a future distribution.
