@@ -565,11 +565,61 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   };
 }
 
-function listenHealth(port, status, onPoints) {
+export const DEFAULT_HEALTH_RATE_PER_MINUTE = 120;
+
+/**
+ * Fixed-window limit for /health. A new address is refused when the map is full.
+ * @param {{ max?: number, windowMs?: number, maxEntries?: number, clock?: () => number }} [options]
+ */
+export function createHealthLimiter(options = {}) {
+  const max = Number.isInteger(options.max) && options.max > 0 ? options.max : DEFAULT_HEALTH_RATE_PER_MINUTE;
+  const windowMs = Number.isInteger(options.windowMs) && options.windowMs > 0 ? options.windowMs : 60_000;
+  const maxEntries = Number.isInteger(options.maxEntries) && options.maxEntries > 0 ? options.maxEntries : 1024;
+  const clock = typeof options.clock === "function" ? options.clock : Date.now;
+  const hits = new Map();
+  return {
+    size: () => hits.size,
+    allow(key) {
+      const now = clock();
+      const id = String(key || "unknown");
+      let row = hits.get(id);
+      if (row && now - row.start >= windowMs) {
+        hits.delete(id);
+        row = undefined;
+      }
+      if (!row) {
+        if (hits.size >= maxEntries) {
+          return { ok: false, retryAfterSec: Math.max(1, Math.ceil(windowMs / 1000)) };
+        }
+        hits.set(id, { start: now, count: 1 });
+        return { ok: true };
+      }
+      if (row.count >= max) {
+        return { ok: false, retryAfterSec: Math.max(1, Math.ceil((row.start + windowMs - now) / 1000)) };
+      }
+      row.count += 1;
+      return { ok: true };
+    },
+  };
+}
+
+function listenHealth(port, status, onPoints, healthLimiter) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
       if (path === "/health" || path === "/health/") {
+        const limited = healthLimiter.allow(req.socket?.remoteAddress || "unknown");
+        if (!limited.ok) {
+          const payload = JSON.stringify({ ok: false, error: "rate_limited" });
+          res.writeHead(429, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+            "retry-after": String(limited.retryAfterSec),
+            "content-length": Buffer.byteLength(payload),
+          });
+          res.end(payload);
+          return;
+        }
         const decision = healthDecision({
           lastPassAt: status.lastPassAt,
           pollMs: status.pollMs,
@@ -1080,6 +1130,7 @@ export async function start(options = {}) {
   let readApi = null;
   let readApiLoading = null;
   let readDb = null;
+  let configFailed = false;
   const env = options.env ?? process.env;
 
   function readDatabase() {
@@ -1089,46 +1140,78 @@ export async function start(options = {}) {
     return readDb;
   }
 
+  function ensureReadApi() {
+    if (!pointsEnabled(env)) return Promise.resolve(null);
+    if (configFailed) return Promise.resolve(null);
+    if (readApi) return Promise.resolve(readApi);
+    if (!readApiLoading) {
+      readApiLoading = Promise.all([
+        import("./readApi.mjs"),
+        import("./readApiSqliteStore.mjs"),
+      ]).then(([mod, stores]) => {
+        readApi = mod.createReadApi({
+          store: stores.createReadApiSqliteStore({
+            db: () => readDatabase(),
+            lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+            finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
+            passCompleted: () => status.lastPassAt != null,
+            stale: () => status.ledgerStale === true || status.lastError != null,
+            configPaths: options.readConfigPaths,
+          }),
+          config: mod.readSettings(env),
+          now: () => Date.now(),
+          enabled: () => mod.pointsEnabled(env),
+          log: (line) => {
+            console.error(redact(String(line), cfg.rpcUrl));
+          },
+        });
+        return readApi;
+      }).catch((error) => {
+        readApiLoading = null;
+        throw error;
+      });
+    }
+    return readApiLoading;
+  }
+
   async function handlePoints(req, res) {
     if (!pointsEnabled(env)) {
       writeJson(res, 503, { ok: false, error: "points_disabled" });
       return;
     }
-    if (!readApi) {
-      if (!readApiLoading) {
-        readApiLoading = Promise.all([
-          import("./readApi.mjs"),
-          import("./readApiSqliteStore.mjs"),
-        ]).then(([mod, stores]) => {
-          readApi = mod.createReadApi({
-            store: stores.createReadApiSqliteStore({
-              db: () => readDatabase(),
-              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
-              finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
-              passCompleted: () => status.lastPassAt != null,
-              stale: () => status.ledgerStale === true || status.lastError != null,
-            }),
-            config: mod.readSettings(env),
-            now: () => Date.now(),
-            enabled: () => mod.pointsEnabled(env),
-            log: (line) => {
-              console.error(redact(String(line), cfg.rpcUrl));
-            },
-          });
-          return readApi;
-        }).catch((error) => {
-          readApiLoading = null;
-          throw error;
-        });
-      }
-      await readApiLoading;
+    if (configFailed) {
+      writeJson(res, 503, { ok: false, error: "config_unavailable" });
+      return;
+    }
+    try {
+      await ensureReadApi();
+    } catch {
+      configFailed = true;
+      console.error(redact("points_read config_unavailable", cfg.rpcUrl));
+      writeJson(res, 503, { ok: false, error: "config_unavailable" });
+      return;
     }
     readApi(req, res);
   }
 
+  const healthLimiter = createHealthLimiter({
+    max: options.healthRateMax,
+    windowMs: options.healthWindowMs,
+    maxEntries: options.healthMaxEntries,
+    clock: options.healthNow,
+  });
+
   if (options.serve) {
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status, handlePoints);
+    const health = await listenHealth(port, status, handlePoints, healthLimiter);
+    if (pointsEnabled(env)) {
+      try {
+        await ensureReadApi();
+      } catch {
+        configFailed = true;
+        console.error(redact("points_read config_unavailable", cfg.rpcUrl));
+      }
+    }
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);

@@ -5,6 +5,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHAIN_ID } from "./constants.mjs";
 import { historyRank } from "./readApi.mjs";
@@ -35,28 +36,76 @@ function scalarOrNull(value) {
   return null;
 }
 
-function loadLegalNoticeUrl() {
-  const filePath = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
-  const raw = JSON.parse(readFileSync(filePath, "utf8"));
-  const value = raw?.disclaimer_links?.legal_notice_url;
-  return typeof value === "string" ? value : null;
+/**
+ * Paths inside the image. `src/` and `config/` both sit under `/app`.
+ * The notice file in git is `config/reputation/sepolia.json` at the repo
+ * root. The image copies that file to `/app/config/reputation/sepolia.json`.
+ * A checkout falls back to the repo-root file when the image path is absent.
+ * @param {URL | string} [moduleUrl]
+ */
+export function resolveReadConfigPaths(moduleUrl = import.meta.url) {
+  const packageRoot = dirname(dirname(fileURLToPath(moduleUrl)));
+  return {
+    points: join(packageRoot, "config", "points.json"),
+    notice: join(packageRoot, "config", "reputation", "sepolia.json"),
+    noticeFallback: join(packageRoot, "..", "..", "config", "reputation", "sepolia.json"),
+  };
 }
 
-function loadPointsFile() {
-  const filePath = fileURLToPath(new URL("../config/points.json", import.meta.url));
-  const raw = JSON.parse(readFileSync(filePath, "utf8"));
+function parseConfigObject(text) {
+  const raw = JSON.parse(text);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config_unavailable");
+  }
+  return raw;
+}
+
+function readFirst(read, paths) {
+  let missing = null;
+  for (const filePath of paths) {
+    if (!filePath) continue;
+    try {
+      return read(filePath, "utf8");
+    } catch (error) {
+      if (error && error.code === "ENOENT") {
+        missing = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw missing ?? new Error("config_unavailable");
+}
+
+function loadReadConfig(read, paths) {
+  const points = parseConfigObject(read(paths.points, "utf8"));
+  if (points.weights != null && (typeof points.weights !== "object" || Array.isArray(points.weights))) {
+    throw new Error("config_unavailable");
+  }
+  if (points.gates != null && (typeof points.gates !== "object" || Array.isArray(points.gates))) {
+    throw new Error("config_unavailable");
+  }
+  const notice = parseConfigObject(readFirst(read, [paths.notice, paths.noticeFallback]));
+  if (
+    notice.disclaimer_links != null
+    && (typeof notice.disclaimer_links !== "object" || Array.isArray(notice.disclaimer_links))
+  ) {
+    throw new Error("config_unavailable");
+  }
+  const link = notice.disclaimer_links?.legal_notice_url;
+  if (link != null && typeof link !== "string") throw new Error("config_unavailable");
   const weights = {};
-  for (const key of WEIGHT_KEYS) weights[key] = scalarOrNull(raw?.weights?.[key]);
+  for (const key of WEIGHT_KEYS) weights[key] = scalarOrNull(points.weights?.[key]);
   const gates = {};
-  for (const key of GATE_KEYS) gates[key] = scalarOrNull(raw?.gates?.[key]);
-  const rule = raw?.rule_version;
+  for (const key of GATE_KEYS) gates[key] = scalarOrNull(points.gates?.[key]);
+  const rule = points.rule_version;
   const ruleVersion = rule == null ? null : (typeof rule === "string" ? rule : null);
-  return {
-    weights,
-    gates,
+  return Object.freeze({
+    weights: Object.freeze(weights),
+    gates: Object.freeze(gates),
     rule_version: ruleVersion,
-    legal_notice_url: loadLegalNoticeUrl(),
-  };
+    legal_notice_url: typeof link === "string" ? link : null,
+  });
 }
 
 function emptyCursor() {
@@ -89,12 +138,23 @@ function emptySummary() {
  */
 export function createReadApiSqliteStore(source = {}) {
   const db = typeof source.db === "function" ? source.db : () => null;
+  const read = typeof source.readFile === "function" ? source.readFile : readFileSync;
+  const paths = source.configPaths ?? resolveReadConfigPaths();
+  let cachedConfig = null;
+  let configAvailable = true;
+  try {
+    cachedConfig = loadReadConfig(read, paths);
+  } catch {
+    configAvailable = false;
+    cachedConfig = null;
+  }
   const lastScannedBlock = typeof source.lastScannedBlock === "function" ? source.lastScannedBlock : () => null;
   const finalizedBlock = typeof source.finalizedBlock === "function" ? source.finalizedBlock : () => null;
   const passCompleted = typeof source.passCompleted === "function" ? source.passCompleted : () => false;
   const stale = typeof source.stale === "function" ? source.stale : () => false;
 
   return {
+    configAvailable,
     getCursor() {
       if (!db()) return { ...emptyCursor(), stale: stale() === true };
       return {
@@ -158,7 +218,12 @@ export function createReadApiSqliteStore(source = {}) {
       });
     },
     getConfig() {
-      return loadPointsFile();
+      if (!configAvailable) {
+        const error = new Error("config_unavailable");
+        error.code = "config_unavailable";
+        throw error;
+      }
+      return cachedConfig;
     },
   };
 }

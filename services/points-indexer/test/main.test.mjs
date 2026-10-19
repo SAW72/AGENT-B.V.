@@ -1352,6 +1352,52 @@ describe("process entry", () => {
     }
   });
 
+  it("rate limits /health without stopping the process", async () => {
+    const dir = dbDir();
+    let now = 0;
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        once: true,
+        port: 0,
+        healthRateMax: 2,
+        healthWindowMs: 1_000,
+        healthNow: () => now,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      const first = await fetch(running.healthUrl);
+      const second = await fetch(running.healthUrl);
+      const third = await fetch(running.healthUrl);
+      assert.equal(first.status, 200);
+      assert.equal(second.status, 200);
+      assert.equal(third.status, 429);
+      assert.equal(third.headers.get("retry-after"), "1");
+      assert.deepEqual(await third.json(), { ok: false, error: "rate_limited" });
+      now = 1_000;
+      const again = await fetch(running.healthUrl);
+      assert.equal(again.status, 200);
+      const passed = await running.pass();
+      assert.equal(passed.ok, true);
+    } finally {
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reports ledger_error, config_error, and range_error on /health", async () => {
     const cases = [
       {

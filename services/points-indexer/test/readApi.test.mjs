@@ -13,8 +13,10 @@ import {
   createRateLimiter,
   clientIp,
   createReadApi,
+  DEFAULT_COARSE_MAX_ENTRIES,
   DEFAULT_MAX_ENTRIES,
   DISCLAIMER_TEXT,
+  headerTooLong,
   HISTORY_DEFAULT_LIMIT,
   HISTORY_MAX_LIMIT,
   historyRank,
@@ -637,10 +639,29 @@ describe("points read API", { concurrency: false }, () => {
         headers: { "x-forwarded-for": " , " },
       });
       assert.equal(empty.response.status, 429);
+    });
+  });
+
+  it("rejects a forwarded header over 2048 characters instead of sharing the socket bucket", async () => {
+    assert.equal(headerTooLong({ headers: { "x-forwarded-for": "a".repeat(2048) } }, 0), false);
+    assert.equal(headerTooLong({ headers: { "x-forwarded-for": "a".repeat(2049) } }, 1), true);
+    assert.equal(clientIp({
+      remoteAddress: "127.0.0.1",
+      headers: { "x-forwarded-for": "a".repeat(2049) },
+    }, 1), null);
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 5, trustedProxyHops: 1 },
+    }, async (base) => {
       const huge = await request(base, "/v1/points/config", {
-        headers: { "x-forwarded-for": "a".repeat(3000) },
+        headers: { "x-forwarded-for": `203.0.113.5,${"9".repeat(3000)}` },
       });
-      assert.equal(huge.response.status, 429);
+      assert.equal(huge.response.status, 400);
+      assert.equal(huge.json.error, "header_too_long");
+      const next = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.9" },
+      });
+      assert.equal(next.response.status, 200);
     });
   });
 
@@ -834,6 +855,68 @@ describe("points read API", { concurrency: false }, () => {
     const small = timeNewKeys(128);
     const large = timeNewKeys(8192);
     assert.ok(large < small * 4 + 25, `small ${small}ms large ${large}ms`);
+  });
+
+  it("counts a bounded number of map touches per request when the map is full", () => {
+    function touchesFor(entries) {
+      const limiter = createRateLimiter({
+        max: 1,
+        maxEntries: entries,
+        coarseMax: 1_000_000,
+        coarseMaxEntries: 1_000_000,
+        clock: () => 0,
+        sweepMs: 1_000_000,
+      });
+      try {
+        for (let index = 0; index < entries; index += 1) limiter.allow(`k${index}`);
+        const before = limiter.touchCount();
+        const decision = limiter.allow("fresh-key");
+        return { delta: limiter.touchCount() - before, ok: decision.ok };
+      } finally {
+        limiter.close();
+      }
+    }
+    const small = touchesFor(32);
+    const large = touchesFor(4000);
+    assert.equal(small.ok, true);
+    assert.equal(large.ok, true);
+    assert.ok(small.delta > 0 && small.delta <= 24, `small touches ${small.delta}`);
+    assert.ok(large.delta <= 24, `large touches ${large.delta}`);
+    assert.ok(large.delta <= small.delta + 2, `small ${small.delta} large ${large.delta}`);
+  });
+
+  it("refuses new prefixes when the /48 map is full", () => {
+    assert.equal(DEFAULT_COARSE_MAX_ENTRIES, 4096);
+    const cap = 128;
+    const limiter = createRateLimiter({
+      max: 1,
+      coarseMax: 4,
+      coarseMaxEntries: cap,
+      maxEntries: cap,
+      clock: () => 0,
+      sweepMs: 1_000_000,
+    });
+    const prefixKey = (index) => {
+      const hi = (index >>> 16) & 0xffff;
+      const lo = index & 0xffff;
+      return `2001:${hi.toString(16)}:${lo.toString(16)}:1::/64`;
+    };
+    try {
+      let admitted = 0;
+      const before = process.memoryUsage().heapUsed;
+      for (let index = 0; index < 200_000; index += 1) {
+        if (limiter.allow(prefixKey(index)).ok) admitted += 1;
+      }
+      const grew = process.memoryUsage().heapUsed - before;
+      assert.equal(admitted, cap);
+      assert.equal(limiter.coarseSize(), cap);
+      assert.ok(limiter.size() <= cap + 1);
+      assert.equal(limiter.allow(prefixKey(200_000)).ok, false);
+      assert.equal(limiter.coarseSize(), cap);
+      assert.ok(grew < 48 * 1024 * 1024, `heap grew ${grew}`);
+    } finally {
+      limiter.close();
+    }
   });
 
   it("resets the rate window from the injected clock", async () => {
@@ -1861,8 +1944,9 @@ describe("points read API", { concurrency: false }, () => {
     });
   });
 
-  it("loads render.yaml with one trusted proxy hop and no Cloudflare ingress flag", () => {
+  it("keeps render.yaml hops at 0 so X-Forwarded-For is ignored", async () => {
     const text = readFileSync(RENDER_FILE, "utf8");
+    assert.equal(text.includes("client is the rightmost"), false);
     assert.equal(/^\s*- key:\s*POINTS_CLOUDFLARE_INGRESS\s*$/m.test(text), false);
     const env = {};
     let key = null;
@@ -1879,11 +1963,132 @@ describe("points read API", { concurrency: false }, () => {
         key = null;
       }
     }
-    assert.equal(env.POINTS_TRUSTED_PROXY_HOPS, "1");
+    assert.equal(env.POINTS_TRUSTED_PROXY_HOPS, "0");
     assert.equal(Object.hasOwn(env, "POINTS_CLOUDFLARE_INGRESS"), false);
     const settings = readSettings(env);
-    assert.equal(settings.trustedProxyHops, 1);
+    assert.equal(settings.trustedProxyHops, 0);
     assert.equal(settings.cloudflareIngress, false);
+    await withServer({
+      enabled: () => true,
+      config: { ratePerMinute: 1, trustedProxyHops: settings.trustedProxyHops },
+    }, async (base) => {
+      const first = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      });
+      assert.equal(first.response.status, 200);
+      const otherHeader = await request(base, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.11" },
+      });
+      assert.equal(otherHeader.response.status, 429);
+      assert.equal(clientIp({
+        remoteAddress: "127.0.0.1",
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }, settings.trustedProxyHops), "127.0.0.1");
+    });
+  });
+
+  it("returns 503 config_unavailable once when the cached config is unusable", async () => {
+    const lines = [];
+    const api = createReadApi({
+      store: {
+        configAvailable: false,
+        getConfig() {
+          throw new Error("config_unavailable");
+        },
+        getCursor() {
+          throw new Error("should not read");
+        },
+        getLedgerSummary() {
+          throw new Error("should not read");
+        },
+        listLedgerRows() {
+          throw new Error("should not read");
+        },
+      },
+      enabled: () => true,
+      log: (line) => lines.push(String(line)),
+      config: { ratePerMinute: 10 },
+    });
+    try {
+      assert.deepEqual(lines, ["points_read config_unavailable"]);
+      const first = api.handle({
+        method: "GET",
+        path: "/v1/points/config",
+        remoteAddress: "127.0.0.1",
+      });
+      const second = api.handle({
+        method: "GET",
+        path: `/v1/points/${ADDRESS}`,
+        remoteAddress: "127.0.0.1",
+      });
+      assert.equal(first.status, 503);
+      assert.deepEqual(first.body, { ok: false, error: "config_unavailable" });
+      assert.equal(second.status, 503);
+      assert.equal(second.body.error, "config_unavailable");
+      assert.deepEqual(lines, ["points_read config_unavailable"]);
+      assert.equal(api.breakerState(), "closed");
+    } finally {
+      api.close();
+    }
+  });
+
+  it("keeps /health up when the read config is missing", async () => {
+    const lines = [];
+    const original = console.error;
+    console.error = (line) => lines.push(String(line));
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+    };
+    let running;
+    try {
+      running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        env,
+        readConfigPaths: {
+          points: "/tmp/abv-missing-points.json",
+          notice: "/tmp/abv-missing-notice.json",
+          noticeFallback: "/tmp/abv-missing-notice-fallback.json",
+        },
+        rpc: {
+          async chainId() {
+            return 84532;
+          },
+          async getCode() {
+            return "0x6001600055";
+          },
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        },
+      });
+      const health = await fetch(running.healthUrl);
+      const healthBody = await health.json();
+      assert.equal(health.status, 200);
+      assert.equal(healthBody.ok, true);
+      assert.equal(healthBody.error, undefined);
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      const first = await request(origin, "/v1/points/config");
+      const second = await request(origin, `/v1/points/${ADDRESS}`);
+      assert.equal(first.response.status, 503);
+      assert.equal(first.json.error, "config_unavailable");
+      assert.equal(second.response.status, 503);
+      assert.equal(second.json.error, "config_unavailable");
+      assert.equal(lines.filter((line) => line.includes("config_unavailable")).length, 1);
+      const again = await running.pass();
+      assert.equal(again.ok, true);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
   });
 
   it("reads CF-Connecting-IP only when Cloudflare ingress is declared", async () => {
