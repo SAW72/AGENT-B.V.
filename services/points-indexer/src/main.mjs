@@ -19,6 +19,15 @@ import {
   textIsHeadLag,
   textIsRateLimit,
 } from "./pace.mjs";
+import { pointsEnabled } from "./pointsFlag.mjs";
+import { openReadConnection } from "./readConnection.mjs";
+import {
+  clientIp,
+  createFallbackLimiter,
+  parseProxyHops,
+  parseRatePerMinute,
+  reflectedOrigin,
+} from "./readEdge.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -129,6 +138,18 @@ export function assertConfig(cfg) {
     throw new Error("POINTS_MAX_WINDOWS_PER_PASS must be a positive integer");
   }
   return { ...cfg, escrowAddress: escrow, chainId: CHAIN_ID, logRange, pollMs, maxWindows };
+}
+
+function writeJson(res, status, body, extra = {}) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    ...extra,
+    "content-length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
 }
 
 /**
@@ -521,25 +542,57 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
   };
 }
 
-function listenHealth(port, status) {
+export const HEALTH_CACHE_MS = 15_000;
+
+function healthSnapshot(status) {
+  const decision = healthDecision({
+    lastPassAt: status.lastPassAt,
+    pollMs: status.pollMs,
+    freshnessPolls: status.freshnessPolls,
+    now: status.now(),
+    behind: status.behind,
+    ledgerStale: status.ledgerStale,
+  });
+  const body = { ok: decision.ok, chainId: status.chainId };
+  if (decision.ok && decision.behind > 0) body.behind = decision.behind;
+  if (!decision.ok && status.lastError) body.error = status.lastError;
+  else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
+  return {
+    statusCode: decision.statusCode,
+    payload: JSON.stringify(body),
+    stamp: `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}|${status.earlyReason}`,
+  };
+}
+
+function listenHealth(port, status, onPoints, cache) {
+  const cacheClock = cache.clock;
+  const cacheMs = cache.ms;
+  let cached = null;
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
       if (path === "/health" || path === "/health/") {
-        const decision = healthDecision({
-          lastPassAt: status.lastPassAt,
-          pollMs: status.pollMs,
-          freshnessPolls: status.freshnessPolls,
-          now: status.now(),
-          behind: status.behind,
-          ledgerStale: status.ledgerStale,
-        });
-        const body = { ok: decision.ok, chainId: status.chainId };
-        if (decision.ok && decision.behind > 0) body.behind = decision.behind;
-        if (!decision.ok && status.lastError) body.error = status.lastError;
-        else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
-        res.writeHead(decision.statusCode, { "content-type": "application/json" });
-        res.end(JSON.stringify(body));
+        const at = cacheClock();
+        const stamp = `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}|${status.earlyReason}`;
+        if (!cached || cached.stamp !== stamp || at - cached.at >= cacheMs) {
+          const fresh = healthSnapshot(status);
+          cached = { at, ...fresh };
+        }
+        res.writeHead(cached.statusCode, { "content-type": "application/json" });
+        res.end(cached.payload);
+        return;
+      }
+      if (path === "/v1/points" || path.startsWith("/v1/points/")) {
+        Promise.resolve()
+          .then(() => onPoints(req, res))
+          .catch(() => {
+            if (res.headersSent) return;
+            try {
+              writeJson(res, 500, { ok: false, error: "internal" });
+            } catch {
+              // The request callback must not throw.
+            }
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -582,7 +635,7 @@ function paceFailure(result) {
  * a Retry-After that was longer than the cap. `sleep` defaults to a real timer.
  * POINTS_MAX_WINDOWS_PER_RUN limits windows inside one pass. The next pass
  * continues. A reported finalized head behind the stored head scans nothing.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, fallbackNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
@@ -643,6 +696,7 @@ export async function start(options = {}) {
     earlyReason: null,
     ledgerStale: false,
     behind: 0,
+    head: null,
     now,
   };
 
@@ -785,6 +839,7 @@ export async function start(options = {}) {
       };
     }
     const head = reported;
+    status.head = head;
     const cursor = indexer.lastScannedBlock();
     let from = cursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, cursor + 1);
     let window = learnedWindow;
@@ -939,9 +994,158 @@ export async function start(options = {}) {
     }
   };
 
+  let readApi = null;
+  let readApiLoading = null;
+  let readDb = null;
+  let configFailed = false;
+  let configGate = null;
+  const env = options.env ?? process.env;
+  const fallbackLimiter = createFallbackLimiter({
+    clock: typeof options.fallbackNow === "function" ? options.fallbackNow : Date.now,
+    rate: () => parseRatePerMinute(env?.POINTS_READ_RATE_PER_MINUTE),
+  });
+
+  function readDatabase() {
+    if (!indexer) return null;
+    if (cfg.dbPath === ":memory:") return indexer.db;
+    if (!readDb) readDb = openReadConnection(cfg.dbPath);
+    return readDb;
+  }
+
+  function ensureReadApi() {
+    if (!pointsEnabled(env)) return Promise.resolve(null);
+    if (configFailed) return Promise.resolve(null);
+    if (readApi) return Promise.resolve(readApi);
+    if (!readApiLoading) {
+      readApiLoading = Promise.all([
+        loadReadApiModule(),
+        import("./readApiSqliteStore.mjs"),
+      ]).then(([mod, stores]) => {
+        const openRead = typeof options.readApiFactory === "function"
+          ? options.readApiFactory
+          : (api, stores) => api.createReadApi({
+            store: stores.createReadApiSqliteStore({
+              db: () => readDatabase(),
+              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+              finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
+              passCompleted: () => status.lastPassAt != null,
+              stale: () => status.ledgerStale === true || status.lastError != null,
+              configPaths: options.readConfigPaths,
+            }),
+            config: api.readSettings(env),
+            now: () => Date.now(),
+            enabled: () => api.pointsEnabled(env),
+            log: (line) => {
+              console.error(redact(String(line), cfg.rpcUrl));
+            },
+          });
+        readApi = openRead(mod, stores);
+        return readApi;
+      }).catch((error) => {
+        readApiLoading = null;
+        throw error;
+      });
+    }
+    return readApiLoading;
+  }
+
+  function loadReadApiModule() {
+    if (typeof options.readApiImport === "function") return options.readApiImport();
+    return import("./readApi.mjs");
+  }
+
+  function replyConfigUnavailableWithoutModule(req, res) {
+    const headers = edgeCorsHeaders(req, env);
+    const decision = fallbackLimiter.allow(clientIp({
+      remoteAddress: req.socket?.remoteAddress,
+      headers: req.headers,
+    }, parseProxyHops(env?.POINTS_TRUSTED_PROXY_HOPS), {
+      cloudflareIngress: env?.POINTS_CLOUDFLARE_INGRESS === "true",
+    }));
+    if (!decision.ok) {
+      writeJson(res, 429, { ok: false, error: "rate_limited" }, {
+        ...headers,
+        "retry-after": String(decision.retryAfterSec),
+      });
+      return;
+    }
+    writeJson(res, 503, { ok: false, error: "config_unavailable" }, headers);
+  }
+
+  async function countConfigUnavailable(req, res) {
+    let mod = null;
+    try {
+      mod = await loadReadApiModule();
+    } catch {
+      mod = null;
+    }
+    if (!mod) {
+      replyConfigUnavailableWithoutModule(req, res);
+      return;
+    }
+    if (!configGate) {
+      const settings = mod.readSettings(env);
+      configGate = {
+        settings,
+        limiter: mod.createRateLimiter({ max: settings.ratePerMinute }),
+      };
+    }
+    const headers = edgeCorsHeaders(req, env);
+    const decision = configGate.limiter.allow(mod.clientIp({
+      remoteAddress: req.socket?.remoteAddress,
+      headers: req.headers,
+    }, configGate.settings.trustedProxyHops, {
+      cloudflareIngress: configGate.settings.cloudflareIngress,
+    }));
+    if (!decision.ok) {
+      writeJson(res, 429, { ok: false, error: "rate_limited" }, {
+        ...headers,
+        "retry-after": String(decision.retryAfterSec),
+      });
+      return;
+    }
+    writeJson(res, 503, { ok: false, error: "config_unavailable" }, headers);
+  }
+
+  async function handlePoints(req, res) {
+    if (!pointsEnabled(env)) {
+      writeJson(res, 503, { ok: false, error: "points_disabled" });
+      return;
+    }
+    if (configFailed) {
+      await countConfigUnavailable(req, res);
+      return;
+    }
+    try {
+      await ensureReadApi();
+    } catch {
+      configFailed = true;
+      console.error(redact("points_read config_unavailable", cfg.rpcUrl));
+      await countConfigUnavailable(req, res);
+      return;
+    }
+    readApi(req, res);
+  }
+
+  const healthCacheMs = Number.isInteger(options.healthCacheMs) && options.healthCacheMs >= 0
+    ? options.healthCacheMs
+    : HEALTH_CACHE_MS;
+  const healthCacheClock = typeof options.healthCacheNow === "function" ? options.healthCacheNow : now;
+
   if (options.serve) {
     const port = options.port ?? (blank(process.env.PORT) ? 8080 : positiveInt(process.env.PORT, "PORT"));
-    const health = await listenHealth(port, status);
+    const health = await listenHealth(port, status, handlePoints, {
+      clock: healthCacheClock,
+      ms: healthCacheMs,
+    });
+    if (pointsEnabled(env)) {
+      try {
+        await ensureReadApi();
+      } catch {
+        configFailed = true;
+        console.error(redact("points_read config_unavailable", cfg.rpcUrl));
+      }
+    }
     closing = health.close;
     healthUrl = health.url;
     if (typeof options.onListening === "function") options.onListening(health);
@@ -994,9 +1198,39 @@ export async function start(options = {}) {
       if (cancelCarry) cancelCarry();
       if (timer) clearTimeout(timer);
       if (closing) await closing();
+      if (readApiLoading) {
+        try {
+          const api = await readApiLoading;
+          api?.close();
+        } catch {
+          // The module never finished loading.
+        }
+      }
+      configGate?.limiter.close();
+      if (readDb) {
+        try {
+          readDb.close();
+        } catch {
+          // The read connection was already closed.
+        }
+        readDb = null;
+      }
       indexer?.close();
     },
   };
+}
+
+const READ_ALLOW = "GET, HEAD, OPTIONS";
+
+function edgeCorsHeaders(req, env) {
+  const headers = {
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": READ_ALLOW,
+    vary: "Origin",
+  };
+  const origin = reflectedOrigin(env?.POINTS_CORS_ORIGINS, req?.headers?.origin);
+  if (origin) headers["access-control-allow-origin"] = origin;
+  return headers;
 }
 
 function invokedDirectly() {
