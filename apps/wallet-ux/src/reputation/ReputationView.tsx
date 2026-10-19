@@ -91,7 +91,7 @@ function safeHref(value: string | null): string | null {
   if (!value) return null
   try {
     const url = new URL(value)
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null
+    if (url.protocol !== "https:") return null
     return url.toString()
   } catch {
     return null

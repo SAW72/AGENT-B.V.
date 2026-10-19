@@ -109,11 +109,26 @@ function encodeCursor(row: { block_number: number; log_index: number; action: st
   return bytesToBase64Url(new TextEncoder().encode(payload));
 }
 
+export function httpsUrl(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  try {
+    if (new URL(text).protocol !== "https:") return null;
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 function disclaimer() {
   const links: Record<string, string | null> = {};
   const source = sepolia.disclaimer_links as Record<string, string>;
   for (const key of DISCLAIMER_LINK_SLOTS) {
     const value = source?.[key];
+    if (key === "legal_notice_url") {
+      links[key] = httpsUrl(value);
+      continue;
+    }
     links[key] = value == null || String(value).trim() === "" ? null : String(value);
   }
   if (sepolia.display.disclaimer !== DISCLAIMER) {
@@ -298,7 +313,7 @@ function parseCursor(raw: string | null | undefined) {
 
 export function createReadApi(options: {
   store: Store;
-  allow: (ip: string) => { ok: boolean; retryAfterSec?: number };
+  allow?: (ip: string) => { ok: boolean; retryAfterSec?: number };
   corsOrigins?: string[];
   now?: () => number;
   breakerFailures?: number;
@@ -348,6 +363,7 @@ export function createReadApi(options: {
   }
 
   function rateLimit(input: ReadInput) {
+    if (!options.allow) return null;
     const decision = options.allow(clientIp(input));
     if (decision.ok) return null;
     return fail(429, "rate_limited", input, { "retry-after": String(decision.retryAfterSec ?? 1) });
@@ -468,6 +484,7 @@ export function createReadApi(options: {
           weights: points.weights as Record<string, unknown>,
           gates: points.gates as Record<string, unknown>,
           rule_version: points.rule_version,
+          disclaimer: disclaimer(),
         }, input);
       } else {
         const sync = readSync();
@@ -494,6 +511,7 @@ export function createReadApi(options: {
             items: page.map(publicHistoryItem),
             next_cursor: rows.length > (limit as number) ? encodeCursor(page[page.length - 1] as { block_number: number; log_index: number; action: string; utc_day: number }) : null,
             ...sync,
+            disclaimer: disclaimer(),
           }, input);
         }
       }

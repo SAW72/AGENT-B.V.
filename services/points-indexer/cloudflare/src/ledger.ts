@@ -110,13 +110,10 @@ const SCHEMA = [
   `CREATE UNIQUE INDEX IF NOT EXISTS ledger_return_day
     ON ledger_rows (wallet, utc_day)
     WHERE action = 'return_day'`,
-  `CREATE TABLE IF NOT EXISTS rate_hits (
-    ip TEXT NOT NULL,
-    ts INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS rate_hits_ip_ts ON rate_hits (ip, ts)`,
-  `CREATE INDEX IF NOT EXISTS rate_hits_ts ON rate_hits (ts)`,
 ];
+
+/** Above this many stored logs, rebuild stops so a flood cannot spend the CPU budget. */
+export const REBUILD_MAX_LOGS = 500;
 
 function one(sql: Sql, query: string, ...params: unknown[]) {
   const rows = sql.exec(query, ...params).toArray();
@@ -167,7 +164,7 @@ function normalizeRegister(register: { voters?: Record<string, string> } | Recor
 }
 
 function normalizeWeights(weights: { weights?: Record<string, unknown> }) {
-  const source = weights.weights ?? weights;
+  const source = (weights.weights ?? weights) as Record<string, unknown>;
   return {
     first_activity: nullableNumber(source.first_activity),
     fund: nullableNumber(source.fund),
@@ -179,7 +176,7 @@ function normalizeWeights(weights: { weights?: Record<string, unknown> }) {
 }
 
 function normalizeGates(gates: { gates?: Record<string, unknown> }) {
-  const source = gates.gates ?? gates;
+  const source = (gates.gates ?? gates) as Record<string, unknown>;
   return {
     same_pair_per_day: nullableNumber(source.same_pair_per_day),
     same_pair_lifetime: nullableNumber(source.same_pair_lifetime),
@@ -198,13 +195,30 @@ export function ensureSchema(sql: Sql) {
   }
 }
 
+function bundleFingerprint(parts: unknown) {
+  const text = JSON.stringify(parts);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 /** Replace stored weights, gates, register, chains, and links from the bundled config. */
 export function refreshBundled(sql: Sql) {
-  metaSet(sql, "register", JSON.stringify(normalizeRegister(registerConfig)));
-  metaSet(sql, "weights", JSON.stringify(normalizeWeights(pointsConfig)));
-  metaSet(sql, "gates", JSON.stringify(normalizeGates(pointsConfig)));
+  const register = JSON.stringify(normalizeRegister(registerConfig));
+  const weights = JSON.stringify(normalizeWeights(pointsConfig));
+  const gates = JSON.stringify(normalizeGates(pointsConfig));
   const rule = (pointsConfig as { rule_version?: unknown }).rule_version;
-  metaSet(sql, "rule_version", typeof rule === "string" ? rule : "");
+  const ruleVersion = typeof rule === "string" ? rule : "";
+  const fingerprint = bundleFingerprint({ register, weights, gates, ruleVersion, chains: chainsConfig, links: linksConfig });
+  const previous = metaGet(sql, "bundle_hash");
+  const configured = metaGet(sql, "configured") === "1";
+  metaSet(sql, "register", register);
+  metaSet(sql, "weights", weights);
+  metaSet(sql, "gates", gates);
+  metaSet(sql, "rule_version", ruleVersion);
   run(sql, "DELETE FROM chains");
   for (const chain of chainsConfig as Array<{ wallet?: string; action?: string; escrow_id?: string; entries?: unknown }>) {
     const wallet = lowerHex(chain.wallet);
@@ -237,6 +251,10 @@ export function refreshBundled(sql: Sql) {
       Number(link.seq ?? 0),
     );
   }
+  if ((previous != null && previous !== fingerprint) || (previous == null && configured)) {
+    metaSet(sql, "dirty", "1");
+  }
+  metaSet(sql, "bundle_hash", fingerprint);
 }
 
 export function storedConfig(sql: Sql) {
@@ -331,9 +349,19 @@ export function commitScanWindow(storage: Storage, logs: unknown[], scannedThrou
   const normalized = logs.map((log) => normalizeLog(log));
   let inserted = 0;
   let removed = 0;
+  let anomalies = 0;
+  const finalized = finalizedBlock(storage.sql);
   storage.transactionSync(() => {
     for (const log of normalized) {
       if (log.removed) {
+        if (finalized != null && log.blockNumber <= finalized) {
+          anomalies += 1;
+          console.error(JSON.stringify({
+            message: "removed_finalized_log",
+            block: log.blockNumber,
+          }));
+          continue;
+        }
         const existing = one(
           storage.sql,
           "SELECT 1 AS n FROM raw_logs WHERE chain_id = ? AND contract = ? AND tx_hash = ? AND log_index = ?",
@@ -358,9 +386,13 @@ export function commitScanWindow(storage: Storage, logs: unknown[], scannedThrou
       }
     }
     metaSet(storage.sql, "last_scanned_block", String(scannedThrough));
+    if (anomalies > 0) {
+      const prior = metaInt(storage.sql, "removed_finalized") ?? 0;
+      metaSet(storage.sql, "removed_finalized", String(prior + anomalies));
+    }
     if (inserted > 0 || removed > 0) metaSet(storage.sql, "dirty", "1");
   });
-  return { ok: true, inserted, removed, scannedThrough };
+  return { ok: true, inserted, removed, anomalies, scannedThrough };
 }
 
 export function setFinalizedBlock(sql: Sql, finalized: number) {
@@ -555,7 +587,7 @@ function linkFor(
     }
     const recovered = recoverSigner(digest, String(link.signature));
     if (!recovered.ok) {
-      reason = recovered.reason;
+      reason = recovered.reason || "bad_signature";
       continue;
     }
     if (recovered.address !== candidate.wallet) {
@@ -642,6 +674,13 @@ export function rebuild(storage: Storage) {
   const sql = storage.sql;
   const head = finalizedBlock(sql);
   if (head == null) throw new PointsError("bad_finalized");
+  const rawCount = Number(one(sql, "SELECT COUNT(*) AS n FROM raw_logs")?.n ?? 0);
+  if (rawCount > REBUILD_MAX_LOGS) {
+    metaSet(sql, "rebuild_capped", "1");
+    metaSet(sql, "dirty", "1");
+    console.error(JSON.stringify({ message: "rebuild_capped", rows: rawCount }));
+    return;
+  }
   const weights = JSON.parse(metaGet(sql, "weights") || "{}") as ReturnType<typeof normalizeWeights>;
   const gates = JSON.parse(metaGet(sql, "gates") || "{}") as ReturnType<typeof normalizeGates>;
   const register = JSON.parse(metaGet(sql, "register") || "{}") as Record<string, string>;
@@ -759,15 +798,6 @@ export function rebuild(storage: Storage) {
     const count = metaInt(sql, "rebuild_count") ?? 0;
     metaSet(sql, "rebuild_count", String(count + 1));
     metaSet(sql, "dirty", "0");
+    metaSet(sql, "rebuild_capped", "0");
   });
-}
-
-export function publicConfig() {
-  return {
-    weights: normalizeWeights(pointsConfig),
-    gates: normalizeGates(pointsConfig),
-    rule_version: typeof (pointsConfig as { rule_version?: unknown }).rule_version === "string"
-      ? (pointsConfig as { rule_version: string }).rule_version
-      : null,
-  };
 }

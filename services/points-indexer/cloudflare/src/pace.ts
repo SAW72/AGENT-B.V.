@@ -8,6 +8,8 @@ export const GETLOGS_MIN_GAP_MS = 200;
 export const RETRY_BACKOFF_MS = Object.freeze([1_000, 2_000, 4_000]);
 export const MAX_SCAN_RETRIES = 3;
 export const MAX_RETRY_AFTER_MS = 30_000;
+/** Carried Retry-After (the next alarm) stops growing at 15 minutes. In-retry waits stay at 30s. */
+export const MAX_DEFER_MS = 15 * 60 * 1000;
 export const RPC_TIMEOUT_MS = 15_000;
 
 const NETWORK_CODES = new Set([
@@ -193,7 +195,7 @@ export function scanErrorClass(error: unknown): "rate_limited" | "server_error" 
   return null;
 }
 
-/** Retry-After in milliseconds, not capped. Null when the header is absent. */
+/** Retry-After in milliseconds. Null when the header is absent. The pacer caps what it carries forward. */
 export function retryAfterFullMs(error: unknown) {
   const header = headerFrom(error, "retry-after");
   if (header == null) return null;
@@ -251,7 +253,7 @@ export function createScanPacer(options: {
           if (!reason) throw error;
           const fullWait = retryAfterFullMs(error);
           if (fullWait != null && fullWait > MAX_RETRY_AFTER_MS) {
-            return { ok: false, reason, error, deferMs: fullWait };
+            return { ok: false, reason, error, deferMs: Math.min(fullWait, MAX_DEFER_MS) };
           }
           if (attempt >= maxRetries) return { ok: false, reason, error };
           const wait = retryWaitMs(error, attempt, now(), { backoffMs: options.backoffMs });

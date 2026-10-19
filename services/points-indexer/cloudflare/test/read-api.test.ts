@@ -1,8 +1,8 @@
 import { reset, runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
-import sepolia from "../../../config/reputation/sepolia.json";
-import { createReadApi, pointsEnabled } from "../src/read-api";
+import sepolia from "../../../../config/reputation/sepolia.json";
+import { createReadApi, httpsUrl, pointsEnabled } from "../src/read-api";
 
 const DISCLAIMER = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
 
@@ -40,6 +40,7 @@ describe("points read API", () => {
       status: string;
       weights: Record<string, unknown>;
       rule_version: string | null;
+      disclaimer: { text: string };
     };
     expect(config.chainId).toBe(84532);
     expect(config.status).toBe("draft");
@@ -52,6 +53,7 @@ describe("points read API", () => {
       vote: null,
       return_day: null,
     });
+    expect(config.disclaimer.text).toBe(DISCLAIMER);
     forbidRankAndEarn(JSON.stringify(config));
 
     const addressResponse = await SELF.fetch(`https://points.test/v1/points/${address}`, { headers: origin });
@@ -112,6 +114,7 @@ describe("points read API", () => {
       items: Array<{ block_number: number; points: number; points_withheld: boolean; eligibility_reason: string }>;
       next_cursor: string | null;
       limit: number;
+      disclaimer: { text: string };
     };
     expect(page.limit).toBe(1);
     expect(page.items).toHaveLength(1);
@@ -120,6 +123,7 @@ describe("points read API", () => {
     expect(page.items[0].points_withheld).toBe(true);
     expect(page.items[0].eligibility_reason).toBe("ofac_unconfigured");
     expect(page.next_cursor).toBeTruthy();
+    expect(page.disclaimer.text).toBe(DISCLAIMER);
 
     const secondPage = await SELF.fetch(
       `https://points.test/v1/points/${address}/history?limit=1&cursor=${page.next_cursor}`,
@@ -131,13 +135,34 @@ describe("points read API", () => {
     forbidRankAndEarn(JSON.stringify(page));
     forbidRankAndEarn(JSON.stringify(rest));
 
-    const health = await SELF.fetch("https://points.test/health");
-    forbidRankAndEarn(await health.text());
-    const hits = await runInDurableObject(stub(), async (_instance, state) => {
-      const row = state.storage.sql.exec("SELECT COUNT(*) AS n FROM rate_hits").toArray()[0];
-      return Number(row?.n ?? 0);
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.23" },
     });
-    expect(hits).toBe(0);
+    forbidRankAndEarn(await health.text());
+  });
+
+  it("rejects a repeated query param and a missing client address", async () => {
+    const address = await wallet();
+    const repeated = await SELF.fetch(`https://points.test/v1/points/${address}?cursor=a&cursor=b`, {
+      headers: { "CF-Connecting-IP": "203.0.113.30" },
+    });
+    expect(repeated.status).toBe(400);
+    expect(await repeated.json()).toEqual({ ok: false, error: "duplicate_query" });
+    const options = await SELF.fetch(`https://points.test/v1/points/${address}?x=1&x=2`, { method: "OPTIONS" });
+    expect(options.status).toBe(400);
+    expect(await options.json()).toEqual({ ok: false, error: "duplicate_query" });
+    const missing = await SELF.fetch(`https://points.test/v1/points/${address}`);
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({ ok: false, error: "client_address_required" });
+    const unknownPath = await SELF.fetch("https://points.test/nope?a=1&a=2");
+    expect(unknownPath.status).toBe(400);
+    expect(await unknownPath.json()).toEqual({ ok: false, error: "duplicate_query" });
+  });
+
+  it("accepts only an https legal notice link", () => {
+    expect(httpsUrl("https://example.com/legal")).toBe("https://example.com/legal");
+    expect(httpsUrl("http://example.com/legal")).toBeNull();
+    expect(httpsUrl("")).toBeNull();
   });
 
   it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {
@@ -225,14 +250,18 @@ describe("points read API", () => {
         JSON.stringify(tampered),
       );
     });
-    const tamperedResponse = await SELF.fetch("https://points.test/v1/points/config");
+    const tamperedResponse = await SELF.fetch("https://points.test/v1/points/config", {
+      headers: { "CF-Connecting-IP": "203.0.113.31" },
+    });
     const tamperedBody = await tamperedResponse.json() as { weights: Record<string, unknown> };
     expect(tamperedBody.weights).toEqual(tampered);
     await runInDurableObject(stub(), async (_instance, state) => {
       const { refreshBundled } = await import("../src/ledger");
       refreshBundled(state.storage.sql);
     });
-    const restored = await SELF.fetch("https://points.test/v1/points/config");
+    const restored = await SELF.fetch("https://points.test/v1/points/config", {
+      headers: { "CF-Connecting-IP": "203.0.113.32" },
+    });
     const restoredBody = await restored.json() as { weights: Record<string, number | null> };
     expect(restoredBody.weights.first_activity).toBeNull();
     expect(restoredBody.weights.fund).toBeNull();

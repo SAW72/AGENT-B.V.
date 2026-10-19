@@ -127,9 +127,11 @@ export function toRpcLog(log: FakeLog) {
 
 export function chainHandler(options: {
   head: number | (() => number);
+  latest?: number | (() => number);
   logs?: FakeLog[];
   code?: string;
   omitTimestamp?: boolean;
+  keepOutside?: boolean;
   getLogsStatus?: (
     fromBlock: number,
     toBlock: number,
@@ -150,6 +152,10 @@ export function chainHandler(options: {
       const tag = String(request.params[0]);
       if (tag === "finalized") {
         return { status: 200, body: { number: hex(headNow()) } };
+      }
+      if (tag === "latest") {
+        const latestNow = typeof options.latest === "function" ? options.latest() : (options.latest ?? headNow());
+        return { status: 200, body: { number: hex(latestNow) } };
       }
       if (options.omitTimestamp) return { status: 200, body: null };
       const number = Number(tag);
@@ -172,7 +178,8 @@ export function chainHandler(options: {
         };
       }
       if (fromBlock > headNow()) return { status: 200, body: [] };
-      const rows = (options.logs ?? []).filter((log) => log.blockNumber >= fromBlock && log.blockNumber <= toBlock).map(toRpcLog);
+      const pool = options.logs ?? [];
+      const rows = (options.keepOutside ? pool : pool.filter((log) => log.blockNumber >= fromBlock && log.blockNumber <= toBlock)).map(toRpcLog);
       return { status: 200, body: rows };
     }
     throw new Error(`unexpected method ${request.method}`);

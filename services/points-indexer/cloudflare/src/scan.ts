@@ -60,7 +60,7 @@ export function isRangeError(error: unknown) {
   const status = numericCode(record.status ?? record.statusCode);
   if (status === 413 || code === 413) return true;
   const text = rangeText(record);
-  if (code === -32005 || code === -32602) return textIsRange(text);
+  if (code === -32602) return true;
   return textIsRange(text);
 }
 
@@ -76,9 +76,12 @@ function nextRangeWindow(window: number, error: { details?: unknown; shortMessag
   const limit = rangeLimit(error);
   if (limit != null) {
     const clamped = Math.min(max, Math.max(1, limit));
-    if (clamped < window) return clamped;
+    const capped = Math.min(window, clamped);
+    if (capped < window) return { window: capped, ceiling: clamped };
+    const halved = Math.min(clamped, Math.max(1, Math.floor(window / 2)));
+    return { window: halved, ceiling: clamped };
   }
-  return Math.max(1, Math.floor(window / 2));
+  return { window: Math.max(1, Math.floor(window / 2)), ceiling: null };
 }
 
 function positiveInt(value: unknown, fallback: number) {
@@ -106,7 +109,13 @@ export function healthDecision(status: { lastPassAt: number | null; pollMs: numb
 }
 
 function errorCode(error: unknown) {
-  if (error instanceof PointsError || (error instanceof Error && error.name === "PointsError")) return "ledger_error";
+  if (error instanceof PointsError || (error instanceof Error && error.name === "PointsError")) {
+    const reason = (error as { reason?: unknown }).reason;
+    if (reason === "unverifiable_log" || (error instanceof Error && error.message === "unverifiable_log")) {
+      return "unverifiable_log";
+    }
+    return "ledger_error";
+  }
   if (isRangeError(error)) return "range_error";
   const classified = scanErrorClass(error);
   if (classified === "rate_limited" || classified === "server_error" || classified === "timeout") return classified;
@@ -179,29 +188,41 @@ export async function runAlarm(options: {
     if (!headBlock || !Number.isSafeInteger(headBlock.number) || headBlock.number < 0) {
       throw new Error("RPC finalized block is not a safe integer");
     }
-    const storedHead = finalizedBlock(storage.sql);
+    const latestBlock = await rpc.latestBlock();
+    if (!latestBlock || !Number.isSafeInteger(latestBlock.number) || latestBlock.number < 0) {
+      throw new Error("RPC latest block is not a safe integer");
+    }
+    if (headBlock.number > latestBlock.number) {
+      throw new Error("RPC finalized block is above the latest block");
+    }
     const rpcHead = headBlock.number;
-    if (storedHead != null && rpcHead < storedHead) {
+    const storedChain = metaInt(storage.sql, "chain_head");
+    if (storedChain != null && rpcHead < storedChain) {
       metaSet(storage.sql, "finalized_lag", "1");
-      console.error(JSON.stringify({ message: "finalized_head_lag", rpcHead, storedHead }));
+      console.error(JSON.stringify({ message: "finalized_head_lag", rpcHead, storedHead: storedChain }));
     } else {
       metaSet(storage.sql, "finalized_lag", "0");
+      if (storedChain == null || rpcHead > storedChain) metaSet(storage.sql, "chain_head", String(rpcHead));
     }
     const head = rpcHead;
-    let from = lastScannedBlock(storage.sql);
-    from = from == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, from + 1);
+    const previousCursor = lastScannedBlock(storage.sql);
+    const origin = previousCursor == null ? ESCROW_START_BLOCK - 1 : previousCursor;
+    const scanHead = Math.min(head, origin + maxWindows * logRange);
+    let from = previousCursor == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, previousCursor + 1);
     let window = metaInt(storage.sql, "learned_window") ?? logRange;
+    const storedCeiling = metaInt(storage.sql, "window_ceiling");
+    if (storedCeiling != null) window = Math.min(window, storedCeiling);
     let inserted = 0;
     let removed = 0;
     let committedWindows = 0;
     let earlyReason: string | null = null;
     let stopReason: string | null = null;
-    while (from <= head && committedWindows < maxWindows) {
+    while (from <= scanHead && committedWindows < maxWindows) {
       if (now() - started >= MAX_ALARM_WALL_MS) {
         stopReason = "wall_time";
         break;
       }
-      const to = Math.min(head, from + window - 1);
+      const to = Math.min(scanHead, from + window - 1);
       let logs;
       try {
         const scanned = await scan.run(() => rpc.getLogs(from as number, to));
@@ -217,7 +238,9 @@ export async function runAlarm(options: {
           break;
         }
         if (isRangeError(error) && window > 1) {
-          window = nextRangeWindow(window, error as { details?: unknown; shortMessage?: unknown }, logRange);
+          const shrunk = nextRangeWindow(window, error as { details?: unknown; shortMessage?: unknown }, logRange);
+          window = shrunk.window;
+          if (shrunk.ceiling != null) metaSet(storage.sql, "window_ceiling", String(shrunk.ceiling));
           metaSet(storage.sql, "learned_window", String(window));
           continue;
         }
@@ -228,11 +251,20 @@ export async function runAlarm(options: {
       removed += committed.removed;
       committedWindows += 1;
       from = to + 1;
+      const ceiling = metaInt(storage.sql, "window_ceiling") ?? logRange;
+      if (window < ceiling) {
+        window = Math.min(ceiling, window * 2);
+        metaSet(storage.sql, "learned_window", String(window));
+      }
       metaSet(storage.sql, "last_pass_at", String(now()));
       metaSet(storage.sql, "last_error", "");
     }
     const previous = finalizedBlock(storage.sql);
-    const headResult = setFinalizedBlock(storage.sql, head);
+    const cursorNow = lastScannedBlock(storage.sql);
+    const verified = cursorNow == null ? null : Math.min(head, cursorNow);
+    const headResult = verified == null
+      ? { moved: false, previous, finalizedBlock: previous ?? head }
+      : setFinalizedBlock(storage.sql, verified);
     const crossed = newlyFinalCount(storage.sql, previous, headResult.finalizedBlock);
     const dirty = metaGet(storage.sql, "dirty") === "1";
     let rebuilds = 0;

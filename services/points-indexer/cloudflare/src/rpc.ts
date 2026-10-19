@@ -204,6 +204,13 @@ export function createRpc(url: string, fetchImpl: typeof fetch = fetch, meter?: 
       if (number == null) return null;
       return { number, timestamp: hexToInt(result.timestamp) };
     },
+    async latestBlock() {
+      const result = asRecord(await rpcCall(url, "eth_getBlockByNumber", ["latest", false], fetchImpl, meter));
+      if (!result) return null;
+      const number = hexToInt(result.number);
+      if (number == null) return null;
+      return { number, timestamp: hexToInt(result.timestamp) };
+    },
     async getLogs(fromBlock: number, toBlock: number) {
       const result = await rpcCall(url, "eth_getLogs", [{
         fromBlock: hexQuantity(fromBlock),
@@ -211,6 +218,14 @@ export function createRpc(url: string, fetchImpl: typeof fetch = fetch, meter?: 
         address: [ESCROW, PANEL],
       }], fetchImpl, meter);
       const rows = Array.isArray(result) ? result.map((row) => asRecord(row)).filter((row): row is RawLog => row != null) : [];
+      const allowed = new Set([ESCROW.toLowerCase(), PANEL.toLowerCase()]);
+      for (const row of rows) {
+        const block = hexToInt(row.blockNumber);
+        const address = String(row.address ?? "").toLowerCase();
+        if (block == null || block < fromBlock || block > toBlock || !allowed.has(address)) {
+          throw new RpcError("log_outside_request", { details: "log outside requested range" });
+        }
+      }
       const missing = new Set<number>();
       for (const row of rows) {
         if (hexToInt(row.blockTimestamp) == null) {

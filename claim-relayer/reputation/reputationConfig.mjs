@@ -31,6 +31,18 @@ function guessWei(node, label) {
   return BigInt(value);
 }
 
+/** Keep an https link. Anything else, including http, becomes an empty string. */
+export function httpsLink(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  try {
+    if (new URL(text).protocol !== "https:") return "";
+  } catch {
+    return "";
+  }
+  return text;
+}
+
 export function normalizeVersion(raw) {
   if (!raw || raw.chain?.chain_id !== BASE_SEPOLIA_CHAIN_ID) {
     throw httpError(500, "wrong_chain", { chainId: raw?.chain?.chain_id });
@@ -102,7 +114,7 @@ export function normalizeVersion(raw) {
     disclaimer: String(raw.display?.disclaimer || ""),
     disclaimer_links: {
       master_disclaimer: String(raw.disclaimer_links?.master_disclaimer || ""),
-      legal_notice_url: String(raw.disclaimer_links?.legal_notice_url || ""),
+      legal_notice_url: httpsLink(raw.disclaimer_links?.legal_notice_url),
       as_is: String(raw.disclaimer_links?.as_is || ""),
       not_investment: String(raw.disclaimer_links?.not_investment || ""),
       eligibility_notice: String(raw.disclaimer_links?.eligibility_notice || ""),

@@ -249,6 +249,15 @@ describe("reputation panels", () => {
     expect(screen.queryByTestId("placeholder-9")).toBeNull()
     expect(screen.queryByTestId("placeholder-11")).toBeNull()
     expect(screen.getByTestId("example-data-banner").textContent).toMatch(/EXAMPLE DATA/)
+    cleanup()
+    const httpOnly = structuredClone(exampleSnapshot) as ReputationSnapshot
+    httpOnly.balance.disclaimer.links = {
+      ...withLinks.balance.disclaimer.links,
+      legal_notice_url: "http://example.com/legal-notice",
+    }
+    renderView({ example: httpOnly, relayerUrl: null })
+    expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
+    expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
   })
 })
 

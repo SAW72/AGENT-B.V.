@@ -1,5 +1,5 @@
 import {
-  clientIp,
+  bucketClientAddress,
   parseCorsList,
   parseExactHttpsOrigin,
   pointsEnabled,
@@ -11,26 +11,40 @@ export { PointsObject };
 
 const OBJECT_NAME = "base-sepolia";
 const ALLOW = "GET, HEAD, OPTIONS";
+const HEALTH_CACHE_SECONDS = 15;
+const GLOBAL_KEY = "global";
 
 type Limiter = {
   limit(options: { key: string }): Promise<{ success: boolean }>;
+};
+
+type Limits = {
+  POINTS_RATE_LIMITER?: Limiter;
+  POINTS_HEALTH_LIMITER?: Limiter;
+  POINTS_GLOBAL_LIMITER?: Limiter;
 };
 
 function stub(env: Env) {
   return env.POINTS.get(env.POINTS.idFromName(OBJECT_NAME));
 }
 
-function limiter(env: Env) {
-  return (env as Env & { POINTS_RATE_LIMITER?: Limiter }).POINTS_RATE_LIMITER;
+function limiterOf(env: Env, name: keyof Limits) {
+  return (env as Env & Limits)[name];
+}
+
+function duplicateQuery(url: URL) {
+  const seen = new Set<string>();
+  for (const [key] of url.searchParams) {
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
 }
 
 function queryOf(url: URL) {
   const query: Record<string, string> = {};
-  for (const key of url.searchParams.keys()) {
-    if (query[key] === undefined) {
-      const value = url.searchParams.get(key);
-      if (value != null) query[key] = value;
-    }
+  for (const [key, value] of url.searchParams) {
+    if (query[key] === undefined) query[key] = value;
   }
   return query;
 }
@@ -65,8 +79,12 @@ function disabledResponse(): Response {
   return json(503, { ok: false, error: "points_disabled" });
 }
 
+function duplicateResponse(): Response {
+  return json(400, { ok: false, error: "duplicate_query" });
+}
+
 /**
- * Enabled /health reads the object because behind/ok lives there.
+ * Enabled /health is limited, then cached so a poll does not wake the object.
  * Disabled /health and every OPTIONS stay in this Worker.
  */
 function optionsResponse(request: Request, env: Env): Response {
@@ -87,11 +105,10 @@ function optionsResponse(request: Request, env: Env): Response {
   return new Response(null, { status: 204, headers });
 }
 
-async function enforceRateLimit(request: Request, env: Env): Promise<Response | null> {
-  const binding = limiter(env);
+async function charge(binding: Limiter | undefined, key: string): Promise<Response | null> {
   if (!binding) return json(503, { ok: false, error: "rate_limited" });
   try {
-    const result = await binding.limit({ key: clientIp({ cfConnectingIp: request.headers.get("CF-Connecting-IP") }) });
+    const result = await binding.limit({ key });
     if (result.success === true) return null;
   } catch {
     return json(503, { ok: false, error: "rate_limited" });
@@ -99,28 +116,63 @@ async function enforceRateLimit(request: Request, env: Env): Promise<Response | 
   return json(429, { ok: false, error: "rate_limited" }, { "retry-after": "60" });
 }
 
+function clientKey(request: Request) {
+  return bucketClientAddress(request.headers.get("CF-Connecting-IP"));
+}
+
+function healthCacheKey() {
+  return new Request("https://points.internal/health", { method: "GET" });
+}
+
+async function enabledHealth(request: Request, env: Env): Promise<Response> {
+  const address = clientKey(request);
+  if (!address) return json(400, { ok: false, error: "client_address_required" });
+  const limited = await charge(limiterOf(env, "POINTS_HEALTH_LIMITER"), address);
+  if (limited) return limited;
+  const fast = env.POINTS_FAST_PACE === "1";
+  const cacheKey = healthCacheKey();
+  if (!fast) {
+    const hit = await caches.default.match(cacheKey);
+    if (hit) {
+      const headers = new Headers(hit.headers);
+      headers.set("x-points-cache", "hit");
+      return new Response(hit.body, { status: hit.status, headers });
+    }
+  }
+  const globalLimited = await charge(limiterOf(env, "POINTS_GLOBAL_LIMITER"), GLOBAL_KEY);
+  if (globalLimited) return globalLimited;
+  const result = await stub(env).health();
+  const payload = JSON.stringify(result.body);
+  const headers = new Headers({
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": fast ? "no-store" : `public, max-age=${HEALTH_CACHE_SECONDS}`,
+    "x-content-type-options": "nosniff",
+    "x-points-cache": "miss",
+    "content-length": String(new TextEncoder().encode(payload).byteLength),
+  });
+  const response = new Response(payload, { status: result.status, headers });
+  if (!fast) await caches.default.put(cacheKey, response.clone());
+  return response;
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (duplicateQuery(url)) return duplicateResponse();
     if (path === "/health") {
       if (!pointsEnabled(env)) return json(503, { status: "disabled" });
-      const result = await stub(env).health();
-      return toResponse({
-        status: result.status,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-          "x-content-type-options": "nosniff",
-        },
-        body: result.body,
-      });
+      return enabledHealth(request, env);
     }
     if (path === "/v1/points" || path.startsWith("/v1/points/")) {
       if (request.method === "OPTIONS") return optionsResponse(request, env);
       if (!pointsEnabled(env)) return disabledResponse();
-      const limited = await enforceRateLimit(request, env);
+      const address = clientKey(request);
+      if (!address) return json(400, { ok: false, error: "client_address_required" });
+      const limited = await charge(limiterOf(env, "POINTS_RATE_LIMITER"), address);
       if (limited) return limited;
+      const globalLimited = await charge(limiterOf(env, "POINTS_GLOBAL_LIMITER"), GLOBAL_KEY);
+      if (globalLimited) return globalLimited;
       const result: ReadResult = await stub(env).read({
         method: request.method,
         path,

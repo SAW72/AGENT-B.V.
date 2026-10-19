@@ -12,6 +12,15 @@ import {
 import { createReadApi, parseCorsList, pointsEnabled, type ReadInput } from "./read-api";
 import { blocksBehind, healthDecision, runAlarm } from "./scan";
 
+type HealthBody = {
+  ok: boolean;
+  chainId: number;
+  behind?: number;
+  error?: string;
+  removed_finalized?: number;
+  rebuild_capped?: boolean;
+};
+
 export class PointsObject extends DurableObject<Env> {
   #api: ReturnType<typeof createReadApi> | null = null;
 
@@ -42,10 +51,10 @@ export class PointsObject extends DurableObject<Env> {
     });
   }
 
-  async health() {
+  async health(): Promise<{ status: number; body: HealthBody }> {
     ensureSchema(this.ctx.storage.sql);
     const pollMs = Number(this.env.POINTS_POLL_MS || 15_000);
-    const head = finalizedBlock(this.ctx.storage.sql);
+    const head = metaInt(this.ctx.storage.sql, "chain_head");
     const cursor = lastScannedBlock(this.ctx.storage.sql);
     const behind = head == null ? 0 : blocksBehind(head, cursor);
     const decision = healthDecision({
@@ -54,8 +63,11 @@ export class PointsObject extends DurableObject<Env> {
       now: Date.now(),
       behind,
     });
-    const body: Record<string, unknown> = { ok: decision.ok, chainId: CHAIN_ID };
+    const body: HealthBody = { ok: decision.ok, chainId: CHAIN_ID };
     if (decision.ok && decision.behind > 0) body.behind = decision.behind;
+    const anomalies = metaInt(this.ctx.storage.sql, "removed_finalized");
+    if (anomalies != null && anomalies > 0) body.removed_finalized = anomalies;
+    if (metaGet(this.ctx.storage.sql, "rebuild_capped") === "1") body.rebuild_capped = true;
     const lastError = metaGet(this.ctx.storage.sql, "last_error");
     const early = metaGet(this.ctx.storage.sql, "early_reason");
     if (!decision.ok && lastError) body.error = lastError;
@@ -73,7 +85,6 @@ export class PointsObject extends DurableObject<Env> {
     const sql = this.ctx.storage.sql;
     this.#api = createReadApi({
       corsOrigins: parseCorsList(this.env.POINTS_CORS_ORIGINS),
-      allow: () => ({ ok: true }),
       store: {
         getCursor: () => ({
           last_scanned_block: lastScannedBlock(sql),

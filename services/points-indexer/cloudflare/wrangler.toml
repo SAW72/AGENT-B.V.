@@ -24,7 +24,8 @@ enabled = true
 
 [observability.logs]
 enabled = true
-head_sampling_rate = 0
+# 1 keeps error and lag lines. Traces stay off on their own, below.
+head_sampling_rate = 1
 
 [observability.traces]
 enabled = false
@@ -36,7 +37,6 @@ POINTS_LOG_RANGE = "200"
 POINTS_MAX_WINDOWS_PER_RUN = "40"
 POINTS_POLL_MS = "15000"
 POINTS_CORS_ORIGINS = ""
-POINTS_READ_RATE_PER_MINUTE = "60"
 # Empty here. Test runs set it to 1 so sleeps do not wait on the wall clock.
 POINTS_FAST_PACE = ""
 
@@ -44,14 +44,38 @@ POINTS_FAST_PACE = ""
 name = "POINTS"
 class_name = "PointsObject"
 
-# Front Worker limit. /health and OPTIONS do not call this binding.
-# namespace_id is a placeholder Spencer's deploy creates. It is not a secret.
+# namespace_id values are integers the operator chooses so this account's
+# counters stay separate. Deploy does not create them. They are not account
+# ids and not secrets. Two bindings that reuse one id share counters.
+# 1001 is the number in Cloudflare's docs; do not use it.
+# /v1/points is 60 per 60 seconds, one bucket per client address.
 [[ratelimits]]
 name = "POINTS_RATE_LIMITER"
-namespace_id = "1001"
+namespace_id = "84532001"
 
 [ratelimits.simple]
 limit = 60
+period = 60
+
+# Enabled /health is 12 per 60 seconds, one bucket per client address.
+# The Worker also caches that route for 15 seconds.
+[[ratelimits]]
+name = "POINTS_HEALTH_LIMITER"
+namespace_id = "84532002"
+
+[ratelimits.simple]
+limit = 12
+period = 60
+
+# Shared cap on Durable Object wakes from this Worker, per location.
+# 50 per 60 seconds is 72,000 a day, leaving room for alarms under the
+# Free plan's 100,000 Durable Object requests a day. See SPENCER-SETUP.md.
+[[ratelimits]]
+name = "POINTS_GLOBAL_LIMITER"
+namespace_id = "84532003"
+
+[ratelimits.simple]
+limit = 50
 period = 60
 
 [[migrations]]

@@ -116,6 +116,9 @@ jobs:
       - name: Install points Worker deps
         working-directory: services/points-indexer/cloudflare
         run: npm ci
+      - name: Points Worker typecheck
+        working-directory: services/points-indexer/cloudflare
+        run: npx wrangler types && npx tsc --noEmit --pretty false
       - name: Points Worker tests (offline fake RPC, no network, no deploy)
         working-directory: services/points-indexer/cloudflare
         run: npm test
