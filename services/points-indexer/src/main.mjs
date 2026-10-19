@@ -431,6 +431,21 @@ export function healthDecision(status) {
   return { ok: fresh, statusCode: fresh ? 200 : 503, behind };
 }
 
+/**
+ * A stored log sits above the previous finalized head and at or below the new one.
+ * The head move is what lets that log leave the withheld set.
+ * @param {{ db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } } }} indexer
+ * @param {number} previous
+ * @param {number} next
+ */
+function storedLogCrossedByHead(indexer, previous, next) {
+  if (!Number.isInteger(previous) || !Number.isInteger(next) || next <= previous) return false;
+  const row = indexer.db.prepare(
+    "SELECT 1 AS ok FROM raw_logs WHERE removed = 0 AND block_number > ? AND block_number <= ? LIMIT 1",
+  ).get(previous, next);
+  return row != null;
+}
+
 function blocksBehind(head, cursor) {
   if (!Number.isSafeInteger(head)) return 0;
   if (cursor == null) {
@@ -793,8 +808,8 @@ export async function start(options = {}) {
         }
         throw error;
       }
-      dirty = true;
       const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      if (committed.inserted > 0) dirty = true;
       inserted += committed.inserted;
       committedWindows += 1;
       windowsThisPass += 1;
@@ -814,9 +829,16 @@ export async function start(options = {}) {
     ) {
       earlyReason = "run_cap";
     }
+    const previousHead = indexer.finalizedBlock;
     const headResult = indexer.setFinalizedBlock(head, { rebuild: false });
+    // TODO: incremental attribution. rebuild() replays raw logs, chains, nonces,
+    // links, and derived rows, then renumbers seq. A partial replay is not wired.
+    // This pass skips that replay when it inserted no raw log and the finalized
+    // head did not move over a stored log. A failed replay stays due on the next pass.
+    const crossed = storedLogCrossedByHead(indexer, previousHead, headResult.finalizedBlock);
     let rebuilds = 0;
-    if (dirty || inserted > 0 || headResult.moved) {
+    if (dirty || crossed) {
+      dirty = true;
       indexer.rebuild();
       dirty = false;
       rebuilds = 1;
