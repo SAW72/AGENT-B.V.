@@ -1,6 +1,6 @@
 # Agent-B.V. Points Spec
 
-**Status:** Public testnet beta. Open signup. Base Sepolia only. Docs only. No contract change is proposed here.
+**Status:** Will be a public testnet beta with open signup. Base Sepolia only. Docs only. No contract change is proposed here.
 
 Points in this spec are an off-chain record of activity on Base Sepolia (testnet). Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope. The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
 
@@ -400,7 +400,7 @@ The header comment "Not deployed" in `contracts/BotAttestationEscrow.sol` disagr
 
 ## Soft launch scope S
 
-Scope S is the public testnet beta. Signup is open. The only network is Base Sepolia. Chain id is `84532`. Wallet connect is in. Points are tied to the connected wallet. Scoring stays 0 until OFAC screening is configured, fail-closed: the points total is 0, `points_withheld` is true, and the reason is `ofac_unconfigured`. That is the same triple `rowFrom` stores on a committed row (`services/points-indexer/src/indexer.mjs:984-987`). Scope S adds no write route.
+Scope S will be a public testnet beta with open signup. The only network is Base Sepolia. Chain id is `84532`. Wallet connect is in. Points are tied to the connected wallet. Scoring stays 0 until OFAC screening is configured, fail-closed: the points total is 0, `points_withheld` is true, and the reason is `ofac_unconfigured`. That is the same triple `rowFrom` stores on a committed row (`services/points-indexer/src/indexer.mjs:984-987`). Scope S adds no write route.
 
 `claim-relayer/reputation/runtime.mjs:6` rejects the copy patterns named in that file. Public wording for what points are not is the disclaimer in "What points are".
 
@@ -456,11 +456,11 @@ Disclaimer link slots stay empty while checklist #11 is open (`config/reputation
 
 ### Pacing before the first deploy
 
-This is a requirement before the first deploy. The work is planned as PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, must be implemented and must be gated before that deploy.
+This is a requirement before the first deploy. The work is PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, uses the numbers below.
 
-`services/points-indexer/src/` does not wait between `getLogs` calls. HTTP 429 is not a range error: `services/points-indexer/test/main.test.mjs:745` expects `isRangeError` to be false for status 429. An error that is not a range error is thrown (`services/points-indexer/src/main.mjs:348-354`), so a 429 leaves the pass instead of stopping after the last committed window.
+The indexer waits 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows.
 
-The only measured evidence recorded here is the figure from the soft-launch plan, which attributes it to the PR #100 Verifier verdict: 50 HTTP 429 responses in 1,055 requests, at 25 to 35 requests per second, on the public RPC. That count is not in the git tree. Pull request #100 on GitHub had no reviews and no comments when those lists were read for this draft. The count was not measured again here. Grok Bot rules those numbers when PR-3 is drafted. This draft does not pick a delay or a retry count.
+The only measured evidence recorded here is the figure from the soft-launch plan, which attributes it to the PR #100 Verifier verdict: 50 HTTP 429 responses in 1,055 requests, at 25 to 35 requests per second, on the public RPC. That count is not in the git tree. Pull request #100 on GitHub had no reviews and no comments when those lists were read for this draft. The count was not measured again here.
 
 Two other items stay parked. They are not planned. Grok Bot's ruling still covers both.
 
@@ -473,7 +473,7 @@ Two other items stay parked. They are not planned. Grok Bot's ruling still cover
 |---|---|
 | Spencer | The RPC secret. The Pages upload (`apps/wallet-ux/CLOUDFLARE_PAGES.md:3` is Direct Upload). Checklist #12 caps. Checklist #9 enforcer owner. The human/AI arbitrator register. |
 | Lawyer | Checklist #11 links. Checklist #7 OFAC provider. The first announcement text and a screenshot, before any public post. |
-| Grok Bot | The pacing numbers for PR-3. The two parked items in the pacing section. |
+| Grok Bot | The two parked items in the pacing section. |
 
 Checklists #7, #9, and #12 stay **Open** in the sections above. Checklist #11 stays open. No weight in this file is locked.
 
@@ -482,7 +482,7 @@ Checklists #7, #9, and #12 stay **Open** in the sections above. Checklist #11 st
 PR-1 is this docs amendment. Each item below waits until PR-1 is merged and until Grok Bot has ruled. This file does not authorize any of them.
 
 - PR-2. The indexer read API in the contract above. It waits for PR-1 merged plus Grok Bot's ruling.
-- PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. It waits for PR-1 merged plus Grok Bot's ruling. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
+- PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. The numbers are in the pacing section. It waits for PR-1 merged. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
 - PR-4. Storage on Cloudflare (D1 plus a Worker or a Durable Object) is plan pending. A later pull request may add that design. This file does not design it and it does not hold a secret.
 - PR-5. A wallet surface for the connected wallet on chain `84532`. Points are tied to that wallet. Signup is open. It waits for PR-1 merged plus Grok Bot's ruling. The Pages upload stays with Spencer.
 

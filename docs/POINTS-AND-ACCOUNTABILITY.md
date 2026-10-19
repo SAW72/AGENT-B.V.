@@ -1,6 +1,6 @@
 # Points Systems and Accountability Layer
 
-**Status:** The Agent-B.V. points beta is public on Base Sepolia, with open signup. The first public post waits until Lawyer has reviewed the announcement text and a screenshot. Later posts reuse that approved text.
+**Status:** The Agent-B.V. points beta will be a public testnet beta on Base Sepolia, with open signup. The first public post waits until Lawyer has reviewed the announcement text and a screenshot. Later posts reuse that approved text.
 
 This file is the single copy inside Agent-B.V. of everything discussed for the points programs and the accountability layer. Partner rubrics also live in their own repos:
 
