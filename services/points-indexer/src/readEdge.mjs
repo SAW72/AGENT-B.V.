@@ -255,8 +255,11 @@ function retryAfter(stamps, now, windowMs) {
 
 /**
  * Window limiter for the path where the read module did not load.
- * The map holds 16384 keys. When it is full, expired keys are dropped
- * first, then the least recently seen key that is under its limit.
+ * The map holds 16384 keys. When it is full, an idle key that is under
+ * its limit is evicted. Expired keys are swept only when the clock has
+ * reached the oldest live stamp plus the window, or when no idle key is
+ * left. The sweep walks the map in place. A refused key is moved without
+ * a new stamp, so that time is the oldest stamp, not the map order.
  * A key that has hit its limit inside the window is not evicted.
  * There is no timer. `clock` defaults to `Date.now`. `rate` is read
  * on each call and defaults to 60.
@@ -269,6 +272,9 @@ export function createFallbackLimiter(options = {}) {
   const rate = typeof options.rate === "function" ? options.rate : () => DEFAULT_RATE_PER_MINUTE;
   const hits = new Map();
   const idle = new Map();
+  let sweeps = 0;
+  let nextSweepAt = Infinity;
+  let emptySweepMark = null;
 
   const remember = (id, fresh, atCap) => {
     if (hits.has(id)) hits.delete(id);
@@ -277,17 +283,33 @@ export function createFallbackLimiter(options = {}) {
     if (!atCap) idle.set(id, true);
   };
 
-  const dropExpired = (now) => {
-    for (const [id, stamps] of [...hits]) {
-      if (liveStamps(stamps, now, windowMs).length === 0) {
+  const noteExpiry = (fresh) => {
+    if (fresh.length === 0) return;
+    const expiry = fresh[0] + windowMs;
+    if (expiry < nextSweepAt) nextSweepAt = expiry;
+  };
+
+  const sweep = (now) => {
+    sweeps += 1;
+    let oldest = Infinity;
+    for (const [id, stamps] of hits) {
+      const fresh = liveStamps(stamps, now, windowMs);
+      if (fresh.length === 0) {
         hits.delete(id);
         idle.delete(id);
+        continue;
       }
+      if (fresh !== stamps) hits.set(id, fresh);
+      const expiry = fresh[0] + windowMs;
+      if (expiry < oldest) oldest = expiry;
     }
+    nextSweepAt = oldest;
+    emptySweepMark = oldest;
   };
 
   return {
     size: () => hits.size,
+    sweeps: () => sweeps,
     allow(key) {
       const max = rate();
       const now = clock();
@@ -298,7 +320,9 @@ export function createFallbackLimiter(options = {}) {
         return retryAfter(live, now, windowMs);
       }
       if (!hits.has(id) && hits.size >= maxEntries) {
-        dropExpired(now);
+        if (now >= nextSweepAt || (idle.size === 0 && emptySweepMark !== nextSweepAt)) {
+          sweep(now);
+        }
         if (hits.size >= maxEntries) {
           const next = idle.keys().next();
           if (next.done) return retryAfter([], now, windowMs);
@@ -310,6 +334,7 @@ export function createFallbackLimiter(options = {}) {
       }
       live.push(now);
       remember(id, live, live.length >= max);
+      noteExpiry(live);
       return { ok: true };
     },
   };

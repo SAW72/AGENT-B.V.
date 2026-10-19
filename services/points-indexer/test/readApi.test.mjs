@@ -2630,7 +2630,7 @@ describe("points read API", { concurrency: false }, () => {
 
   function httpResult(url, headers) {
     return new Promise((resolve, reject) => {
-      const req = httpRequest(url, { headers }, (res) => {
+      const req = httpRequest(url, { headers, agent: false }, (res) => {
         res.resume();
         res.on("end", () => resolve({
           status: res.statusCode,
@@ -2698,12 +2698,22 @@ describe("points read API", { concurrency: false }, () => {
   }
 
   it("parses the fallback rate the same way as the read API, including unset and invalid", async () => {
-    for (const value of [undefined, null, "", "   ", "abc", "1e2", "08", "0", "2", "60"]) {
-      assert.equal(parseRatePerMinute(value), readRatePerMinute(value));
+    const expectedRates = [
+      [undefined, 60],
+      [null, 60],
+      ["", 60],
+      ["   ", 60],
+      ["abc", 60],
+      ["1e2", 60],
+      ["08", 60],
+      ["0", 60],
+      ["2", 2],
+      ["60", 60],
+    ];
+    for (const [value, expected] of expectedRates) {
+      assert.equal(parseRatePerMinute(value), expected);
+      assert.equal(readRatePerMinute(value), expected);
     }
-    assert.equal(parseRatePerMinute(undefined), 60);
-    assert.equal(parseRatePerMinute("1e2"), 60);
-    assert.equal(parseRatePerMinute("08"), 60);
     const base = {
       CHAIN_ID: "84532",
       POINTS_DB_PATH: ":memory:",
@@ -2806,22 +2816,111 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(limiter.allow(keyIp(0)).ok, false);
   });
 
+  it("keeps the fallback map at the cap while evicting", () => {
+    let now = 1_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 2,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, true);
+      assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+    }
+  });
+
+  it("keeps the fallback map at the cap after keys expire and the map refills", () => {
+    let now = 1_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 2,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    now += 60_000;
+    const extra = DEFAULT_MAX_ENTRIES + 8192;
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, true);
+      assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+    }
+  });
+
+  it("admits a new fallback key when an at-limit key is the oldest idle entry", () => {
+    const capFirst = createFallbackLimiter({
+      clock: () => 1_000,
+      rate: () => 3,
+    });
+    assert.equal(capFirst.allow(keyIp(0)).ok, true);
+    assert.equal(capFirst.allow(keyIp(0)).ok, true);
+    assert.equal(capFirst.allow(keyIp(0)).ok, true);
+    for (let i = 1; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(capFirst.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(capFirst.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(capFirst.allow(keyIp(DEFAULT_MAX_ENTRIES)).ok, true);
+    assert.equal(capFirst.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(capFirst.allow(keyIp(0)).ok, false);
+
+    const refused = createFallbackLimiter({
+      clock: () => 1_000,
+      rate: () => 3,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(refused.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(refused.allow(keyIp(0)).ok, true);
+    assert.equal(refused.allow(keyIp(0)).ok, true);
+    assert.equal(refused.allow(keyIp(0)).ok, false);
+    for (let i = 1; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(refused.allow(keyIp(i)).ok, true);
+    }
+    assert.equal(refused.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(refused.allow(keyIp(DEFAULT_MAX_ENTRIES)).ok, true);
+    assert.equal(refused.size(), DEFAULT_MAX_ENTRIES);
+    assert.equal(refused.allow(keyIp(0)).ok, false);
+  });
+
+  it("sweeps a full fallback map at most once per window", () => {
+    let now = 10_000;
+    const limiter = createFallbackLimiter({
+      clock: () => now,
+      rate: () => 2,
+    });
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES; i += 1) {
+      assert.equal(limiter.allow(keyIp(i)).ok, true);
+    }
+    const before = limiter.sweeps();
+    const extra = 48;
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + i)).ok, true);
+    }
+    assert.ok(limiter.sweeps() - before <= 1, `sweeps ${limiter.sweeps() - before}`);
+    assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+    now += 60_000;
+    const mid = limiter.sweeps();
+    for (let i = 0; i < extra; i += 1) {
+      assert.equal(limiter.allow(keyIp(DEFAULT_MAX_ENTRIES + extra + i)).ok, true);
+    }
+    assert.ok(limiter.sweeps() - mid <= 1, `sweeps ${limiter.sweeps() - mid}`);
+    assert.ok(limiter.size() <= DEFAULT_MAX_ENTRIES, `size ${limiter.size()}`);
+  });
+
   it("rejects a non-https origin, a tailed origin, and accepts one trailing slash", async () => {
     const samples = [
-      ["http://app.invalid", false],
-      ["ftp://app.invalid", false],
-      ["javascript://app.invalid", false],
-      ["https://app.invalid/path", false],
-      ["https://app.invalid?x=1", false],
-      ["https://app.invalid#frag", false],
-      ["https://app.invalid/", true],
+      ["http://app.invalid", { ok: false }],
+      ["ftp://app.invalid", { ok: false }],
+      ["javascript://app.invalid", { ok: false }],
+      ["https://app.invalid/path", { ok: false }],
+      ["https://app.invalid?x=1", { ok: false }],
+      ["https://app.invalid#frag", { ok: false }],
+      ["https://app.invalid/", { ok: true, origin: "https://app.invalid" }],
     ];
-    for (const [raw, ok] of samples) {
-      const edge = edgeOrigin(raw);
-      const read = parseExactHttpsOrigin(raw);
-      assert.equal(edge.ok, ok);
-      assert.deepEqual(edge, read);
-      if (ok) assert.equal(edge.origin, "https://app.invalid");
+    for (const [raw, expected] of samples) {
+      assert.deepEqual(edgeOrigin(raw), expected);
+      assert.deepEqual(parseExactHttpsOrigin(raw), expected);
     }
     const env = {
       CHAIN_ID: "84532",
@@ -2834,10 +2933,10 @@ describe("points read API", { concurrency: false }, () => {
     };
     await withFallback(env, {}, async (origin) => {
       const url = `${origin}/v1/points/config`;
-      for (const [raw, ok] of samples) {
+      for (const [raw, expected] of samples) {
         const row = await httpResult(url, { origin: raw });
         assert.equal(row.status, 503);
-        assert.equal(row.acao, ok ? "https://app.invalid" : null);
+        assert.equal(row.acao, expected.ok ? "https://app.invalid" : null);
       }
     });
   });
