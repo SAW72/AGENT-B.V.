@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { HttpRequestError, RpcRequestError } from "viem";
 import { baseSepolia } from "viem/chains";
@@ -17,6 +20,7 @@ import {
 } from "../src/main.mjs";
 import {
   GETLOGS_MIN_GAP_MS,
+  MAX_CARRY_MS,
   MAX_RETRY_AFTER_MS,
   MAX_SCAN_RETRIES,
   RETRY_BACKOFF_MS,
@@ -25,6 +29,7 @@ import {
   parseRetryAfter,
   retryWaitMs,
   scanErrorClass,
+  textIsRateLimit,
 } from "../src/pace.mjs";
 import { createdLog } from "./support.mjs";
 
@@ -509,6 +514,16 @@ describe("getLogs pace", () => {
       error: { code: -32005, message: "too many results" },
       url: "http://127.0.0.1",
     });
+    const rangeLimit = new RpcRequestError({
+      body: { method: "eth_getLogs" },
+      error: { code: -32005, message: "block range limit exceeded" },
+      url: "http://127.0.0.1",
+    });
+    assert.equal(textIsRateLimit("block range limit exceeded"), false);
+    assert.equal(textIsRateLimit("limit exceeded"), true);
+    assert.equal(isRangeError(rangeLimit), true);
+    assert.equal(scanErrorClass(rangeLimit), null);
+    assert.equal(errorCode(rangeLimit), "range_error");
     assert.equal(isRangeError(tooMany), true);
     const payload = new HttpRequestError({
       status: 413,
@@ -642,7 +657,7 @@ describe("getLogs pace", () => {
     assert.equal(bad.userAgent, DEFAULT_USER_AGENT);
 
     const bounded = loadPaceSettings({
-      POINTS_GETLOGS_MIN_GAP_MS: "0",
+      POINTS_GETLOGS_MIN_GAP_MS: "1",
       POINTS_RETRY_BACKOFF_MS: "0,1000,2000",
       POINTS_MAX_SCAN_RETRIES: "9",
       POINTS_MAX_RETRY_AFTER_MS: "60000",
@@ -650,19 +665,20 @@ describe("getLogs pace", () => {
       POINTS_USER_AGENT: "bad\r\nX-Injected: 1",
     });
     assert.equal(bounded.minGapMs, 200);
+    assert.equal(loadPaceSettings({ POINTS_GETLOGS_MIN_GAP_MS: "0" }).minGapMs, 200);
     assert.deepEqual(bounded.backoffMs, [1_000, 2_000, 4_000]);
     assert.equal(bounded.maxRetries, 3);
     assert.equal(bounded.maxRetryAfterMs, 30_000);
     assert.equal(bounded.httpTimeoutMs, 10_000);
     assert.equal(bounded.userAgent, DEFAULT_USER_AGENT);
     const kept = loadPaceSettings({
-      POINTS_GETLOGS_MIN_GAP_MS: "1",
+      POINTS_GETLOGS_MIN_GAP_MS: "100",
       POINTS_MAX_SCAN_RETRIES: "5",
       POINTS_MAX_RETRY_AFTER_MS: "30000",
       POINTS_HTTP_TIMEOUT_MS: "120000",
       POINTS_USER_AGENT: "Agent-B.V. points-indexer/1.0",
     });
-    assert.equal(kept.minGapMs, 1);
+    assert.equal(kept.minGapMs, 100);
     assert.equal(kept.maxRetries, 5);
     assert.equal(kept.maxRetryAfterMs, 30_000);
     assert.equal(kept.httpTimeoutMs, 120_000);
@@ -693,7 +709,7 @@ describe("getLogs pace", () => {
       paceNow: clock.now,
       sleep: clock.sleep,
       now: () => 1,
-      env: env({ POINTS_GETLOGS_MIN_GAP_MS: "50", POINTS_LOG_RANGE: "10" }),
+      env: env({ POINTS_GETLOGS_MIN_GAP_MS: "100", POINTS_LOG_RANGE: "10" }),
       rpc: withCode({
         async finalizedBlockNumber() {
           return ESCROW_START_BLOCK + 9;
@@ -704,7 +720,7 @@ describe("getLogs pace", () => {
       }),
     });
     try {
-      assert.deepEqual(clock.sleeps, [50, 50, 50, 50]);
+      assert.deepEqual(clock.sleeps, [100, 100, 100, 100]);
       assert.equal(running.ingested.endedEarly, false);
     } finally {
       await running.stop();
@@ -1299,6 +1315,285 @@ describe("getLogs pace", () => {
       assert.equal(seen.some((call) => call.method === "eth_blockNumber"), false);
     } finally {
       await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("carries a Retry-After from the head read into the next pass", async () => {
+    const clock = fakeClock(1_000_000);
+    let headReads = 0;
+    let secondHeadAt = null;
+    const original = console.error;
+    console.error = () => {};
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env(),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          headReads += 1;
+          if (headReads === 1) throw httpError(429, { details: "slow down", retryAfter: "90" });
+          if (headReads === 2) secondHeadAt = clock.now();
+          return ESCROW_START_BLOCK + 9;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(running.ingested.endedEarly, true);
+      assert.equal(running.ingested.reason, "rate_limited");
+      assert.equal(running.indexer, null);
+      assert.equal(clock.sleeps.includes(30_000), true);
+      const before = clock.now();
+      const again = await running.pass();
+      assert.equal(secondHeadAt - before, 60_000);
+      assert.equal(again.endedEarly, false);
+      assert.equal(headReads, 2);
+    } finally {
+      console.error = original;
+      await running.stop();
+    }
+  });
+
+  it("caps a carried Retry-After at 15 minutes", async () => {
+    const clock = fakeClock(1_000_000);
+    let headReads = 0;
+    let secondHeadAt = null;
+    const logged = [];
+    const original = console.error;
+    console.error = (...args) => {
+      logged.push(args.map((part) => String(part)).join(" "));
+    };
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env(),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          headReads += 1;
+          if (headReads === 1) throw httpError(429, { details: "slow down", retryAfter: "999999999" });
+          if (headReads === 2) secondHeadAt = clock.now();
+          return ESCROW_START_BLOCK + 9;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(running.ingested.reason, "rate_limited");
+      assert.equal(clock.sleeps.includes(30_000), true);
+      assert.equal(clock.sleeps.includes(999999999 * 1000), false);
+      assert.equal(logged.some((line) => line === "retry_after_capped"), true);
+      const before = clock.now();
+      await running.pass();
+      assert.equal(secondHeadAt - before, MAX_CARRY_MS - 30_000);
+      assert.ok(secondHeadAt - before < 2 ** 31 - 1);
+    } finally {
+      console.error = original;
+      await running.stop();
+    }
+  });
+
+  it("does not reject start when chainId Retry-After exceeds the cap", async () => {
+    const clock = fakeClock(1_000_000);
+    let chainCalls = 0;
+    let secondAt = null;
+    const original = console.error;
+    console.error = () => {};
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env(),
+      rpc: withCode({
+        async chainId() {
+          chainCalls += 1;
+          if (chainCalls === 1) throw httpError(429, { details: "slow down", retryAfter: "90" });
+          if (chainCalls === 2) secondAt = clock.now();
+          return 84532;
+        },
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK + 9;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(running.ingested.endedEarly, true);
+      assert.equal(running.ingested.reason, "rate_limited");
+      assert.equal(chainCalls, 1);
+      const before = clock.now();
+      const again = await running.pass();
+      assert.equal(secondAt - before, 60_000);
+      assert.equal(again.endedEarly, false);
+    } finally {
+      console.error = original;
+      await running.stop();
+    }
+  });
+
+  it("honours a carried Retry-After after a restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "abv-carry-"));
+    const path = join(dir, "ledger.sqlite");
+    const clock = fakeClock(1_000_000);
+    let failed = false;
+    const calls = [];
+    const original = console.error;
+    console.error = () => {};
+    const rpc = () => withCode({
+      async chainId() {
+        calls.push(["chainId", clock.now()]);
+        return 84532;
+      },
+      async getCode() {
+        calls.push(["getCode", clock.now()]);
+        return "0x6001600055";
+      },
+      async finalizedBlockNumber() {
+        calls.push(["head", clock.now()]);
+        return ESCROW_START_BLOCK + 9;
+      },
+      async getLogs() {
+        calls.push(["logs", clock.now()]);
+        if (!failed) {
+          failed = true;
+          throw httpError(429, { details: "slow down", retryAfter: "90" });
+        }
+        return [];
+      },
+    });
+    const first = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_DB_PATH: path }),
+      rpc: rpc(),
+    });
+    try {
+      assert.equal(first.ingested.endedEarly, true);
+      await first.stop();
+      calls.length = 0;
+      const atRestart = clock.now();
+      const second = await start({
+        once: true,
+        paceNow: clock.now,
+        wallNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 1,
+        env: env({ POINTS_DB_PATH: path }),
+        rpc: rpc(),
+      });
+      try {
+        assert.equal(calls[0][0], "chainId");
+        assert.equal(calls[0][1] - atRestart, 60_000);
+        assert.equal(second.ingested.endedEarly, false);
+      } finally {
+        await second.stop();
+      }
+    } finally {
+      console.error = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a carried sleep when stop is called", async () => {
+    const clock = fakeClock(1_000_000);
+    let release = null;
+    let hanging = false;
+    let logs = 0;
+    const original = console.error;
+    console.error = () => {};
+    const running = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: (ms) => {
+        if (ms >= 60_000) {
+          hanging = true;
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        }
+        return clock.sleep(ms);
+      },
+      now: () => 1,
+      env: env(),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return ESCROW_START_BLOCK + 9;
+        },
+        async getLogs() {
+          logs += 1;
+          if (logs === 1) throw httpError(429, { details: "slow down", retryAfter: "90" });
+          return [];
+        },
+      }),
+    });
+    const pending = running.pass();
+    try {
+      for (let i = 0; i < 50 && !hanging; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(hanging, true);
+      const logsAtStop = logs;
+      await running.stop();
+      const outcome = await Promise.race([
+        pending.then(() => "done"),
+        new Promise((resolve) => setTimeout(() => resolve("timeout"), 500)),
+      ]);
+      assert.equal(outcome, "done");
+      assert.equal(logs, logsAtStop);
+    } finally {
+      console.error = original;
+      if (release) release();
+      await running.stop();
+    }
+  });
+
+  it("reports finalized_unsupported when the provider rejects the tag", async () => {
+    const original = console.error;
+    console.error = () => {};
+    const running = await start({
+      serve: true,
+      port: 0,
+      env: env({ POINTS_POLL_MS: "60000" }),
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          throw new RpcRequestError({
+            body: { method: "eth_getBlockByNumber" },
+            error: { code: -32602, message: "invalid argument 0: finalized tag is unsupported" },
+            url: "http://127.0.0.1",
+          });
+        },
+        async getLogs() {
+          throw new Error("should not scan");
+        },
+      }),
+    });
+    try {
+      assert.equal(running.ingested.ok, false);
+      assert.equal(running.ingested.error, "finalized_unsupported");
+      const response = await fetch(running.healthUrl);
+      assert.equal(response.status, 503);
+      const body = await response.json();
+      assert.equal(body.error, "finalized_unsupported");
+    } finally {
+      console.error = original;
+      await running.stop();
     }
   });
 

@@ -845,7 +845,7 @@ describe("process entry", () => {
 
   it("keeps a keyed RPC URL out of /health and out of console.error", async () => {
     const dir = dbDir();
-    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
+    const keyUrl = "https://base-sepolia.rpc.invalid/v2/FAKE_SECRET_KEY_abc123";
     const logged = [];
     const original = console.error;
     console.error = (...args) => {
@@ -860,16 +860,26 @@ describe("process entry", () => {
       assert.equal(leaked.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(leaked.includes(keyUrl), false);
       assert.equal(leaked.includes("https://"), false);
-      const wss = redact("dial wss://base-sepolia.example-rpc.io/v2/WSSKEY1234567890", keyUrl);
+      const wss = redact("dial wss://base-sepolia.rpc.invalid/v2/WSSKEY1234567890", keyUrl);
       assert.equal(wss.includes("wss://"), false);
       assert.equal(wss.includes("WSSKEY1234567890"), false);
-      const encoded = redact("see https%3A%2F%2Fbase-sepolia.example-rpc.io%2Fv2%2FENC_SECRET_KEY", keyUrl);
+      const encoded = redact("see https%3A%2F%2Fbase-sepolia.rpc.invalid%2Fv2%2FENC_SECRET_KEY", keyUrl);
       assert.equal(encoded.includes("ENC_SECRET_KEY"), false);
       assert.equal(encoded.includes("%3A%2F%2F"), false);
       const segment = redact("path /v2/FAKE_SECRET_KEY_abc123 end", "");
       assert.equal(segment.includes("FAKE_SECRET_KEY_abc123"), false);
-      const query = redact("https://rpc.example/v2?apikey=QUERYSECRET123456", "");
+      const query = redact("https://rpc.invalid/v2?apikey=QUERYSECRET123456", "");
       assert.equal(query.includes("QUERYSECRET123456"), false);
+      const assigned = redact("apikey=QUERYSECRET123456", "");
+      assert.equal(assigned.includes("QUERYSECRET123456"), false);
+      const jsonKey = redact('{"apiKey":"QUERYSECRET123456"}', "");
+      assert.equal(jsonKey.includes("QUERYSECRET123456"), false);
+      const bearer = redact("Authorization: Bearer QUERYSECRET123456", "");
+      assert.equal(bearer.includes("QUERYSECRET123456"), false);
+      const userinfo = redact("user:QUERYSECRET123456@rpc.invalid/v2", "");
+      assert.equal(userinfo.includes("QUERYSECRET123456"), false);
+      const doubled = redact("see https%253A%252F%252Frpc.invalid%252Fv2%252FENC_SECRET_KEY", "");
+      assert.equal(doubled.includes("ENC_SECRET_KEY"), false);
       running = await start({
         serve: true,
         port: 0,
@@ -898,7 +908,7 @@ describe("process entry", () => {
       const text = await response.text();
       assert.equal(text.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(text.includes(keyUrl), false);
-      assert.equal(text.includes("example-rpc.io"), false);
+      assert.equal(text.includes("rpc.invalid"), false);
       const body = JSON.parse(text);
       assert.equal(body.error, "rpc_error");
       assert.equal(body.ok, false);
@@ -906,7 +916,7 @@ describe("process entry", () => {
       assert.match(joined, /rpc_error/);
       assert.equal(joined.includes("FAKE_SECRET_KEY_abc123"), false);
       assert.equal(joined.includes(keyUrl), false);
-      assert.equal(joined.includes("example-rpc.io"), false);
+      assert.equal(joined.includes("rpc.invalid"), false);
       assert.equal(joined.includes("https://"), false);
     } finally {
       console.error = original;
@@ -917,10 +927,10 @@ describe("process entry", () => {
 
   it("does not print error messages or alternate URL forms from logFailure", async () => {
     const dir = dbDir();
-    const keyUrl = "https://base-sepolia.example-rpc.io/v2/FAKE_SECRET_KEY_abc123";
-    const wssUrl = "wss://base-sepolia.example-rpc.io/v2/WSS_SECRET_KEY";
-    const encodedUrl = "https%3A%2F%2Fbase-sepolia.example-rpc.io%2Fv2%2FENC_SECRET_KEY";
-    const bareUrl = "base-sepolia.example-rpc.io/v2/BARE_SECRET_KEY";
+    const keyUrl = "https://base-sepolia.rpc.invalid/v2/FAKE_SECRET_KEY_abc123";
+    const wssUrl = "wss://base-sepolia.rpc.invalid/v2/WSS_SECRET_KEY";
+    const encodedUrl = "https%3A%2F%2Fbase-sepolia.rpc.invalid%2Fv2%2FENC_SECRET_KEY";
+    const bareUrl = "base-sepolia.rpc.invalid/v2/BARE_SECRET_KEY";
     const secretText = `${keyUrl} ${wssUrl} ${encodedUrl} ${bareUrl}`;
     const failure = new Error(`provider down ${secretText}`);
     failure.details = `details ${secretText}`;

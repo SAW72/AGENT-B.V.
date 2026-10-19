@@ -6,9 +6,10 @@ import { HttpRequestError, createPublicClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
-import { openIndexer } from "./indexer.mjs";
+import { openIndexer, readRpcNotBefore, writeRpcNotBefore } from "./indexer.mjs";
 import {
   GETLOGS_MIN_GAP_MS,
+  MAX_CARRY_MS,
   MAX_RETRY_AFTER_MS,
   MAX_SCAN_RETRIES,
   RETRY_BACKOFF_MS,
@@ -29,15 +30,25 @@ export const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 export const DEFAULT_HEALTH_FRESHNESS_POLLS = 3;
 export const DEFAULT_USER_AGENT = "Agent-B.V. points-indexer";
 
-const PACE_REASONS = new Set(["rate_limited", "server_error", "network_error", "head_lag"]);
+const PACE_REASONS = new Set([
+  "rate_limited",
+  "server_error",
+  "network_error",
+  "head_lag",
+  "finalized_unsupported",
+]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const URL_PATTERN = /(?:https?|wss?):\/\/\S+/gi;
 const ENCODED_URL_PATTERN = /(?:https?|wss?)%3a%2f%2f\S+/gi;
 const QUERY_SECRET_PATTERN = /([?&](?:api[_-]?key|access[_-]?token|token|secret|key)=)[^&\s#]*/gi;
+const ASSIGN_SECRET_PATTERN = /((?:["']?(?:api[_-]?key|x-api-key|access[_-]?token|client[_-]?secret|access[_-]?key)["']?\s*[=:]\s*["']?))[^\s&"',}]*/gi;
+const BEARER_PATTERN = /(\bBearer\s+)[A-Za-z0-9._~+/-]{8,}/gi;
+const USERINFO_PATTERN = /[^\s/:@]+:[^\s/:@]+@/g;
 const KEY_SEGMENT_PATTERN = /\/([A-Za-z0-9_-]{16,})/g;
 const USER_AGENT_SAFE = /^[A-Za-z0-9 .,_+():/-]{1,128}$/;
+const GAP_MIN_MS = 100;
 const GAP_MAX_MS = 60_000;
 const TIMEOUT_MAX_MS = 120_000;
 const RETRIES_MAX = 8;
@@ -153,8 +164,8 @@ export function loadConfig(env = process.env) {
  * Pace settings. A missing or invalid value falls back to the default.
  * This does not throw. Defaults stay 200 ms, three retries at 1/2/4 s,
  * a 30 s Retry-After cap, no jitter, a 10 s HTTP timeout, and three poll
- * intervals of health freshness. A gap, cap, timeout, or retry count of 0,
- * or a value above its ceiling, falls back to that default. The ceiling does
+ * intervals of health freshness. A gap below 100 ms, a cap, timeout, or retry
+ * count of 0, or a value above its ceiling, falls back to that default. The ceiling does
  * not raise the 30 s cap. POINTS_MAX_WINDOWS_PER_RUN is unset unless it is a
  * positive integer, and it limits one pass. A User-Agent that is blank or
  * outside the safe character set falls back to the default.
@@ -163,7 +174,7 @@ export function loadConfig(env = process.env) {
 export function loadPaceSettings(env = process.env) {
   const minGapMs = blank(env.POINTS_GETLOGS_MIN_GAP_MS)
     ? GETLOGS_MIN_GAP_MS
-    : (boundedInt(env.POINTS_GETLOGS_MIN_GAP_MS, 1, GAP_MAX_MS) ?? GETLOGS_MIN_GAP_MS);
+    : (boundedInt(env.POINTS_GETLOGS_MIN_GAP_MS, GAP_MIN_MS, GAP_MAX_MS) ?? GETLOGS_MIN_GAP_MS);
 
   let backoffMs = [...RETRY_BACKOFF_MS];
   if (!blank(env.POINTS_RETRY_BACKOFF_MS)) {
@@ -309,14 +320,48 @@ function keyLikeSegment(segment) {
   return /[A-Za-z]/.test(segment) && /\d/.test(segment);
 }
 
+function scrubUrls(value) {
+  let out = value.replace(URL_PATTERN, "[redacted-url]");
+  out = out.replace(ENCODED_URL_PATTERN, "[redacted-url]");
+  out = out.replace(QUERY_SECRET_PATTERN, "$1[redacted]");
+  return out.replace(KEY_SEGMENT_PATTERN, (match, segment) => (keyLikeSegment(segment) ? "/[redacted]" : match));
+}
+
 /** Replace RPC URLs, websocket URLs, and key-like path segments before a line is logged. */
 export function redact(text, rpcUrl) {
   let out = String(text ?? "");
   if (rpcUrl) out = out.split(String(rpcUrl)).join("[redacted-url]");
-  out = out.replace(URL_PATTERN, "[redacted-url]");
-  out = out.replace(ENCODED_URL_PATTERN, "[redacted-url]");
-  out = out.replace(QUERY_SECRET_PATTERN, "$1[redacted]");
-  return out.replace(KEY_SEGMENT_PATTERN, (match, segment) => (keyLikeSegment(segment) ? "/[redacted]" : match));
+  out = scrubUrls(out);
+  const decoded = out.replace(/%25/gi, "%");
+  if (decoded !== out) out = scrubUrls(decoded);
+  out = out.replace(ASSIGN_SECRET_PATTERN, "$1[redacted]");
+  out = out.replace(BEARER_PATTERN, "$1[redacted]");
+  return out.replace(USERINFO_PATTERN, "[redacted-userinfo]@");
+}
+
+/**
+ * The provider rejected the finalized block tag. Checked only for the head read.
+ * @param {unknown} error
+ */
+function isFinalizedUnsupported(error) {
+  const parts = [];
+  const queue = [error];
+  const seen = new Set();
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (!item || typeof item !== "object" || seen.has(item)) continue;
+    seen.add(item);
+    parts.push(item);
+    if (item.cause) queue.push(item.cause);
+  }
+  const text = parts.map((item) => `${item.details ?? ""} ${item.shortMessage ?? ""} ${item.message ?? ""}`).join(" ").toLowerCase();
+  const codes = parts.map((item) => numericCode(item.code)).filter((code) => code != null);
+  if (codes.includes(-32601)) return true;
+  if (codes.includes(-32602) && (text.includes("finalized") || text.includes("invalid argument"))) return true;
+  if (text.includes("finalized") && (text.includes("unsupported") || text.includes("not supported") || text.includes("unknown block"))) {
+    return true;
+  }
+  return false;
 }
 
 function logFailure(error, rpcUrl) {
@@ -448,18 +493,10 @@ function listenHealth(port, status) {
   });
 }
 
-async function pacedCall(pacer, fn) {
-  const result = await pacer.run(fn);
-  if (result.ok) return result.value;
+function paceFailure(result) {
   const error = result.error instanceof Error ? result.error : new Error("rpc failed");
   error.scanReason = result.reason;
-  throw error;
-}
-
-async function assertContractCode(rpc, address, label, pacer) {
-  if (typeof rpc.getCode !== "function") throw new Error(`RPC getCode is required for ${label}`);
-  const code = await pacedCall(pacer, () => rpc.getCode({ address }));
-  if (emptyCode(code)) throw new Error(`${label} contract code is empty`);
+  return error;
 }
 
 /**
@@ -487,7 +524,8 @@ export async function start(options = {}) {
   const now = options.now ?? (() => performance.now());
   const paceNow = options.paceNow ?? (() => performance.now());
   const wallNow = options.wallNow ?? (() => Date.now());
-  const sleep = options.sleep ?? sleepMs;
+  const injectedSleep = options.sleep;
+  const sleep = injectedSleep ?? sleepMs;
   const pacer = createScanPacer({
     now: paceNow,
     wallNow,
@@ -507,12 +545,6 @@ export async function start(options = {}) {
     timeout: pace.httpTimeoutMs,
     userAgent: pace.userAgent,
   });
-  const reportedChain = asChainId(await pacedCall(pacer, () => rpc.chainId()));
-  if (!isAcceptedChain(reportedChain)) {
-    throw new Error(`RPC chain id is ${String(reportedChain)}, expected ${CHAIN_ID}`);
-  }
-  await assertContractCode(rpc, cfg.escrowAddress, "escrow", pacer);
-  await assertContractCode(rpc, PANEL, "panel", pacer);
 
   if (cfg.dbPath !== ":memory:") mkdirSync(dirname(cfg.dbPath), { recursive: true });
 
@@ -525,7 +557,16 @@ export async function start(options = {}) {
   let skippedTicks = 0;
   let learnedWindow = cfg.logRange;
   let dirty = false;
+  let chainReady = false;
+  let cancelCarry = null;
   let carryUntil = null;
+  const storedNotBefore = readRpcNotBefore(cfg.dbPath);
+  if (storedNotBefore != null) {
+    const limit = wallNow() + MAX_CARRY_MS;
+    const until = storedNotBefore > limit ? limit : storedNotBefore;
+    if (until > wallNow()) carryUntil = until;
+    else writeRpcNotBefore(cfg.dbPath, null);
+  }
   const status = {
     chainId: cfg.chainId,
     pollMs: cfg.pollMs,
@@ -537,30 +578,112 @@ export async function start(options = {}) {
     now,
   };
 
+  function noteCarry(deferUntil, capped) {
+    if (!Number.isSafeInteger(deferUntil)) return;
+    const limit = wallNow() + MAX_CARRY_MS;
+    const until = deferUntil > limit ? limit : deferUntil;
+    carryUntil = until;
+    if (indexer) indexer.setRpcNotBefore(until);
+    else writeRpcNotBefore(cfg.dbPath, until);
+    if (capped || deferUntil > limit) console.error("retry_after_capped");
+  }
+
+  function clearCarry() {
+    carryUntil = null;
+    if (indexer) indexer.setRpcNotBefore(null);
+    else writeRpcNotBefore(cfg.dbPath, null);
+  }
+
+  function carrySleep(ms) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const finish = (outcome) => {
+        if (settled) return;
+        settled = true;
+        if (timer != null) clearTimeout(timer);
+        cancelCarry = null;
+        resolve(outcome);
+      };
+      cancelCarry = () => finish("cancelled");
+      if (injectedSleep) {
+        Promise.resolve(injectedSleep(ms)).then(() => finish("slept"), () => finish("slept"));
+        return;
+      }
+      timer = setTimeout(() => finish("slept"), ms);
+    });
+  }
+
+  function endedEarly(reason) {
+    status.earlyReason = reason;
+    status.lastError = reason;
+    console.error(`${reason} pass_ended_early`);
+    return {
+      ok: true,
+      endedEarly: true,
+      reason,
+      inserted: 0,
+      rebuilds: 0,
+      ranges: [],
+      skipped: false,
+      scannedThrough: indexer ? indexer.lastScannedBlock() : null,
+      behind: status.behind,
+    };
+  }
+
+  async function readCode(address, label) {
+    if (typeof rpc.getCode !== "function") throw new Error(`RPC getCode is required for ${label}`);
+    const result = await pacer.run(() => rpc.getCode({ address }));
+    if (!result.ok) return result;
+    if (emptyCode(result.value)) throw new Error(`${label} contract code is empty`);
+    return null;
+  }
+
+  async function ensureChain() {
+    if (chainReady) return null;
+    const chainRead = await pacer.run(() => rpc.chainId());
+    if (!chainRead.ok) return chainRead;
+    const reportedChain = asChainId(chainRead.value);
+    if (!isAcceptedChain(reportedChain)) {
+      throw new Error(`RPC chain id is ${String(reportedChain)}, expected ${CHAIN_ID}`);
+    }
+    const escrowCode = await readCode(cfg.escrowAddress, "escrow");
+    if (escrowCode) return escrowCode;
+    const panelCode = await readCode(PANEL, "panel");
+    if (panelCode) return panelCode;
+    chainReady = true;
+    return null;
+  }
+
   const runOnce = async () => {
     if (carryUntil != null) {
       const remain = carryUntil - wallNow();
-      carryUntil = null;
-      if (remain > 0) await sleep(remain);
+      if (remain > 0) {
+        const outcome = await carrySleep(remain);
+        if (stopped || outcome === "cancelled") {
+          return { skipped: true, stopped: true, skippedTicks, inserted: 0, rebuilds: 0, ranges: [] };
+        }
+      }
+      clearCarry();
     }
-    const headRead = await pacer.run(() => rpc.finalizedBlockNumber());
+    const chainResult = await ensureChain();
+    if (chainResult) {
+      if (chainResult.deferUntil != null) {
+        noteCarry(chainResult.deferUntil, chainResult.carryCapped);
+        return endedEarly(chainResult.reason);
+      }
+      throw paceFailure(chainResult);
+    }
+    let headRead;
+    try {
+      headRead = await pacer.run(() => rpc.finalizedBlockNumber());
+    } catch (error) {
+      if (isFinalizedUnsupported(error)) error.scanReason = "finalized_unsupported";
+      throw error;
+    }
     if (!headRead.ok) {
-      if (headRead.deferUntil != null) carryUntil = headRead.deferUntil;
-      const reason = headRead.reason;
-      status.earlyReason = reason;
-      status.lastError = reason;
-      console.error(`${reason} pass_ended_early`);
-      return {
-        ok: true,
-        endedEarly: true,
-        reason,
-        inserted: 0,
-        rebuilds: 0,
-        ranges: [],
-        skipped: false,
-        scannedThrough: indexer ? indexer.lastScannedBlock() : null,
-        behind: status.behind,
-      };
+      if (headRead.deferUntil != null) noteCarry(headRead.deferUntil, headRead.carryCapped);
+      return endedEarly(headRead.reason);
     }
     const reported = asChainId(headRead.value);
     if (!Number.isSafeInteger(reported) || reported < 0) throw new Error("RPC finalized block is not a safe integer");
@@ -609,7 +732,7 @@ export async function start(options = {}) {
           address: [cfg.escrowAddress, PANEL],
         }));
         if (!scanned.ok) {
-          if (scanned.deferUntil != null) carryUntil = scanned.deferUntil;
+          if (scanned.deferUntil != null) noteCarry(scanned.deferUntil, scanned.carryCapped);
           earlyReason = scanned.reason;
           break;
         }
@@ -716,6 +839,7 @@ export async function start(options = {}) {
     try {
       ingested = await pass();
     } catch (error) {
+      if (!chainReady) throw error;
       logFailure(error, cfg.rpcUrl);
       ingested = { ok: false, error: status.lastError };
     }
@@ -752,6 +876,7 @@ export async function start(options = {}) {
     async stop() {
       if (stopped) return;
       stopped = true;
+      if (cancelCarry) cancelCarry();
       if (timer) clearTimeout(timer);
       if (closing) await closing();
       indexer?.close();

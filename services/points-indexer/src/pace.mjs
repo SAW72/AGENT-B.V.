@@ -19,6 +19,9 @@ export const MAX_SCAN_RETRIES = 3;
  */
 export const MAX_RETRY_AFTER_MS = 30_000;
 
+/** Longest carried Retry-After, measured from the response. 15 minutes. */
+export const MAX_CARRY_MS = 15 * 60 * 1000;
+
 const IMF_FIXDATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 const RFC_850_DATE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT$/;
 const ASCTIME_DATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}$/;
@@ -97,7 +100,8 @@ function readRetryAfter(value, nowMs) {
     return seconds * 1000;
   }
   if (!isHttpDate(text)) return null;
-  const dated = Date.parse(text);
+  // RFC 9110 asctime is GMT. Date.parse treats a zone-less asctime as local time.
+  const dated = Date.parse(ASCTIME_DATE.test(text) ? `${text} GMT` : text);
   if (Number.isNaN(dated)) return null;
   const delta = dated - nowMs;
   if (!Number.isFinite(delta) || delta <= 0) return 0;
@@ -188,7 +192,17 @@ export function textIsRateLimit(text) {
   if (value.includes("capacity")) return true;
   if (value.includes("credits exceeded")) return true;
   if (value.includes("daily request count exceeded")) return true;
-  if (value.includes("limit exceeded")) return true;
+  if (value.includes("limit exceeded")) {
+    if (
+      value.includes("block range")
+      || value.includes("response size")
+      || value.includes("log limit")
+      || value.includes("logs limit")
+      || value.includes("max results")
+      || value.includes("too many")
+    ) return false;
+    return true;
+  }
   if (/\b429\b/.test(value)) return true;
   return false;
 }
@@ -282,7 +296,8 @@ export function retryWaitMs(error, attempt, nowMs, options = {}) {
  * only when Retry-After is an HTTP-date. Jitter is added on top of the gap and
  * the schedule. A readable Retry-After is not jittered. A Retry-After longer
  * than the cap sleeps the cap once, ends this call, and returns `deferUntil`
- * so the next pass can wait out the rest before it dials.
+ * so the next pass can wait out the rest before it dials. The carried instant
+ * is at most {@link MAX_CARRY_MS} after the response.
  * @param {{ now: () => number, wallNow?: () => number, sleep: (ms: number) => Promise<void>, minGapMs?: number, gapJitterMs?: number, backoffMs?: number[], backoffJitterMs?: number, maxRetries?: number, maxRetryAfterMs?: number, random?: () => number, classify?: (error: unknown) => string | null }} options
  */
 export function createScanPacer(options) {
@@ -317,7 +332,14 @@ export function createScanPacer(options) {
             if (full != null && full > cap) {
               const wait = Math.min(full, cap);
               if (wait > 0) await sleep(wait);
-              return { ok: false, reason, error, deferUntil: started + full };
+              const carried = Math.min(full, MAX_CARRY_MS);
+              return {
+                ok: false,
+                reason,
+                error,
+                deferUntil: started + carried,
+                carryCapped: full > MAX_CARRY_MS,
+              };
             }
           }
           if (attempt >= maxRetries) return { ok: false, reason, error };

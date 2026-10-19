@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { attributeLogs, normalizeLog } from "./attribute.mjs";
@@ -7,6 +7,8 @@ import { canonicalJson, compareRows } from "./canonical.mjs";
 import { ACTION, CHAIN_ID, DAY_SECONDS, isAcceptedChain } from "./constants.mjs";
 import { PointsError, hexInt, isUniqueError, lowerHex } from "./hex.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "./signature.mjs";
+
+const RPC_NOT_BEFORE_KEY = "rpc_not_before";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -156,6 +158,54 @@ function newNonce() {
   return value.toString();
 }
 
+/**
+ * Stored RPC deadline, or null when the file has none.
+ * A missing file is null. This does not create a database.
+ * @param {string} dbPath
+ * @returns {number | null}
+ */
+export function readRpcNotBefore(dbPath) {
+  if (dbPath == null || dbPath === ":memory:" || !existsSync(dbPath)) return null;
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(RPC_NOT_BEFORE_KEY);
+    if (!row) return null;
+    const parsed = Number(row.value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * Write or clear the stored RPC deadline. A missing file is left missing.
+ * @param {string} dbPath
+ * @param {number | null} epochMs
+ */
+export function writeRpcNotBefore(dbPath, epochMs) {
+  if (dbPath == null || dbPath === ":memory:" || !existsSync(dbPath)) return;
+  let db;
+  try {
+    db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA busy_timeout = 5000");
+    if (epochMs == null) {
+      db.prepare("DELETE FROM meta WHERE key = ?").run(RPC_NOT_BEFORE_KEY);
+      return;
+    }
+    if (!Number.isSafeInteger(epochMs)) return;
+    db.prepare(
+      "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(RPC_NOT_BEFORE_KEY, String(epochMs));
+  } catch {
+    // A foreign file without this table is ignored. The in-memory deadline still applies.
+  } finally {
+    db?.close();
+  }
+}
+
 export function openIndexer(options = {}) {
   return new Indexer(options);
 }
@@ -225,6 +275,19 @@ export class Indexer {
     if (raw == null || raw === "") return null;
     const parsed = Number(raw);
     return Number.isInteger(parsed) ? parsed : null;
+  }
+
+  /**
+   * Epoch milliseconds before the next RPC. Null clears the stored deadline.
+   * @param {number | null} epochMs
+   */
+  setRpcNotBefore(epochMs) {
+    if (epochMs == null) {
+      this.db.prepare("DELETE FROM meta WHERE key = ?").run(RPC_NOT_BEFORE_KEY);
+      return;
+    }
+    if (!Number.isSafeInteger(epochMs)) return;
+    this.#metaSet(RPC_NOT_BEFORE_KEY, String(epochMs));
   }
 
   setRegister(register) {
