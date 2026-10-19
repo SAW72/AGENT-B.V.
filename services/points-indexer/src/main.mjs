@@ -683,10 +683,7 @@ export async function start(options = {}) {
   }
 
   function assignLastError(reason) {
-    if (
-      reason === "rate_limited"
-      && (status.ledgerStale === true || status.lastError === "rebuild_error")
-    ) {
+    if (status.ledgerStale === true) {
       status.lastError = "rebuild_error";
       return;
     }
@@ -824,7 +821,16 @@ export async function start(options = {}) {
         }
         throw error;
       }
-      const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      let committed;
+      try {
+        committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      } catch (error) {
+        if (dirty) {
+          status.ledgerStale = true;
+          status.lastError = "rebuild_error";
+        }
+        throw error;
+      }
       if (committed.inserted > 0) dirty = true;
       inserted += committed.inserted;
       committedWindows += 1;
@@ -878,6 +884,7 @@ export async function start(options = {}) {
       }
       dirty = false;
       status.ledgerStale = false;
+      status.lastError = null;
       rebuilds = 1;
     }
     status.behind = blocksBehind(head, indexer.lastScannedBlock());
@@ -924,6 +931,7 @@ export async function start(options = {}) {
       return await runOnce();
     } catch (error) {
       status.earlyReason = null;
+      if (dirty) status.ledgerStale = true;
       assignLastError(errorCode(error));
       throw error;
     } finally {

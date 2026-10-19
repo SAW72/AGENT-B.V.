@@ -640,4 +640,204 @@ describe("ledger rebuild on a pass", () => {
       await running.stop();
     }
   });
+
+  it("E4d reports rate_limited after a rebuild finishes and the pass ends on a 429", async () => {
+    const block = ESCROW_START_BLOCK + 4;
+    let head = ESCROW_START_BLOCK - 1;
+    let failRebuild = true;
+    let limitLogs = false;
+    let nowMs = 1_000_000;
+    const log = createdLog({
+      escrowId: `0x${"e4".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 6,
+      txHash: `0x${"e4".repeat(32)}`,
+      timestamp: 21_800 * 86400,
+    });
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      paceNow: () => 0,
+      sleep: async () => {},
+      now: () => nowMs,
+      env: env({ POINTS_LOG_RANGE: "10", POINTS_POLL_MS: "1000" }),
+      onIndexer(indexer) {
+        const original = indexer.rebuild.bind(indexer);
+        indexer.rebuild = () => {
+          if (failRebuild) throw new Error("rebuild failed");
+          return original();
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          if (limitLogs) throw httpError(429);
+          if (args.fromBlock <= block && args.toBlock >= block) return [log];
+          return [];
+        },
+      }),
+    });
+    try {
+      head = block;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      let response = await fetch(running.healthUrl);
+      let body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.error, "rebuild_error");
+      failRebuild = false;
+      limitLogs = true;
+      head = block + 10;
+      nowMs += 10_000;
+      const ended = await running.pass();
+      assert.equal(ended.endedEarly, true);
+      assert.equal(ended.reason, "rate_limited");
+      assert.equal(ended.rebuilds, 1);
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rate_limited");
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("D2h keeps /health not ok when a commit crashes after inserts", async () => {
+    const block = ESCROW_START_BLOCK + 4;
+    let head = ESCROW_START_BLOCK - 1;
+    let windows = 0;
+    const log = createdLog({
+      escrowId: `0x${"d2".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 7,
+      txHash: `0x${"d2".repeat(32)}`,
+      timestamp: 21_900 * 86400,
+    });
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      ...instantPace(),
+      now: () => 5_000_000,
+      env: env({ POINTS_LOG_RANGE: "10" }),
+      onIndexer(indexer) {
+        const original = indexer.commitScanWindow.bind(indexer);
+        indexer.commitScanWindow = (logs, scannedThrough, options) => {
+          windows += 1;
+          if (windows === 2) {
+            return original(logs, scannedThrough, {
+              ...options,
+              beforeCommit() {
+                throw new Error("commit crashed");
+              },
+            });
+          }
+          return original(logs, scannedThrough, options);
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          if (args.fromBlock <= block && args.toBlock >= block) return [log];
+          return [];
+        },
+      }),
+    });
+    try {
+      head = block + 10;
+      await assert.rejects(() => running.pass(), /commit crashed/);
+      assert.ok(running.indexer.rawCount() > 0);
+      assert.equal(running.indexer.ledger().length, 0);
+      let response = await fetch(running.healthUrl);
+      let body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rebuild_error");
+      const again = await running.pass();
+      assert.equal(again.rebuilds, 1);
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("L-1 keeps rebuild_error when a head 503 or a crash hits while the ledger is stale", async () => {
+    const block = ESCROW_START_BLOCK + 4;
+    let head = ESCROW_START_BLOCK - 1;
+    let failRebuild = true;
+    let headStatus = null;
+    let crashLogs = false;
+    const log = createdLog({
+      escrowId: `0x${"11".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 8,
+      txHash: `0x${"11".repeat(32)}`,
+      timestamp: 22_000 * 86400,
+    });
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      ...instantPace(),
+      now: () => 5_000_000,
+      env: env({ POINTS_LOG_RANGE: "10" }),
+      onIndexer(indexer) {
+        const original = indexer.rebuild.bind(indexer);
+        indexer.rebuild = () => {
+          if (failRebuild) throw new Error("rebuild failed");
+          return original();
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          if (headStatus != null) throw httpError(headStatus);
+          return head;
+        },
+        async getLogs() {
+          if (crashLogs) throw new Error("scan crashed");
+          return [log];
+        },
+      }),
+    });
+    try {
+      head = block;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      headStatus = 503;
+      const unavailable = await running.pass();
+      assert.equal(unavailable.endedEarly, true);
+      assert.equal(unavailable.reason, "server_error");
+      let response = await fetch(running.healthUrl);
+      let body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.error, "rebuild_error");
+      headStatus = null;
+      crashLogs = true;
+      head = block + 10;
+      await assert.rejects(() => running.pass(), /scan crashed/);
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rebuild_error");
+    } finally {
+      await running.stop();
+    }
+  });
 });
