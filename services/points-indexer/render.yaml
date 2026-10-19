@@ -15,9 +15,9 @@
 # before POINTS_TRUSTED_PROXY_HOPS is raised. Run it from an IPv4 client
 # and from an IPv6 client. Forge X-Forwarded-For, CF-Connecting-IP, and
 # True-Client-IP. Echo the socket address, record the result, and remove
-# the echo afterwards. The hop value below stays 0. The check needs two
-# real client addresses each seen correctly, forged forwarded values
-# ignored, and the chosen address outside a Cloudflare range.
+# the echo afterwards. The hop value below is 0 until that check sets it.
+# The check needs two real client addresses each seen correctly, forged
+# forwarded values ignored, and the chosen address outside a Cloudflare range.
 # POINTS_CLOUDFLARE_INGRESS is not set. That flag must stay off for an
 # origin that is reachable without Cloudflare.
 #
@@ -51,7 +51,7 @@ services:
       - key: POINTS_MAX_WINDOWS_PER_PASS
         value: "500"
       - key: POINTS_TRUSTED_PROXY_HOPS
-        # Stays 0. A live echo check is required before POINTS_ENABLED, and again before this is raised.
+        # 0 until a live echo check sets it. That check is required before POINTS_ENABLED, and again before this is raised.
         value: "0"
       - key: BASE_SEPOLIA_RPC_URL
         sync: false
