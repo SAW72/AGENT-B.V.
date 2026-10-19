@@ -458,7 +458,7 @@ Disclaimer link slots stay empty while checklist #11 is open (`config/reputation
 
 This is a requirement before the first deploy. The work is PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, uses the numbers below.
 
-The indexer waits 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows.
+The current default waits 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows. The final pacing numbers are Spencer's decision and are still pending.
 
 The only measured evidence recorded here is the figure from the soft-launch plan, which attributes it to the PR #100 Verifier verdict: 50 HTTP 429 responses in 1,055 requests, at 25 to 35 requests per second, on the public RPC. That count is not in the git tree. Pull request #100 on GitHub had no reviews and no comments when those lists were read for this draft. The count was not measured again here.
 
@@ -472,6 +472,7 @@ Two other items stay parked. They are not planned. Grok Bot's ruling still cover
 | Owner | Open items |
 |---|---|
 | Spencer | The RPC secret. The Pages upload (`apps/wallet-ux/CLOUDFLARE_PAGES.md:3` is Direct Upload). Checklist #12 caps. Checklist #9 enforcer owner. The human/AI arbitrator register. |
+| Spencer | Pacing numbers for PR-3: Spencer's call, pending. |
 | Lawyer | Checklist #11 links. Checklist #7 OFAC provider. The first announcement text and a screenshot, before any public post. |
 | Grok Bot | The two parked items in the pacing section. |
 
@@ -482,7 +483,7 @@ Checklists #7, #9, and #12 stay **Open** in the sections above. Checklist #11 st
 PR-1 is this docs amendment. Each item below waits until PR-1 is merged and until Grok Bot has ruled. This file does not authorize any of them.
 
 - PR-2. The indexer read API in the contract above. It waits for PR-1 merged plus Grok Bot's ruling.
-- PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. The numbers are in the pacing section. It waits for PR-1 merged. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
+- PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. It waits for PR-1 merged plus Spencer's ruling on the pacing numbers. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
 - PR-4. Storage on Cloudflare (D1 plus a Worker or a Durable Object) is plan pending. A later pull request may add that design. This file does not design it and it does not hold a secret.
 - PR-5. A wallet surface for the connected wallet on chain `84532`. Points are tied to that wallet. Signup is open. It waits for PR-1 merged plus Grok Bot's ruling. The Pages upload stays with Spencer.
 
