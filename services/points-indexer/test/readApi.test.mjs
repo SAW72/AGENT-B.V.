@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
+import { createdLog } from "./support.mjs";
 import { loadConfig, start } from "../src/main.mjs";
 import {
   bucketClientAddress,
@@ -970,6 +971,54 @@ describe("points read API", { concurrency: false }, () => {
     }
   });
 
+  it("evicts the least recently seen under-limit prefix, not the oldest insert or the newest", () => {
+    const limiter = createRateLimiter({
+      max: 100,
+      coarseMax: 3,
+      coarseMaxEntries: 2,
+      maxEntries: 20,
+      windowMs: 60_000,
+      clock: () => 1_000,
+      sweepMs: 1_000_000,
+    });
+    const key = (name) => `2001:${name}:${name}:1::/64`;
+    try {
+      assert.equal(limiter.allow(key("a")).ok, true);
+      assert.equal(limiter.allow(key("b")).ok, true);
+      assert.equal(limiter.allow(key("a")).ok, true);
+      assert.equal(limiter.allow(key("c")).ok, true);
+      assert.equal(limiter.coarseSize(), 2);
+      assert.equal(limiter.allow(key("a")).ok, true);
+      assert.equal(limiter.allow(key("a")).ok, false);
+    } finally {
+      limiter.close();
+    }
+  });
+
+  it("does not evict a prefix that is already at its limit", () => {
+    const limiter = createRateLimiter({
+      max: 100,
+      coarseMax: 2,
+      coarseMaxEntries: 1,
+      maxEntries: 20,
+      windowMs: 60_000,
+      clock: () => 1_000,
+      sweepMs: 1_000_000,
+    });
+    const key = (name, host) => `2001:${name}:${name}:${host}::/64`;
+    try {
+      assert.equal(limiter.allow(key("a", "1")).ok, true);
+      assert.equal(limiter.allow(key("a", "2")).ok, true);
+      assert.equal(limiter.coarseSize(), 1);
+      assert.equal(limiter.allow(key("b", "1")).ok, false);
+      assert.equal(limiter.coarseSize(), 1);
+      assert.equal(limiter.allow(key("a", "3")).ok, false);
+      assert.equal(limiter.coarseSize(), 1);
+    } finally {
+      limiter.close();
+    }
+  });
+
   it("resets the rate window from the injected clock", async () => {
     let now = 1_000_000;
     await withServer({
@@ -1345,6 +1394,8 @@ describe("points read API", { concurrency: false }, () => {
       serve: true,
       port: 0,
       env,
+      paceNow: () => 0,
+      sleep: async () => {},
       onListening(info) {
         health = info;
       },
@@ -1512,6 +1563,8 @@ describe("points read API", { concurrency: false }, () => {
         serve: true,
         port: 0,
         env,
+        paceNow: () => 0,
+        sleep: async () => {},
         onListening(info) {
           health = info;
         },
@@ -1982,6 +2035,35 @@ describe("points read API", { concurrency: false }, () => {
       });
       assert.equal(again.response.status, 429);
     });
+    await withServer({ enabled: () => true, config: { ratePerMinute: 1, trustedProxyHops: 1 } }, async (base) => {
+      const huge = await request(base, "/v1/points/config", {
+        method: "OPTIONS",
+        headers: { "x-forwarded-for": "d".repeat(2049) },
+      });
+      assert.equal(huge.response.status, 400);
+      assert.equal(huge.json.error, "header_too_long");
+      const again = await request(base, "/v1/points/config", {
+        method: "OPTIONS",
+        headers: { "x-forwarded-for": "d".repeat(2049) },
+      });
+      assert.equal(again.response.status, 429);
+    });
+    await withServer({
+      enabled: () => true,
+      store: {
+        configAvailable: false,
+        getConfig() {
+          throw new Error("config_unavailable");
+        },
+      },
+      config: { ratePerMinute: 1 },
+    }, async (base) => {
+      const preflight = await request(base, "/v1/points/config", { method: "OPTIONS" });
+      assert.equal(preflight.response.status, 503);
+      assert.equal(preflight.json.error, "config_unavailable");
+      const again = await request(base, "/v1/points/config", { method: "OPTIONS" });
+      assert.equal(again.response.status, 429);
+    });
     await withServer({
       enabled: () => true,
       store: {
@@ -2056,6 +2138,7 @@ describe("points read API", { concurrency: false }, () => {
         key = null;
       }
     }
+    assert.equal(/stays 0/i.test(text), false);
     assert.equal(env.POINTS_TRUSTED_PROXY_HOPS, "0");
     assert.equal(Object.hasOwn(env, "POINTS_CLOUDFLARE_INGRESS"), false);
     const settings = readSettings(env);
@@ -2192,6 +2275,81 @@ describe("points read API", { concurrency: false }, () => {
     }
   });
 
+  it("counts a config failure answered before the read handler is mounted", async () => {
+    const lines = [];
+    const original = console.error;
+    console.error = (line) => lines.push(String(line));
+    let running;
+    try {
+      running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: ":memory:",
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+          POINTS_ENABLED: "true",
+          POINTS_CORS_ORIGINS: "https://app.invalid",
+          POINTS_READ_RATE_PER_MINUTE: "3",
+          POINTS_TRUSTED_PROXY_HOPS: "0",
+        },
+        readApiFactory() {
+          throw new Error("config_unavailable");
+        },
+        rpc: {
+          async chainId() {
+            return 84532;
+          },
+          async getCode() {
+            return "0x6001600055";
+          },
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        },
+      });
+      const health = await fetch(running.healthUrl);
+      assert.equal(health.status, 200);
+      await health.text();
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      const allowed = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://app.invalid" },
+      });
+      assert.equal(allowed.response.status, 503);
+      assert.equal(allowed.json.error, "config_unavailable");
+      assert.equal(allowed.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      assert.equal(allowed.response.headers.get("vary"), "Origin");
+      const other = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://other.invalid" },
+      });
+      assert.equal(other.response.status, 503);
+      assert.equal(other.response.headers.get("access-control-allow-origin"), null);
+      const preflight = await request(origin, "/v1/points/config", {
+        method: "OPTIONS",
+        headers: { origin: "https://app.invalid" },
+      });
+      assert.equal(preflight.response.status, 503);
+      assert.equal(preflight.json.error, "config_unavailable");
+      assert.equal(preflight.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      const blocked = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://app.invalid" },
+      });
+      assert.equal(blocked.response.status, 429);
+      assert.equal(blocked.json.error, "rate_limited");
+      assert.equal(blocked.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      assert.equal(blocked.response.headers.get("retry-after") != null, true);
+      assert.equal(lines.filter((line) => line.includes("config_unavailable")).length, 1);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
   it("reads CF-Connecting-IP only when Cloudflare ingress is declared", async () => {
     const input = {
       remoteAddress: "127.0.0.1",
@@ -2217,6 +2375,17 @@ describe("points read API", { concurrency: false }, () => {
   it("keeps a stale ledger on the read API after a window commit", async () => {
     let head = ESCROW_START_BLOCK - 1;
     let failRebuild = true;
+    const block = ESCROW_START_BLOCK + 4;
+    const log = createdLog({
+      escrowId: `0x${"44".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 1,
+      txHash: `0x${"c3".repeat(32)}`,
+      timestamp: 21_100 * 86400,
+    });
     const env = {
       CHAIN_ID: "84532",
       POINTS_DB_PATH: ":memory:",
@@ -2229,6 +2398,8 @@ describe("points read API", { concurrency: false }, () => {
       serve: true,
       port: 0,
       env,
+      paceNow: () => 0,
+      sleep: async () => {},
       onIndexer(indexer) {
         const original = indexer.rebuild.bind(indexer);
         indexer.rebuild = () => {
@@ -2246,14 +2417,15 @@ describe("points read API", { concurrency: false }, () => {
         async finalizedBlockNumber() {
           return head;
         },
-        async getLogs() {
+        async getLogs(args) {
+          if (args.fromBlock <= block && args.toBlock >= block) return [log];
           return [];
         },
       },
     });
     try {
       const origin = running.healthUrl.replace(/\/health$/, "");
-      head = ESCROW_START_BLOCK + 4;
+      head = block;
       await assert.rejects(() => running.pass(), /rebuild failed/);
       const failed = await request(origin, `/v1/points/${ADDRESS}`);
       assert.equal(failed.json.stale, true);

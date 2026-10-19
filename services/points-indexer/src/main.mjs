@@ -572,16 +572,19 @@ function healthSnapshot(status) {
   const decision = healthDecision({
     lastPassAt: status.lastPassAt,
     pollMs: status.pollMs,
+    freshnessPolls: status.freshnessPolls,
     now: status.now(),
     behind: status.behind,
+    ledgerStale: status.ledgerStale,
   });
   const body = { ok: decision.ok, chainId: status.chainId };
   if (decision.ok && decision.behind > 0) body.behind = decision.behind;
   if (!decision.ok && status.lastError) body.error = status.lastError;
+  else if (decision.ok && status.earlyReason) body.error = status.earlyReason;
   return {
     statusCode: decision.statusCode,
     payload: JSON.stringify(body),
-    stamp: `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}`,
+    stamp: `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}|${status.earlyReason}`,
   };
 }
 
@@ -594,7 +597,7 @@ function listenHealth(port, status, onPoints, cache) {
       const path = (req.url ?? "/").split("?")[0];
       if (path === "/health" || path === "/health/") {
         const at = cacheClock();
-        const stamp = `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}`;
+        const stamp = `${status.lastPassAt}|${status.lastError}|${status.behind}|${status.ledgerStale}|${status.earlyReason}`;
         if (!cached || cached.stamp !== stamp || at - cached.at >= cacheMs) {
           const fresh = healthSnapshot(status);
           cached = { at, ...fresh };
@@ -1098,6 +1101,7 @@ export async function start(options = {}) {
   let readApiLoading = null;
   let readDb = null;
   let configFailed = false;
+  let configGate = null;
   const env = options.env ?? process.env;
 
   function readDatabase() {
@@ -1116,22 +1120,25 @@ export async function start(options = {}) {
         import("./readApi.mjs"),
         import("./readApiSqliteStore.mjs"),
       ]).then(([mod, stores]) => {
-        readApi = mod.createReadApi({
-          store: stores.createReadApiSqliteStore({
-            db: () => readDatabase(),
-            lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
-            finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
-            passCompleted: () => status.lastPassAt != null,
-            stale: () => status.ledgerStale === true || status.lastError != null,
-            configPaths: options.readConfigPaths,
-          }),
-          config: mod.readSettings(env),
-          now: () => Date.now(),
-          enabled: () => mod.pointsEnabled(env),
-          log: (line) => {
-            console.error(redact(String(line), cfg.rpcUrl));
-          },
-        });
+        const openRead = typeof options.readApiFactory === "function"
+          ? options.readApiFactory
+          : (api, stores) => api.createReadApi({
+            store: stores.createReadApiSqliteStore({
+              db: () => readDatabase(),
+              lastScannedBlock: () => (indexer ? indexer.lastScannedBlock() : null),
+              finalizedBlock: () => (indexer ? Math.max(indexer.finalizedBlock, status.head ?? 0) : null),
+              passCompleted: () => status.lastPassAt != null,
+              stale: () => status.ledgerStale === true || status.lastError != null,
+              configPaths: options.readConfigPaths,
+            }),
+            config: api.readSettings(env),
+            now: () => Date.now(),
+            enabled: () => api.pointsEnabled(env),
+            log: (line) => {
+              console.error(redact(String(line), cfg.rpcUrl));
+            },
+          });
+        readApi = openRead(mod, stores);
         return readApi;
       }).catch((error) => {
         readApiLoading = null;
@@ -1141,13 +1148,39 @@ export async function start(options = {}) {
     return readApiLoading;
   }
 
+  async function countConfigUnavailable(req, res) {
+    const mod = await import("./readApi.mjs");
+    if (!configGate) {
+      const settings = mod.readSettings(env);
+      configGate = {
+        settings,
+        limiter: mod.createRateLimiter({ max: settings.ratePerMinute }),
+      };
+    }
+    const headers = await readCorsHeaders(req, env);
+    const decision = configGate.limiter.allow(mod.clientIp({
+      remoteAddress: req.socket?.remoteAddress,
+      headers: req.headers,
+    }, configGate.settings.trustedProxyHops, {
+      cloudflareIngress: configGate.settings.cloudflareIngress,
+    }));
+    if (!decision.ok) {
+      writeJson(res, 429, { ok: false, error: "rate_limited" }, {
+        ...headers,
+        "retry-after": String(decision.retryAfterSec),
+      });
+      return;
+    }
+    writeJson(res, 503, { ok: false, error: "config_unavailable" }, headers);
+  }
+
   async function handlePoints(req, res) {
     if (!pointsEnabled(env)) {
       writeJson(res, 503, { ok: false, error: "points_disabled" });
       return;
     }
     if (configFailed) {
-      writeJson(res, 503, { ok: false, error: "config_unavailable" }, await readCorsHeaders(req, env));
+      await countConfigUnavailable(req, res);
       return;
     }
     try {
@@ -1155,7 +1188,7 @@ export async function start(options = {}) {
     } catch {
       configFailed = true;
       console.error(redact("points_read config_unavailable", cfg.rpcUrl));
-      writeJson(res, 503, { ok: false, error: "config_unavailable" }, await readCorsHeaders(req, env));
+      await countConfigUnavailable(req, res);
       return;
     }
     readApi(req, res);
@@ -1240,6 +1273,7 @@ export async function start(options = {}) {
           // The module never finished loading.
         }
       }
+      configGate?.limiter.close();
       if (readDb) {
         try {
           readDb.close();

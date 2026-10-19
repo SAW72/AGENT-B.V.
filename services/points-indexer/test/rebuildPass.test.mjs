@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { HttpRequestError } from "viem";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { openIndexer } from "../src/indexer.mjs";
-import { start } from "../src/main.mjs";
+import { HEALTH_CACHE_MS, start } from "../src/main.mjs";
 import { createdLog, loadFixture } from "./support.mjs";
 
 function httpError(status) {
@@ -318,6 +318,64 @@ describe("ledger rebuild on a pass", () => {
       } finally {
         reference.close();
       }
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("keeps a 503 while a rebuild is due inside the health cache window", async () => {
+    const block = ESCROW_START_BLOCK + 4;
+    let head = ESCROW_START_BLOCK - 1;
+    let clock = 0;
+    const log = createdLog({
+      escrowId: `0x${"66".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 1,
+      txHash: `0x${"e6".repeat(32)}`,
+      timestamp: 21_300 * 86400,
+    });
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      ...instantPace(),
+      now: () => 5_000_000,
+      healthCacheNow: () => clock,
+      env: env({ POINTS_LOG_RANGE: "10" }),
+      onIndexer(indexer) {
+        indexer.rebuild = () => {
+          throw new Error("rebuild failed");
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs(args) {
+          if (args.fromBlock <= block && args.toBlock >= block) return [log];
+          return [];
+        },
+      }),
+    });
+    try {
+      const fresh = await fetch(running.healthUrl);
+      assert.equal(fresh.status, 200);
+      await fresh.text();
+      head = block;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      const stale = await fetch(running.healthUrl);
+      const staleBody = await stale.json();
+      assert.equal(stale.status, 503);
+      assert.equal(staleBody.ok, false);
+      assert.equal(staleBody.error, "rebuild_error");
+      clock = HEALTH_CACHE_MS - 1;
+      const held = await fetch(running.healthUrl);
+      const heldBody = await held.json();
+      assert.equal(held.status, 503);
+      assert.equal(heldBody.error, "rebuild_error");
     } finally {
       await running.stop();
     }
