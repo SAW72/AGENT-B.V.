@@ -751,6 +751,10 @@ describe("getLogs pace", () => {
     const bare = httpError(500, {});
     assert.equal(retryWaitMs(bare, 0, 0, { backoffJitterMs: 50, random: () => 0.5 }), 1_025);
     assert.equal(retryWaitMs(bare, 1, 0, {}), 2_000);
+    assert.equal(loadPaceSettings({ POINTS_RETRY_BACKOFF_JITTER_MS: "3000000000" }).backoffJitterMs, 3_000_000_000);
+    const huge = retryWaitMs(bare, 0, 0, { backoffJitterMs: 3_000_000_000, random: () => 0.99 });
+    assert.equal(huge, 900_000);
+    assert.ok(huge < 2 ** 31 - 1);
   });
 
   it("retries -32005 request rate exceeded without shrinking the window", async () => {
@@ -1624,8 +1628,8 @@ describe("getLogs pace", () => {
         await running.pass();
         const stepped = delays.slice(mark);
         assert.ok(stepped.length > 0);
-        assert.ok(stepped.every((delay) => delay <= MAX_CARRY_MS));
-        assert.equal(stepped.includes(MAX_CARRY_MS), true);
+        assert.ok(stepped.every((delay) => delay <= 900_000));
+        assert.equal(stepped.includes(900_000), true);
         assert.equal(warnings.includes("TimeoutOverflowWarning"), false);
       } finally {
         await running.stop();

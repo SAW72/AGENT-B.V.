@@ -19,6 +19,7 @@ import {
   isRangeError,
   loadConfig,
   redact,
+  redactShortMessage,
   start,
 } from "../src/main.mjs";
 import { account, createdLog, creditCandidate, loadFixture, tempIndexer } from "./support.mjs";
@@ -908,6 +909,26 @@ describe("process entry", () => {
       assert.match(spaced, /see \[redacted-url\] end/);
       const kept = redact("path /v2/ethereum end", "");
       assert.equal(kept.includes("ethereum"), true);
+      const chainLabel = ["nd", "123", "456", "789"].join("-");
+      const chainHost = redact(`dial ${chainLabel}.rpc.invalid end`, "");
+      assert.equal(chainHost.includes(chainLabel), false);
+      assert.match(chainHost, /dial \[redacted-host\] end/);
+      const wordLabel = "quiet" + "harbor" + "stone";
+      const wordHost = redact(`dial ${wordLabel}.rpc.invalid end`, "");
+      assert.equal(wordHost.includes(wordLabel), false);
+      const hyphenLabel = ["quiet", "harbor"].join("-");
+      const hyphenHost = redact(`dial ${hyphenLabel}.rpc.invalid end`, "");
+      assert.equal(hyphenHost.includes(hyphenLabel), false);
+      const headKey = "ab12".repeat(8);
+      const tail = "TAILMARKER91";
+      const huge = `${headKey}${"m".repeat(32_000)}${tail}`;
+      const started = performance.now();
+      const clipped = redactShortMessage(huge, "");
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 50, `redact took ${elapsed}ms`);
+      assert.equal(clipped.includes(headKey), false);
+      assert.equal(clipped.includes(tail), false);
+      assert.ok(clipped.length < 600);
       running = await start({
         serve: true,
         port: 0,

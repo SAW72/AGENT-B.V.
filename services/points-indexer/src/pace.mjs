@@ -290,14 +290,17 @@ export function retryWaitMs(error, attempt, nowMs, options = {}) {
   }
   const index = Math.min(Math.max(attempt, 0), schedule.length - 1);
   const random = options.random ?? Math.random;
-  return schedule[index] + jitterMs(options.backoffJitterMs ?? 0, random);
+  const raw = schedule[index] + jitterMs(options.backoffJitterMs ?? 0, random);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(raw, MAX_CARRY_MS, 2 ** 31 - 1);
 }
 
 /**
  * Pace every call and retry retryable failures. A non-retryable error is rethrown.
  * `now` is the monotonic gap clock. `wallNow` is epoch milliseconds and is used
  * only when Retry-After is an HTTP-date. Jitter is added on top of the gap and
- * the schedule. A readable Retry-After is not jittered. A Retry-After longer
+ * the schedule. A backoff wait, including that jitter, is at most 15 minutes
+ * and stays under the timer limit. A readable Retry-After is not jittered. A Retry-After longer
  * than the cap sleeps the cap once, ends this call, and returns `deferUntil`
  * so the next pass can wait out the rest before it dials. The carried instant
  * is at most {@link MAX_CARRY_MS} after the response.

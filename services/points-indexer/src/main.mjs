@@ -355,7 +355,34 @@ export function redact(text, rpcUrl) {
   out = out.replace(BEARER_PATTERN, "$1[redacted]");
   out = out.replace(USERINFO_PATTERN, "[redacted-userinfo]@");
   out = out.replace(HEX32_PATTERN, "[redacted]");
-  return out.replace(BARE_KEY_PATTERN, "[redacted]");
+  out = out.replace(BARE_KEY_PATTERN, "[redacted]");
+  return scrubHostLabels(out);
+}
+
+const LOG_SHORT_CHARS = 512;
+
+/**
+ * A log line keeps at most 512 characters of shortMessage, then redacts that prefix.
+ * @param {unknown} short
+ * @param {string} [rpcUrl]
+ */
+export function redactShortMessage(short, rpcUrl) {
+  return redact(String(short ?? "").slice(0, LOG_SHORT_CHARS), rpcUrl);
+}
+
+function hostLabelIsSecret(label) {
+  if (label.length < 8) return false;
+  if (/\d/.test(label)) return true;
+  if (/^[A-Za-z]{12,}$/.test(label)) return true;
+  const words = label.split("-").filter(Boolean);
+  return words.length >= 2 && words.every((word) => /^[A-Za-z]{4,}$/.test(word));
+}
+
+function scrubHostLabels(value) {
+  return value.replace(
+    /(?<![A-Za-z0-9@/_])(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/g,
+    (host) => (host.split(".").some(hostLabelIsSecret) ? "[redacted-host]" : host),
+  );
 }
 
 /**
@@ -386,7 +413,9 @@ function isFinalizedUnsupported(error) {
 function logFailure(error, rpcUrl) {
   const code = errorCode(error);
   const name = error && typeof error === "object" && error.name ? String(error.name) : "Error";
-  const short = error && typeof error === "object" && error.shortMessage != null ? String(error.shortMessage) : "";
+  const short = error && typeof error === "object" && error.shortMessage != null
+    ? redactShortMessage(error.shortMessage, rpcUrl)
+    : "";
   console.error(redact(`${code} ${name} ${short}`.trim(), rpcUrl));
 }
 
