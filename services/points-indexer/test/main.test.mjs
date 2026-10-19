@@ -1142,8 +1142,21 @@ describe("process entry", () => {
     let head = ESCROW_START_BLOCK - 1;
     let rebuilds = 0;
     let failRebuild = false;
+    const logBlock = ESCROW_START_BLOCK + 12;
+    const log = createdLog({
+      escrowId: `0x${"44".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: logBlock,
+      logIndex: 1,
+      txHash: `0x${"c3".repeat(32)}`,
+      timestamp: 21_100 * 86400,
+    });
     const running = await start({
       once: true,
+      sleep: async () => {},
+      paceNow: () => 0,
       onIndexer(indexer) {
         const original = indexer.rebuild.bind(indexer);
         indexer.rebuild = () => {
@@ -1164,7 +1177,8 @@ describe("process entry", () => {
         async finalizedBlockNumber() {
           return head;
         },
-        async getLogs() {
+        async getLogs(args) {
+          if (args.fromBlock <= logBlock && args.toBlock >= logBlock) return [log];
           return [];
         },
       }),
@@ -1174,22 +1188,22 @@ describe("process entry", () => {
       head = ESCROW_START_BLOCK + 2;
       const scanned = await running.pass();
       assert.equal(scanned.ranges.length, 1);
-      assert.equal(rebuilds, 1);
+      assert.equal(rebuilds, 0);
       const idle = await running.pass();
       assert.equal(idle.ranges.length, 0);
-      assert.equal(rebuilds, 1);
+      assert.equal(rebuilds, 0);
       failRebuild = true;
-      head = ESCROW_START_BLOCK + 4;
+      head = logBlock;
       await assert.rejects(() => running.pass(), /rebuild failed/);
-      assert.equal(running.indexer.lastScannedBlock(), ESCROW_START_BLOCK + 4);
-      assert.equal(rebuilds, 2);
+      assert.equal(running.indexer.lastScannedBlock(), logBlock);
+      assert.equal(rebuilds, 1);
       const retried = await running.pass();
       assert.equal(retried.ranges.length, 0);
       assert.equal(retried.rebuilds, 1);
-      assert.equal(rebuilds, 3);
+      assert.equal(rebuilds, 2);
       const quiet = await running.pass();
       assert.equal(quiet.rebuilds, 0);
-      assert.equal(rebuilds, 3);
+      assert.equal(rebuilds, 2);
     } finally {
       await running.stop();
       rmSync(dir, { recursive: true, force: true });

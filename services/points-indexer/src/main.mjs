@@ -298,6 +298,7 @@ export function emptyCode(value) {
  */
 export function errorCode(error) {
   if (!error || typeof error !== "object") return "rpc_error";
+  if (error.scanReason === "rebuild_error") return "rebuild_error";
   if (isRangeError(error)) return "range_error";
   if (typeof error.scanReason === "string" && PACE_REASONS.has(error.scanReason)) return error.scanReason;
   const paced = scanErrorClass(error);
@@ -428,7 +429,24 @@ export function healthDecision(status) {
     : DEFAULT_HEALTH_FRESHNESS_POLLS;
   const fresh = status.lastPassAt != null && status.now - status.lastPassAt <= polls * status.pollMs;
   const behind = Number.isSafeInteger(status.behind) ? Math.max(0, status.behind) : 0;
-  return { ok: fresh, statusCode: fresh ? 200 : 503, behind };
+  const stale = status.ledgerStale === true;
+  const ok = fresh && !stale;
+  return { ok, statusCode: ok ? 200 : 503, behind, stale };
+}
+
+/**
+ * A stored log sits above the previous finalized head and at or below the new one.
+ * The head move is what lets that log leave the withheld set.
+ * @param {{ db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } } }} indexer
+ * @param {number} previous
+ * @param {number} next
+ */
+function storedLogCrossedByHead(indexer, previous, next) {
+  if (!Number.isInteger(previous) || !Number.isInteger(next) || next <= previous) return false;
+  const row = indexer.db.prepare(
+    "SELECT 1 AS ok FROM raw_logs WHERE removed = 0 AND block_number > ? AND block_number <= ? LIMIT 1",
+  ).get(previous, next);
+  return row != null;
 }
 
 function blocksBehind(head, cursor) {
@@ -514,6 +532,7 @@ function listenHealth(port, status) {
           freshnessPolls: status.freshnessPolls,
           now: status.now(),
           behind: status.behind,
+          ledgerStale: status.ledgerStale,
         });
         const body = { ok: decision.ok, chainId: status.chainId };
         if (decision.ok && decision.behind > 0) body.behind = decision.behind;
@@ -622,6 +641,7 @@ export async function start(options = {}) {
     lastPassAt: null,
     lastError: null,
     earlyReason: null,
+    ledgerStale: false,
     behind: 0,
     now,
   };
@@ -662,9 +682,17 @@ export async function start(options = {}) {
     });
   }
 
+  function assignLastError(reason) {
+    if (status.ledgerStale === true) {
+      status.lastError = "rebuild_error";
+      return;
+    }
+    status.lastError = reason;
+  }
+
   function endedEarly(reason) {
     status.earlyReason = reason;
-    status.lastError = reason;
+    assignLastError(reason);
     console.error(`${reason} pass_ended_early`);
     return {
       ok: true,
@@ -793,8 +821,17 @@ export async function start(options = {}) {
         }
         throw error;
       }
-      dirty = true;
-      const committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      let committed;
+      try {
+        committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+      } catch (error) {
+        if (dirty) {
+          status.ledgerStale = true;
+          status.lastError = "rebuild_error";
+        }
+        throw error;
+      }
+      if (committed.inserted > 0) dirty = true;
       inserted += committed.inserted;
       committedWindows += 1;
       windowsThisPass += 1;
@@ -803,7 +840,7 @@ export async function start(options = {}) {
       learnedWindow = Math.min(cfg.logRange, window * 2);
       window = learnedWindow;
       status.lastPassAt = now();
-      status.lastError = null;
+      if (!dirty && status.ledgerStale !== true) status.lastError = null;
       status.behind = blocksBehind(head, to);
     }
     if (
@@ -814,18 +851,47 @@ export async function start(options = {}) {
     ) {
       earlyReason = "run_cap";
     }
-    const headResult = indexer.setFinalizedBlock(head, { rebuild: false });
+    const previousHead = indexer.finalizedBlock;
+    // Decide the crossing before the head is stored. A throw here leaves the
+    // stored head where it was, so the next pass can decide again.
+    let crossed = false;
+    try {
+      crossed = storedLogCrossedByHead(indexer, previousHead, head);
+    } catch (error) {
+      dirty = true;
+      status.ledgerStale = true;
+      status.lastError = "rebuild_error";
+      const wrapped = error instanceof Error ? error : new Error("rebuild failed");
+      wrapped.scanReason = "rebuild_error";
+      throw wrapped;
+    }
+    if (crossed) dirty = true;
+    indexer.setFinalizedBlock(head, { rebuild: false });
+    // TODO: incremental attribution. rebuild() replays raw logs, chains, nonces,
+    // links, and derived rows, then renumbers seq. A partial replay is not wired.
+    // This pass skips that replay when it inserted no raw log and the finalized
+    // head did not move over a stored log. A failed replay stays due on the next pass.
     let rebuilds = 0;
-    if (dirty || inserted > 0 || headResult.moved) {
-      indexer.rebuild();
+    if (dirty) {
+      status.ledgerStale = true;
+      status.lastError = "rebuild_error";
+      try {
+        indexer.rebuild();
+      } catch (error) {
+        const wrapped = error instanceof Error ? error : new Error("rebuild failed");
+        wrapped.scanReason = "rebuild_error";
+        throw wrapped;
+      }
       dirty = false;
+      status.ledgerStale = false;
+      status.lastError = null;
       rebuilds = 1;
     }
     status.behind = blocksBehind(head, indexer.lastScannedBlock());
     const scannedThrough = indexer.lastScannedBlock();
     if (earlyReason) {
       status.earlyReason = earlyReason;
-      status.lastError = earlyReason;
+      assignLastError(earlyReason);
       console.error(`${earlyReason} pass_ended_early`);
       return {
         ok: true,
@@ -865,7 +931,8 @@ export async function start(options = {}) {
       return await runOnce();
     } catch (error) {
       status.earlyReason = null;
-      status.lastError = errorCode(error);
+      if (dirty) status.ledgerStale = true;
+      assignLastError(errorCode(error));
       throw error;
     } finally {
       inFlight = false;
