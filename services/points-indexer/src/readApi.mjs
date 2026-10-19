@@ -16,6 +16,7 @@ export const DEFAULT_RATE_PER_MINUTE = 60;
 export const DEFAULT_PROXY_HOPS = 0;
 export const DEFAULT_WINDOW_MS = 60_000;
 export const DEFAULT_MAX_ENTRIES = 16384;
+export const DEFAULT_COARSE_MAX_ENTRIES = 4096;
 export const COARSE_LIMIT_FACTOR = 8;
 export const DEFAULT_SWEEP_MS = 60_000;
 export const HISTORY_DEFAULT_LIMIT = 25;
@@ -311,12 +312,36 @@ function socketBucket(input) {
   return bucketClientAddress(address) || "unknown";
 }
 
+function headerText(value) {
+  if (Array.isArray(value)) return value.join(",");
+  return typeof value === "string" ? value : null;
+}
+
 /**
- * Trusted proxy hops are counted from the right of X-Forwarded-For.
+ * A forwarded header longer than 2048 characters is rejected.
+ * Hop 0 does not read X-Forwarded-For, so that header's length is ignored.
+ * @param {{ headers?: object }} input
+ * @param {number} [hops]
+ * @param {{ cloudflareIngress?: boolean }} [options]
+ */
+export function headerTooLong(input, hops = DEFAULT_PROXY_HOPS, options = {}) {
+  if (options.cloudflareIngress === true) {
+    const value = headerText(input?.headers?.["cf-connecting-ip"]);
+    if (value != null && value.length > MAX_FORWARDED_CHARS) return true;
+  }
+  const hopCount = Number.isInteger(hops) && hops >= 0 ? hops : DEFAULT_PROXY_HOPS;
+  if (hopCount === 0) return false;
+  const header = headerText(input?.headers?.["x-forwarded-for"]);
+  return header != null && header.length > MAX_FORWARDED_CHARS;
+}
+
+/**
+ * Trusted proxy hops are counted from the end of X-Forwarded-For.
  * Hop 0, the default, uses remoteAddress and ignores the header.
  * A positive hop count is an operator setting for a proxy they have checked.
- * Hop 1 is the rightmost entry. A missing, empty, too-short, or malformed
- * header uses remoteAddress. The leftmost entry is never selected on its own.
+ * A missing, empty, too-short, or malformed header uses remoteAddress.
+ * A header longer than 2048 characters returns null. It is not the socket.
+ * The first list entry is never selected on its own.
  * @param {{ headers?: object, remoteAddress?: string, socket?: { remoteAddress?: string } }} input
  * @param {number} [hops]
  */
@@ -325,18 +350,71 @@ export function clientIp(input, hops = DEFAULT_PROXY_HOPS, options = {}) {
   if (options.cloudflareIngress === true) {
     const header = input?.headers?.["cf-connecting-ip"];
     const value = Array.isArray(header) ? header[0] : header;
+    if (typeof value === "string" && value.length > MAX_FORWARDED_CHARS) return null;
     return bucketClientAddress(typeof value === "string" ? value.trim() : "") || socket;
   }
   const hopCount = Number.isInteger(hops) && hops >= 0 ? hops : DEFAULT_PROXY_HOPS;
   if (hopCount === 0) return socket;
-  const rawHeader = input?.headers?.["x-forwarded-for"];
-  const header = Array.isArray(rawHeader) ? rawHeader.join(",") : rawHeader;
-  if (typeof header !== "string") return socket;
-  if (header.length === 0 || header.length > MAX_FORWARDED_CHARS) return socket;
+  const header = headerText(input?.headers?.["x-forwarded-for"]);
+  if (header == null || header.length === 0) return socket;
+  if (header.length > MAX_FORWARDED_CHARS) return null;
   const parts = header.split(",").map((part) => part.trim()).filter(Boolean);
   if (parts.length < hopCount) return socket;
   const selected = parts[parts.length - hopCount];
   return bucketClientAddress(selected) || socket;
+}
+
+function createTouchMap() {
+  const map = new Map();
+  let touches = 0;
+  return {
+    get touches() {
+      return touches;
+    },
+    get size() {
+      return map.size;
+    },
+    get(key) {
+      touches += 1;
+      return map.get(key);
+    },
+    set(key, value) {
+      touches += 1;
+      map.set(key, value);
+    },
+    has(key) {
+      touches += 1;
+      return map.has(key);
+    },
+    delete(key) {
+      touches += 1;
+      return map.delete(key);
+    },
+    keys() {
+      const iter = map.keys();
+      return {
+        next() {
+          touches += 1;
+          return iter.next();
+        },
+        [Symbol.iterator]() {
+          return this;
+        },
+      };
+    },
+    [Symbol.iterator]() {
+      const iter = map.entries();
+      return {
+        next() {
+          touches += 1;
+          return iter.next();
+        },
+        [Symbol.iterator]() {
+          return this;
+        },
+      };
+    },
+  };
 }
 
 const OVERFLOW_KEY = "\0overflow";
@@ -362,7 +440,9 @@ function retryAfter(stamps, now, windowMs) {
  * key, and at most one eviction candidate. The timer drops expired keys.
  * A limited key is never evicted. When every resident key is limited, new
  * keys share one overflow bucket.
- * @param {{ windowMs?: number, max?: number, coarseMax?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
+ * The prefix map has its own cap. A new prefix past that cap is refused.
+ * Evicting an under-limit key clears that key's count.
+ * @param {{ windowMs?: number, max?: number, coarseMax?: number, coarseMaxEntries?: number, maxEntries?: number, clock?: () => number, sweepMs?: number }} [options]
  */
 export function createRateLimiter(options = {}) {
   const windowMs = Number.isInteger(options.windowMs) && options.windowMs > 0 ? options.windowMs : DEFAULT_WINDOW_MS;
@@ -370,14 +450,17 @@ export function createRateLimiter(options = {}) {
   const coarseMax = Number.isInteger(options.coarseMax) && options.coarseMax > 0
     ? options.coarseMax
     : max * COARSE_LIMIT_FACTOR;
+  const coarseMaxEntries = Number.isInteger(options.coarseMaxEntries) && options.coarseMaxEntries > 0
+    ? options.coarseMaxEntries
+    : DEFAULT_COARSE_MAX_ENTRIES;
   const maxEntries = Number.isInteger(options.maxEntries) && options.maxEntries > 0
     ? options.maxEntries
     : DEFAULT_MAX_ENTRIES;
   const clock = typeof options.clock === "function" ? options.clock : Date.now;
   const sweepMs = Number.isInteger(options.sweepMs) && options.sweepMs > 0 ? options.sweepMs : DEFAULT_SWEEP_MS;
-  const hits = new Map();
-  const coarseHits = new Map();
-  const idle = new Map();
+  const hits = createTouchMap();
+  const coarseHits = createTouchMap();
+  const idle = createTouchMap();
 
   const remember = (map, id, fresh, atCap) => {
     if (map.has(id)) map.delete(id);
@@ -449,6 +532,8 @@ export function createRateLimiter(options = {}) {
     timer,
     sweep,
     size: () => hits.size,
+    coarseSize: () => coarseHits.size,
+    touchCount: () => hits.touches + coarseHits.touches + idle.touches,
     close() {
       clearInterval(timer);
     },
@@ -463,6 +548,9 @@ export function createRateLimiter(options = {}) {
       const coarse = coarseBucket(id);
       let coarseLive = null;
       if (coarse) {
+        if (!coarseHits.has(coarse) && coarseHits.size >= coarseMaxEntries) {
+          return retryAfter([], now, windowMs);
+        }
         coarseLive = liveStamps(coarseHits, coarse, now, windowMs);
         if (coarseLive.length >= coarseMax) {
           remember(coarseHits, coarse, coarseLive, false);
@@ -732,10 +820,12 @@ export function createReadApi(options = {}) {
     windowMs: config.windowMs,
     max: rateMax,
     coarseMax: config.coarseMax,
+    coarseMaxEntries: config.coarseMaxEntries,
     maxEntries: config.maxEntries,
     clock,
     sweepMs: config.sweepMs,
   });
+  const configUnavailable = options.store?.configAvailable === false;
   const breakerFailures = Number.isInteger(config.breakerFailures) && config.breakerFailures > 0
     ? config.breakerFailures
     : DEFAULT_BREAKER_FAILURES;
@@ -747,6 +837,7 @@ export function createReadApi(options = {}) {
     : (line) => {
       console.error(line);
     };
+  if (configUnavailable) log("points_read config_unavailable");
   const breaker = createBreaker(breakerFailures, breakerCooldownMs, clock, () => {
     log("points_read breaker_open");
   });
@@ -823,6 +914,10 @@ export function createReadApi(options = {}) {
     const pathname = String(input?.path || "/").replace(/\/+$/, "") || "/";
     const query = input?.query ?? {};
     const route = routeOf(pathname);
+    if (configUnavailable) return finish(input, fail(503, "config_unavailable", input));
+    if (headerTooLong(input, hops, { cloudflareIngress })) {
+      return finish(input, fail(400, "header_too_long", input));
+    }
     if (method === "OPTIONS" && route && input?.duplicateQuery !== true) {
       return result(204, null, input, { allow: ALLOW });
     }

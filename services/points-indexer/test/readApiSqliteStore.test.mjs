@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ESCROW, ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { openIndexer } from "../src/indexer.mjs";
 import { createReadApi } from "../src/readApi.mjs";
-import { createReadApiSqliteStore } from "../src/readApiSqliteStore.mjs";
+import { createReadApiSqliteStore, resolveReadConfigPaths } from "../src/readApiSqliteStore.mjs";
 import { account, createdLog, creditCandidate } from "./support.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
+const SEPOLIA_FILE = fileURLToPath(new URL("../../../config/reputation/sepolia.json", import.meta.url));
+const DOCKER_FILE = fileURLToPath(new URL("../Dockerfile", import.meta.url));
 const ADAPTER_SOURCE = fileURLToPath(new URL("../src/readApiSqliteStore.mjs", import.meta.url));
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 const PAGE_WALLET = "0x00000000000000000000000000000000000000a1";
@@ -199,12 +203,90 @@ function insertCommitted(db, row) {
 }
 
 describe("points read sqlite adapter", { concurrency: false }, () => {
+  it("loads the notice file from an /app layout and does not read it again", () => {
+    const imagePaths = resolveReadConfigPaths(pathToFileURL("/app/src/readApiSqliteStore.mjs"));
+    assert.equal(imagePaths.points, "/app/config/points.json");
+    assert.equal(imagePaths.notice, "/app/config/reputation/sepolia.json");
+    const docker = readFileSync(DOCKER_FILE, "utf8");
+    assert.match(docker, /COPY config\/reputation\/sepolia\.json \.\/config\/reputation\/sepolia\.json/);
+    assert.equal(existsSync(fileURLToPath(new URL("../config/reputation/sepolia.json", import.meta.url))), false);
+    const root = mkdtempSync(join(tmpdir(), "abv-app-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      mkdirSync(join(root, "config", "reputation"), { recursive: true });
+      copyFileSync(POINTS_FILE, join(root, "config", "points.json"));
+      copyFileSync(SEPOLIA_FILE, join(root, "config", "reputation", "sepolia.json"));
+      const paths = resolveReadConfigPaths(pathToFileURL(join(root, "src", "readApiSqliteStore.mjs")));
+      assert.equal(paths.notice, join(root, "config", "reputation", "sepolia.json"));
+      let reads = 0;
+      const store = createReadApiSqliteStore({
+        db: () => null,
+        configPaths: {
+          points: paths.points,
+          notice: paths.notice,
+          noticeFallback: join(root, "missing-fallback.json"),
+        },
+        readFile(filePath, encoding) {
+          reads += 1;
+          return readFileSync(filePath, encoding);
+        },
+      });
+      assert.equal(store.configAvailable, true);
+      const config = store.getConfig();
+      assert.equal(config.legal_notice_url, "");
+      const used = reads;
+      assert.equal(store.getConfig(), config);
+      assert.equal(reads, used);
+      writeFileSync(paths.notice, JSON.stringify({ disclaimer_links: { legal_notice_url: "https://notice.invalid/other" } }));
+      assert.equal(store.getConfig().legal_notice_url, "");
+      assert.equal(reads, used);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a missing or malformed read config unavailable without retrying the disk", () => {
+    const root = mkdtempSync(join(tmpdir(), "abv-config-"));
+    try {
+      const points = join(root, "points.json");
+      const notice = join(root, "sepolia.json");
+      writeFileSync(points, "{");
+      writeFileSync(notice, "{}");
+      let reads = 0;
+      const malformed = createReadApiSqliteStore({
+        db: () => null,
+        configPaths: { points, notice, noticeFallback: join(root, "nope.json") },
+        readFile(filePath, encoding) {
+          reads += 1;
+          return readFileSync(filePath, encoding);
+        },
+      });
+      assert.equal(malformed.configAvailable, false);
+      assert.throws(() => malformed.getConfig(), /config_unavailable/);
+      const used = reads;
+      assert.throws(() => malformed.getConfig(), /config_unavailable/);
+      assert.equal(reads, used);
+      const missing = createReadApiSqliteStore({
+        db: () => null,
+        configPaths: {
+          points: join(root, "absent-points.json"),
+          notice: join(root, "absent-notice.json"),
+          noticeFallback: join(root, "absent-fallback.json"),
+        },
+      });
+      assert.equal(missing.configAvailable, false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads draft config from the points file", () => {
     const file = JSON.parse(readFileSync(POINTS_FILE, "utf8"));
     const store = createReadApiSqliteStore({ db: () => null });
     const config = store.getConfig();
     assert.equal(config.rule_version, null);
     assert.equal(config.legal_notice_url, "");
+    assert.equal(store.getConfig(), config);
     assert.deepEqual(config.weights, file.weights);
     assert.deepEqual(config.gates, file.gates);
     assert.ok(Object.values(config.weights).every((value) => value === null));
