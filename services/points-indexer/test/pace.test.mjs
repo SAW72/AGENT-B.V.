@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { HttpRequestError, RpcRequestError } from "viem";
 import { baseSepolia } from "viem/chains";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
+import { readRpcNotBefore } from "../src/indexer.mjs";
 import {
   DEFAULT_ESCROW_ADDRESS,
   DEFAULT_HTTP_TIMEOUT_MS,
@@ -41,6 +42,9 @@ function fakeClock(start = 0) {
       return current;
     },
     sleeps,
+    step(ms) {
+      current += ms;
+    },
     async sleep(ms) {
       sleeps.push(ms);
       current += ms;
@@ -1508,6 +1512,137 @@ describe("getLogs pace", () => {
       console.error = original;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("N1b stores a chainId Retry-After when no database file exists yet", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "abv-n1b-"));
+    const path = join(dir, "ledger.sqlite");
+    const startAt = 1_700_000_000_000;
+    const clock = fakeClock(startAt);
+    const calls = [];
+    let blocked = true;
+    const original = console.error;
+    console.error = () => {};
+    const rpc = withCode({
+      async chainId() {
+        calls.push(clock.now());
+        if (blocked) {
+          blocked = false;
+          throw httpError(429, { details: "slow down", retryAfter: "600" });
+        }
+        return 84532;
+      },
+      async finalizedBlockNumber() {
+        return ESCROW_START_BLOCK + 9;
+      },
+      async getLogs() {
+        return [];
+      },
+    });
+    const first = await start({
+      once: true,
+      paceNow: clock.now,
+      wallNow: clock.now,
+      sleep: clock.sleep,
+      now: () => 1,
+      env: env({ POINTS_DB_PATH: path }),
+      rpc,
+    });
+    try {
+      assert.equal(first.ingested.endedEarly, true);
+      assert.equal(first.ingested.reason, "rate_limited");
+      assert.equal(first.indexer, null);
+      assert.equal(readRpcNotBefore(path), startAt + 600_000);
+      await first.stop();
+      clock.step(60_000);
+      assert.equal(clock.now(), startAt + 90_000);
+      const second = await start({
+        once: true,
+        paceNow: clock.now,
+        wallNow: clock.now,
+        sleep: clock.sleep,
+        now: () => 1,
+        env: env({ POINTS_DB_PATH: path }),
+        rpc,
+      });
+      try {
+        assert.equal(calls[1], startAt + 600_000);
+        assert.equal(second.ingested.endedEarly, false);
+        assert.equal(clock.sleeps.includes(510_000), true);
+      } finally {
+        await second.stop();
+      }
+    } finally {
+      console.error = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function clockStepCarry(delta) {
+    const warnings = [];
+    const onWarning = (warning) => warnings.push(warning.name);
+    process.on("warning", onWarning);
+    const delays = [];
+    const originalTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms, ...args) => {
+      const delay = Number(ms);
+      if (Number.isFinite(delay)) delays.push(delay);
+      if (Number.isFinite(delay) && delay > 2 ** 31 - 1) return originalTimeout(fn, delay, ...args);
+      return originalTimeout(fn, 0, ...args);
+    };
+    const startAt = 1_700_000_000_000;
+    let current = startAt;
+    const clock = () => current;
+    let chainCalls = 0;
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const running = await start({
+        once: true,
+        paceNow: clock,
+        wallNow: clock,
+        now: () => 1,
+        env: env(),
+        rpc: withCode({
+          async chainId() {
+            chainCalls += 1;
+            if (chainCalls === 1) throw httpError(429, { details: "slow down", retryAfter: "600" });
+            return 84532;
+          },
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK + 9;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      try {
+        assert.equal(running.ingested.reason, "rate_limited");
+        const mark = delays.length;
+        current += delta;
+        await running.pass();
+        const stepped = delays.slice(mark);
+        assert.ok(stepped.length > 0);
+        assert.ok(stepped.every((delay) => delay <= MAX_CARRY_MS));
+        assert.equal(stepped.includes(MAX_CARRY_MS), true);
+        assert.equal(warnings.includes("TimeoutOverflowWarning"), false);
+      } finally {
+        await running.stop();
+      }
+    } finally {
+      console.error = original;
+      globalThis.setTimeout = originalTimeout;
+      process.off("warning", onWarning);
+    }
+  }
+
+  it("RT8 caps the carried sleep when the clock steps back one hour", async () => {
+    await clockStepCarry(-60 * 60 * 1000);
+  });
+
+  it("RT9 caps the carried sleep when the clock steps back 30 days", async () => {
+    await clockStepCarry(-30 * 24 * 60 * 60 * 1000);
   });
 
   it("cancels a carried sleep when stop is called", async () => {

@@ -64,7 +64,10 @@ export function createRateLimiter(options) {
   return {
     async wait() {
       const current = now();
-      if (armed && current < nextAt) await sleep(nextAt - current);
+      if (armed && current < nextAt) {
+        // A backward clock step must not arm a timer past the carry cap.
+        await sleep(Math.min(nextAt - current, MAX_CARRY_MS));
+      }
       nextAt = now() + minGapMs + jitterMs(gapJitterMs, random);
       armed = true;
     },

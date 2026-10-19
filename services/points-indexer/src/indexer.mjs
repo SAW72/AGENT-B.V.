@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { attributeLogs, normalizeLog } from "./attribute.mjs";
@@ -181,21 +182,28 @@ export function readRpcNotBefore(dbPath) {
 }
 
 /**
- * Write or clear the stored RPC deadline. A missing file is left missing.
+ * Write or clear the stored RPC deadline.
+ * A missing file is created when a deadline is stored, so a fresh deploy
+ * keeps a startup wait across a restart. Clearing a missing file does nothing.
  * @param {string} dbPath
  * @param {number | null} epochMs
  */
 export function writeRpcNotBefore(dbPath, epochMs) {
-  if (dbPath == null || dbPath === ":memory:" || !existsSync(dbPath)) return;
+  if (dbPath == null || dbPath === ":memory:") return;
+  if (epochMs != null && !Number.isSafeInteger(epochMs)) return;
+  if (!existsSync(dbPath)) {
+    if (epochMs == null) return;
+    mkdirSync(dirname(dbPath), { recursive: true });
+  }
   let db;
   try {
     db = new DatabaseSync(dbPath);
     db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     if (epochMs == null) {
       db.prepare("DELETE FROM meta WHERE key = ?").run(RPC_NOT_BEFORE_KEY);
       return;
     }
-    if (!Number.isSafeInteger(epochMs)) return;
     db.prepare(
       "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(RPC_NOT_BEFORE_KEY, String(epochMs));

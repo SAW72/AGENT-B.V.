@@ -42,11 +42,13 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const URL_PATTERN = /(?:https?|wss?):\/\/\S+/gi;
 const ENCODED_URL_PATTERN = /(?:https?|wss?)%3a%2f%2f\S+/gi;
-const QUERY_SECRET_PATTERN = /([?&](?:api[_-]?key|access[_-]?token|token|secret|key)=)[^&\s#]*/gi;
-const ASSIGN_SECRET_PATTERN = /((?:["']?(?:api[_-]?key|x-api-key|access[_-]?token|client[_-]?secret|access[_-]?key)["']?\s*[=:]\s*["']?))[^\s&"',}]*/gi;
+const QUERY_SECRET_PATTERN = /([?&](?:api[_-]?key|x-api-key|access[_-]?token|client[_-]?secret|access[_-]?key|token|secret|auth|key)=)[^&\s#]*/gi;
+const ASSIGN_SECRET_PATTERN = /((?:["']?(?:api[_-]?key|x-api-key|access[_-]?token|client[_-]?secret|access[_-]?key|auth)["']?\s*[=:]\s*["']?))[^\s&"',}]*/gi;
 const BEARER_PATTERN = /(\bBearer\s+)[A-Za-z0-9._~+/-]{8,}/gi;
 const USERINFO_PATTERN = /[^\s/:@]+:[^\s/:@]+@/g;
-const KEY_SEGMENT_PATTERN = /\/([A-Za-z0-9_-]{16,})/g;
+const KEY_SEGMENT_PATTERN = /\/([A-Za-z0-9_.-]{8,})/g;
+const HEX32_PATTERN = /(?<![A-Za-z0-9])[0-9a-fA-F]{32}(?![A-Za-z0-9])/g;
+const BARE_KEY_PATTERN = /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])/g;
 const USER_AGENT_SAFE = /^[A-Za-z0-9 .,_+():/-]{1,128}$/;
 const GAP_MIN_MS = 100;
 const GAP_MAX_MS = 60_000;
@@ -317,11 +319,26 @@ export function errorCode(error) {
 }
 
 function keyLikeSegment(segment) {
-  return /[A-Za-z]/.test(segment) && /\d/.test(segment);
+  return segment.length >= 8 && /\d/.test(segment);
+}
+
+function collapseSplitUrls(value) {
+  let out = value;
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(/((?:https?|wss?):\/\/[^\s]*)\s+([^\s]+)/gi, (full, left, right) => {
+      if (/[./]/.test(right) || /^[A-Za-z0-9_-]{8,}$/.test(right)) return left + right;
+      return full;
+    });
+    out = out.replace(/((?:https?|wss?):)\s+(\/\/\S+)/gi, "$1$2");
+  } while (out !== prev);
+  return out;
 }
 
 function scrubUrls(value) {
-  let out = value.replace(URL_PATTERN, "[redacted-url]");
+  let out = collapseSplitUrls(value);
+  out = out.replace(URL_PATTERN, "[redacted-url]");
   out = out.replace(ENCODED_URL_PATTERN, "[redacted-url]");
   out = out.replace(QUERY_SECRET_PATTERN, "$1[redacted]");
   return out.replace(KEY_SEGMENT_PATTERN, (match, segment) => (keyLikeSegment(segment) ? "/[redacted]" : match));
@@ -336,7 +353,9 @@ export function redact(text, rpcUrl) {
   if (decoded !== out) out = scrubUrls(decoded);
   out = out.replace(ASSIGN_SECRET_PATTERN, "$1[redacted]");
   out = out.replace(BEARER_PATTERN, "$1[redacted]");
-  return out.replace(USERINFO_PATTERN, "[redacted-userinfo]@");
+  out = out.replace(USERINFO_PATTERN, "[redacted-userinfo]@");
+  out = out.replace(HEX32_PATTERN, "[redacted]");
+  return out.replace(BARE_KEY_PATTERN, "[redacted]");
 }
 
 /**
@@ -659,7 +678,7 @@ export async function start(options = {}) {
     if (carryUntil != null) {
       const remain = carryUntil - wallNow();
       if (remain > 0) {
-        const outcome = await carrySleep(remain);
+        const outcome = await carrySleep(Math.min(remain, MAX_CARRY_MS));
         if (stopped || outcome === "cancelled") {
           return { skipped: true, stopped: true, skippedTicks, inserted: 0, rebuilds: 0, ranges: [] };
         }

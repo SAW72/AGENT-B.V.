@@ -880,6 +880,34 @@ describe("process entry", () => {
       assert.equal(userinfo.includes("QUERYSECRET123456"), false);
       const doubled = redact("see https%253A%252F%252Frpc.invalid%252Fv2%252FENC_SECRET_KEY", "");
       assert.equal(doubled.includes("ENC_SECRET_KEY"), false);
+      const authValue = "auth".repeat(2) + "91";
+      const authLine = redact(`header ?auth=${authValue} next`, "");
+      assert.equal(authLine.includes(authValue), false);
+      assert.match(authLine, /\?auth=\[redacted\]/);
+      const bareKey = "bare".repeat(3) + "91".repeat(2);
+      const bareLine = redact(`invalid api key ${bareKey} end`, "");
+      assert.equal(bareLine.includes(bareKey), false);
+      assert.match(bareLine, /invalid api key \[redacted\] end/);
+      const hexKey = "ab12".repeat(8);
+      const hexLine = redact(`project ${hexKey} end`, "");
+      assert.equal(hexKey.length, 32);
+      assert.equal(hexLine.includes(hexKey), false);
+      assert.match(hexLine, /project \[redacted\] end/);
+      const shortKey = "k7" + "m9".repeat(3);
+      const shortLine = redact(`path /v2/${shortKey} end`, "");
+      assert.equal(shortKey.length, 8);
+      assert.equal(shortLine.includes(shortKey), false);
+      assert.match(shortLine, /path \/v2\/\[redacted\] end/);
+      const dotted = redact(`path /v2/${shortKey}.tail end`, "");
+      assert.equal(dotted.includes(shortKey), false);
+      assert.equal(dotted.includes(".tail"), false);
+      const pathKey = "split".repeat(2) + "12";
+      const spaced = redact(`see https://rpc.invalid /v2/${pathKey} end`, "");
+      assert.equal(spaced.includes(pathKey), false);
+      assert.equal(spaced.includes("https://"), false);
+      assert.match(spaced, /see \[redacted-url\] end/);
+      const kept = redact("path /v2/ethereum end", "");
+      assert.equal(kept.includes("ethereum"), true);
       running = await start({
         serve: true,
         port: 0,
