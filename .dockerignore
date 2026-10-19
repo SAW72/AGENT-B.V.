@@ -6,9 +6,9 @@
 **/coverage
 **/.DS_Store
 services/points-indexer/test
-.env
-.env.*
-*.pem
-.npmrc
-contracts/broadcast
-claim-relayer/data
+**/.env
+**/.env.*
+**/*.pem
+**/.npmrc
+**/contracts/broadcast
+**/claim-relayer/data

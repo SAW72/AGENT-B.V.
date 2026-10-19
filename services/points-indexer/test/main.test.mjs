@@ -1502,6 +1502,110 @@ describe("process entry", () => {
     }
   });
 
+  it("applies POINTS_HEALTH_FRESHNESS_POLLS when it is not the default of 3", async () => {
+    const dir = dbDir();
+    let clock = 5_000_000;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        once: true,
+        port: 0,
+        now: () => clock,
+        healthCacheMs: 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "1000",
+          POINTS_LOG_RANGE: "10",
+          POINTS_HEALTH_FRESHNESS_POLLS: "1",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      const fresh = await fetch(running.healthUrl);
+      assert.equal(fresh.status, 200);
+      await fresh.text();
+      clock += 1_000;
+      const edge = await fetch(running.healthUrl);
+      assert.equal(edge.status, 200);
+      await edge.text();
+      clock += 1;
+      const stale = await fetch(running.healthUrl);
+      const body = await stale.json();
+      assert.equal(stale.status, 503);
+      assert.equal(body.ok, false);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the error label on a 503 while the next pass is still running", async () => {
+    const dir = dbDir();
+    let phase = "fail";
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markEntered;
+    const entered = new Promise((resolve) => { markEntered = resolve; });
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        healthCacheMs: 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            if (phase === "fail") throw new Error("boom");
+            markEntered();
+            await gate;
+            return [];
+          },
+        }),
+      });
+      assert.equal(running.ingested.error, "rpc_error");
+      phase = "block";
+      const pending = running.pass();
+      await entered;
+      const mid = await fetch(running.healthUrl);
+      const body = await mid.json();
+      assert.equal(mid.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rpc_error");
+      release();
+      await pending;
+    } finally {
+      console.error = original;
+      if (release) release();
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reports ledger_error, config_error, and range_error on /health", async () => {
     const cases = [
       {
