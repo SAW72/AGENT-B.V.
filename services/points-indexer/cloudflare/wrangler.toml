@@ -1,0 +1,46 @@
+# Agent-B.V. points Worker. Placeholders only.
+# Spencer deploys this himself. Nothing in this file is an account id,
+# a secret, or an RPC URL.
+#
+# BASE_SEPOLIA_RPC_URL is intentionally absent. Spencer sets it on his
+# machine: `npx wrangler secret put BASE_SEPOLIA_RPC_URL` for a keyed
+# endpoint, or a plain var for the public Base Sepolia endpoint.
+# POINTS_ENABLED is intentionally absent. Leave it unset until the
+# Verifier gives GO. While it is unset, /v1/points/* returns 503.
+
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "agent-bv-points"
+main = "src/index.ts"
+# Newest date this pinned Wrangler workerd binary accepts (4.124.0).
+compatibility_date = "2026-08-22"
+compatibility_flags = ["nodejs_compat"]
+upload_source_maps = true
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+CHAIN_ID = "84532"
+POINTS_LOG_RANGE = "200"
+POINTS_MAX_WINDOWS_PER_RUN = "40"
+POINTS_POLL_MS = "15000"
+POINTS_CORS_ORIGINS = ""
+POINTS_READ_RATE_PER_MINUTE = "60"
+# Empty here. Test runs set it to 1 so sleeps do not wait on the wall clock.
+POINTS_FAST_PACE = ""
+
+[[durable_objects.bindings]]
+name = "POINTS"
+class_name = "PointsObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PointsObject"]
