@@ -21,6 +21,13 @@ import {
 } from "./pace.mjs";
 import { pointsEnabled } from "./pointsFlag.mjs";
 import { openReadConnection } from "./readConnection.mjs";
+import {
+  clientIp,
+  createFallbackLimiter,
+  parseProxyHops,
+  parseRatePerMinute,
+  reflectedOrigin,
+} from "./readEdge.mjs";
 
 export const DEFAULT_RPC_URL = "https://sepolia.base.org";
 export const DEFAULT_ESCROW_ADDRESS = "0x3d660502D75f1e97b08c110255921b437A3C4C42";
@@ -628,7 +635,7 @@ function paceFailure(result) {
  * a Retry-After that was longer than the cap. `sleep` defaults to a real timer.
  * POINTS_MAX_WINDOWS_PER_RUN limits windows inside one pass. The next pass
  * continues. A reported finalized head behind the stored head scans nothing.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, fallbackNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
@@ -992,8 +999,11 @@ export async function start(options = {}) {
   let readDb = null;
   let configFailed = false;
   let configGate = null;
-  let moduleFreeHits = null;
   const env = options.env ?? process.env;
+  const fallbackLimiter = createFallbackLimiter({
+    clock: typeof options.fallbackNow === "function" ? options.fallbackNow : Date.now,
+    rate: () => parseRatePerMinute(env?.POINTS_READ_RATE_PER_MINUTE),
+  });
 
   function readDatabase() {
     if (!indexer) return null;
@@ -1044,40 +1054,14 @@ export async function start(options = {}) {
     return import("./readApi.mjs");
   }
 
-  function moduleFreeRate() {
-    const raw = env?.POINTS_READ_RATE_PER_MINUTE;
-    if (raw == null || String(raw).trim() === "") return 60;
-    const text = String(raw).trim();
-    if (!/^[1-9][0-9]*$/.test(text)) return 60;
-    const parsed = Number(text);
-    return Number.isSafeInteger(parsed) ? parsed : 60;
-  }
-
-  function moduleFreeAllow(key) {
-    const max = moduleFreeRate();
-    const now = Date.now();
-    const windowMs = 60_000;
-    const id = key || "unknown";
-    if (!moduleFreeHits) moduleFreeHits = new Map();
-    const live = (moduleFreeHits.get(id) ?? []).filter((at) => now - at < windowMs);
-    if (live.length >= max) {
-      moduleFreeHits.set(id, live);
-      return {
-        ok: false,
-        retryAfterSec: Math.max(1, Math.ceil((live[0] + windowMs - now) / 1000)),
-      };
-    }
-    if (!moduleFreeHits.has(id) && moduleFreeHits.size >= 16384) {
-      return { ok: false, retryAfterSec: 60 };
-    }
-    live.push(now);
-    moduleFreeHits.set(id, live);
-    return { ok: true };
-  }
-
   function replyConfigUnavailableWithoutModule(req, res) {
-    const headers = moduleFreeCorsHeaders(req, env);
-    const decision = moduleFreeAllow(req.socket?.remoteAddress);
+    const headers = edgeCorsHeaders(req, env);
+    const decision = fallbackLimiter.allow(clientIp({
+      remoteAddress: req.socket?.remoteAddress,
+      headers: req.headers,
+    }, parseProxyHops(env?.POINTS_TRUSTED_PROXY_HOPS), {
+      cloudflareIngress: env?.POINTS_CLOUDFLARE_INGRESS === "true",
+    }));
     if (!decision.ok) {
       writeJson(res, 429, { ok: false, error: "rate_limited" }, {
         ...headers,
@@ -1106,7 +1090,7 @@ export async function start(options = {}) {
         limiter: mod.createRateLimiter({ max: settings.ratePerMinute }),
       };
     }
-    const headers = await readCorsHeaders(req, env);
+    const headers = edgeCorsHeaders(req, env);
     const decision = configGate.limiter.allow(mod.clientIp({
       remoteAddress: req.socket?.remoteAddress,
       headers: req.headers,
@@ -1237,79 +1221,15 @@ export async function start(options = {}) {
 }
 
 const READ_ALLOW = "GET, HEAD, OPTIONS";
-const EXACT_HTTPS_ORIGIN =
-  /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-function exactHttpsOrigin(raw) {
-  const original = String(raw ?? "").trim();
-  if (!original || original.includes("*") || original.toLowerCase() === "null") return null;
-  const stripped = original.endsWith("/") ? original.slice(0, -1) : original;
-  const separator = stripped.indexOf("://");
-  if (separator <= 0) return null;
-  const scheme = stripped.slice(0, separator).toLowerCase();
-  if (scheme !== "https") return null;
-  const rest = stripped.slice(separator + 3);
-  if (!rest || rest.includes("@")) return null;
-  const tailAt = rest.search(/[/?#]/);
-  const hostRaw = tailAt === -1 ? rest : rest.slice(0, tailAt);
-  const tail = tailAt === -1 ? "" : rest.slice(tailAt);
-  if (tail || hostRaw.includes(":")) return null;
-  const entry = `https://${hostRaw.toLowerCase()}`;
-  if (!EXACT_HTTPS_ORIGIN.test(entry)) return null;
-  try {
-    const url = new URL(entry);
-    if (
-      url.origin !== entry
-      || url.protocol !== "https:"
-      || url.username
-      || url.password
-      || url.port
-      || url.search
-      || url.hash
-      || (url.pathname !== "/" && url.pathname !== "")
-    ) return null;
-  } catch {
-    return null;
-  }
-  return entry;
-}
-
-function moduleFreeCorsHeaders(req, env) {
+function edgeCorsHeaders(req, env) {
   const headers = {
     "access-control-allow-headers": "content-type",
     "access-control-allow-methods": READ_ALLOW,
     vary: "Origin",
   };
-  const rawList = env?.POINTS_CORS_ORIGINS;
-  if (rawList == null || String(rawList).trim() === "") return headers;
-  const allowed = new Set();
-  for (const part of String(rawList).split(",")) {
-    const parsed = exactHttpsOrigin(part);
-    if (parsed) allowed.add(parsed);
-  }
-  const origin = exactHttpsOrigin(req?.headers?.origin);
-  if (origin && allowed.has(origin)) headers["access-control-allow-origin"] = origin;
-  return headers;
-}
-
-async function readCorsHeaders(req, env) {
-  const headers = {
-    "access-control-allow-headers": "content-type",
-    "access-control-allow-methods": READ_ALLOW,
-    vary: "Origin",
-  };
-  try {
-    const mod = await import("./readApi.mjs");
-    const origins = new Set(mod.parseCorsList(env?.POINTS_CORS_ORIGINS));
-    const origin = req?.headers?.origin;
-    if (typeof origin !== "string") return headers;
-    const parsed = mod.parseExactHttpsOrigin(origin);
-    if (parsed.ok && origins.has(parsed.origin)) {
-      headers["access-control-allow-origin"] = parsed.origin;
-    }
-  } catch {
-    // A config failure still answers. Missing CORS helpers omit the origin.
-  }
+  const origin = reflectedOrigin(env?.POINTS_CORS_ORIGINS, req?.headers?.origin);
+  if (origin) headers["access-control-allow-origin"] = origin;
   return headers;
 }
 
