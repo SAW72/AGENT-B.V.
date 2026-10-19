@@ -3,10 +3,21 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { HttpRequestError } from "viem";
 import { ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { openIndexer } from "../src/indexer.mjs";
 import { start } from "../src/main.mjs";
 import { createdLog, loadFixture } from "./support.mjs";
+
+function httpError(status) {
+  return new HttpRequestError({
+    body: { method: "eth_getBlockByNumber" },
+    details: "slow down",
+    headers: new Headers(),
+    status,
+    url: "https://rpc.invalid",
+  });
+}
 
 function withCode(rpc) {
   return {
@@ -498,6 +509,135 @@ describe("ledger rebuild on a pass", () => {
       reference.close();
       await second.stop();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds once after a crossing query throws on a pass that crosses nothing", async () => {
+    let head = ESCROW_START_BLOCK - 1;
+    let throwOnce = false;
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      ...instantPace(),
+      now: () => 5_000_000,
+      env: env(),
+      onIndexer(indexer) {
+        const prepare = indexer.db.prepare.bind(indexer.db);
+        indexer.db.prepare = (sql) => {
+          const text = String(sql);
+          if (throwOnce && text.includes("raw_logs") && text.includes("block_number >")) {
+            throwOnce = false;
+            throw new Error("crossed query failed");
+          }
+          return prepare(sql);
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          return head;
+        },
+        async getLogs() {
+          return [];
+        },
+      }),
+    });
+    try {
+      assert.equal(running.ingested.rebuilds, 0);
+      const stored = running.indexer.finalizedBlock;
+      throwOnce = true;
+      head = ESCROW_START_BLOCK + 20;
+      await assert.rejects(() => running.pass(), /crossed query failed/);
+      assert.equal(running.indexer.finalizedBlock, stored);
+      let response = await fetch(running.healthUrl);
+      let body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rebuild_error");
+      const healed = await running.pass();
+      assert.equal(healed.rebuilds, 1);
+      assert.equal(running.indexer.finalizedBlock, head);
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.error, undefined);
+      const quiet = await running.pass();
+      assert.equal(quiet.rebuilds, 0);
+      response = await fetch(running.healthUrl);
+      assert.equal(response.status, 200);
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("keeps rebuild_error when a later head read is rate limited", async () => {
+    const block = ESCROW_START_BLOCK + 4;
+    let head = ESCROW_START_BLOCK - 1;
+    let failRebuild = true;
+    let limitHead = false;
+    const log = createdLog({
+      escrowId: `0x${"c9".repeat(32)}`,
+      payer: "0x1111111111111111111111111111111111111111",
+      payee: "0x2222222222222222222222222222222222222222",
+      expiresAt: 100,
+      blockNumber: block,
+      logIndex: 5,
+      txHash: `0x${"d0".repeat(32)}`,
+      timestamp: 21_700 * 86400,
+    });
+    const running = await start({
+      once: true,
+      serve: true,
+      port: 0,
+      ...instantPace(),
+      now: () => 5_000_000,
+      env: env({ POINTS_LOG_RANGE: "10" }),
+      onIndexer(indexer) {
+        const original = indexer.rebuild.bind(indexer);
+        indexer.rebuild = () => {
+          if (failRebuild) throw new Error("rebuild failed");
+          return original();
+        };
+      },
+      rpc: withCode({
+        async finalizedBlockNumber() {
+          if (limitHead) throw httpError(429);
+          return head;
+        },
+        async getLogs(args) {
+          if (args.fromBlock <= block && args.toBlock >= block) return [log];
+          return [];
+        },
+      }),
+    });
+    try {
+      head = block;
+      await assert.rejects(() => running.pass(), /rebuild failed/);
+      let response = await fetch(running.healthUrl);
+      let body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.error, "rebuild_error");
+      limitHead = true;
+      const limited = await running.pass();
+      assert.equal(limited.endedEarly, true);
+      assert.equal(limited.reason, "rate_limited");
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rebuild_error");
+      limitHead = false;
+      failRebuild = false;
+      const healed = await running.pass();
+      assert.equal(healed.rebuilds, 1);
+      response = await fetch(running.healthUrl);
+      body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.error, undefined);
+    } finally {
+      await running.stop();
     }
   });
 });

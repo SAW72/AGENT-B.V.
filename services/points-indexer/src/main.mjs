@@ -682,9 +682,20 @@ export async function start(options = {}) {
     });
   }
 
+  function assignLastError(reason) {
+    if (
+      reason === "rate_limited"
+      && (status.ledgerStale === true || status.lastError === "rebuild_error")
+    ) {
+      status.lastError = "rebuild_error";
+      return;
+    }
+    status.lastError = reason;
+  }
+
   function endedEarly(reason) {
     status.earlyReason = reason;
-    status.lastError = reason;
+    assignLastError(reason);
     console.error(`${reason} pass_ended_early`);
     return {
       ok: true,
@@ -841,6 +852,7 @@ export async function start(options = {}) {
     try {
       crossed = storedLogCrossedByHead(indexer, previousHead, head);
     } catch (error) {
+      dirty = true;
       status.ledgerStale = true;
       status.lastError = "rebuild_error";
       const wrapped = error instanceof Error ? error : new Error("rebuild failed");
@@ -872,7 +884,7 @@ export async function start(options = {}) {
     const scannedThrough = indexer.lastScannedBlock();
     if (earlyReason) {
       status.earlyReason = earlyReason;
-      status.lastError = earlyReason;
+      assignLastError(earlyReason);
       console.error(`${earlyReason} pass_ended_early`);
       return {
         ok: true,
@@ -912,7 +924,7 @@ export async function start(options = {}) {
       return await runOnce();
     } catch (error) {
       status.earlyReason = null;
-      status.lastError = errorCode(error);
+      assignLastError(errorCode(error));
       throw error;
     } finally {
       inFlight = false;
