@@ -129,7 +129,8 @@ async function enabledHealth(request: Request, env: Env): Promise<Response> {
   if (!address) return json(400, { ok: false, error: "client_address_required" });
   const limited = await charge(limiterOf(env, "POINTS_HEALTH_LIMITER"), address);
   if (limited) return limited;
-  const fast = env.POINTS_FAST_PACE === "1";
+  // wrangler types the toml default as the literal "". Tests set the same var to 1.
+  const fast = String(env.POINTS_FAST_PACE) === "1";
   const cacheKey = healthCacheKey();
   if (!fast) {
     const hit = await caches.default.match(cacheKey);
