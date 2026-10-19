@@ -183,7 +183,16 @@ export async function prepareLiveClaim(args) {
     }), { nonceClaimed: true, nonceKey: key });
   }
 
-  const gasWei = gasWeiFor(BigInt(simulation.gasUsed ?? 0), valueWei, BigInt(config.abuse.gasPriceWei));
+  const estimatedGas = BigInt(simulation.gasUsed ?? 0);
+  const maxGas = BigInt(config.abuse?.maxGas ?? 500_000);
+  if (estimatedGas > maxGas) {
+    throw Object.assign(
+      httpError(429, "gas_cap", { field: "gas", txHash: null, dryRun: false, retryAfter: 1 }),
+      { nonceClaimed: true, nonceKey: key },
+    );
+  }
+
+  const gasWei = gasWeiFor(estimatedGas, valueWei, BigInt(config.abuse.gasPriceWei));
   try {
     await abuse.consume({
       sender: intent.sender,

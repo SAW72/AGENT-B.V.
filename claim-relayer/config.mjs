@@ -234,17 +234,28 @@ function parseWei(value, fallback, error) {
 
 /**
  * Safe defaults. Counts are per window, not authentication.
- * sender: 5 / minute. IP: 30 / minute. escrow: 8 / day. gas: 0.01 ETH / day at 1 gwei.
+ * sender: 5 / minute. IP: 30 / minute. global: 60 / minute.
+ * escrow: 8 / day. gas budget: 0.01 ETH / day at 1 gwei.
+ * Per-transaction caps (Base Sepolia, never raised automatically):
+ * 500_000 gas, 5 gwei maxFeePerGas, 2 gwei maxPriorityFeePerGas.
  */
 export function loadAbuseLimits(env) {
   return {
     senderLimit: positiveInt(env.CLAIM_RATE_SENDER, 5),
     ipLimit: positiveInt(env.CLAIM_RATE_IP, 30),
+    globalLimit: positiveInt(env.CLAIM_RATE_GLOBAL, 60),
     windowMs: positiveInt(env.CLAIM_RATE_WINDOW_SEC, 60) * 1000,
     escrowCap: positiveInt(env.CLAIM_ESCROW_CAP, 8),
     escrowWindowMs: positiveInt(env.CLAIM_ESCROW_WINDOW_SEC, 86400) * 1000,
     dailyGasBudgetWei: parseWei(env.DAILY_GAS_BUDGET_WEI, "10000000000000000", "invalid_gas_budget").toString(),
     gasPriceWei: parseWei(env.CLAIM_GAS_PRICE_WEI, "1000000000", "invalid_gas_price").toString(),
+    maxGas: positiveInt(env.CLAIM_MAX_GAS, 500_000),
+    maxFeePerGasWei: parseWei(env.CLAIM_MAX_FEE_PER_GAS_WEI, "5000000000", "invalid_gas_cap").toString(),
+    maxPriorityFeePerGasWei: parseWei(
+      env.CLAIM_MAX_PRIORITY_FEE_WEI,
+      "2000000000",
+      "invalid_gas_cap",
+    ).toString(),
   };
 }
 

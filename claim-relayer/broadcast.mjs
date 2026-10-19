@@ -7,7 +7,7 @@
 import { createWalletClient, custom, http, keccak256 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { BASE_SEPOLIA_CHAIN_ID, BOOKED_SEPOLIA_ESCROW, httpError } from "./config.mjs";
+import { BASE_SEPOLIA_CHAIN_ID, BOOKED_SEPOLIA_ESCROW, httpError, loadAbuseLimits } from "./config.mjs";
 import { isTransientClaimError, withClaimRetry } from "./retry.mjs";
 import { extractRevertData, revertDataFrom } from "./revertData.mjs";
 
@@ -72,6 +72,26 @@ export function assertSepoliaRawTx(raw) {
   if (body.slice(start, start + 8) !== "83014a34") throw httpError(400, "wrong_chain");
 }
 
+/**
+ * Refuse before the relayer signs. Caps are never raised here.
+ * @param {{ gas?: bigint, maxFeePerGas?: bigint, maxPriorityFeePerGas?: bigint }} request
+ * @param {{ maxGas: number | string, maxFeePerGasWei: string, maxPriorityFeePerGasWei: string }} caps
+ */
+export function assertPreparedGasCaps(request, caps) {
+  const gas = request?.gas == null ? 0n : BigInt(request.gas);
+  const fee = request?.maxFeePerGas == null ? 0n : BigInt(request.maxFeePerGas);
+  const priority = request?.maxPriorityFeePerGas == null ? 0n : BigInt(request.maxPriorityFeePerGas);
+  if (gas > BigInt(caps.maxGas)) {
+    throw httpError(429, "gas_cap", { field: "gas", txHash: null, dryRun: false, retryAfter: 1 });
+  }
+  if (fee > BigInt(caps.maxFeePerGasWei)) {
+    throw httpError(429, "gas_cap", { field: "maxFeePerGas", txHash: null, dryRun: false, retryAfter: 1 });
+  }
+  if (priority > BigInt(caps.maxPriorityFeePerGasWei)) {
+    throw httpError(429, "gas_cap", { field: "maxPriorityFeePerGas", txHash: null, dryRun: false, retryAfter: 1 });
+  }
+}
+
 function assertLocalTx(tx) {
   const chainId = Number(tx?.chainId);
   if (chainId === 1 || chainId === 8453) throw httpError(400, "mainnet_refused", { chainId });
@@ -134,9 +154,10 @@ function httpRequest(rpcUrl) {
  * @param {string} [opts.privateKey]
  * @param {(args: { method: string, params?: unknown[] }) => Promise<unknown>} [opts.request]
  */
-export function createSepoliaBroadcaster({ rpcUrl, privateKey, request } = {}) {
+export function createSepoliaBroadcaster({ rpcUrl, privateKey, request, gasCaps } = {}) {
   const key = privateKey;
   const rpc = request || httpRequest(rpcUrl || DEFAULT_RPC);
+  const caps = gasCaps || loadAbuseLimits({});
 
   return {
     async send(tx) {
@@ -172,13 +193,14 @@ export function createSepoliaBroadcaster({ rpcUrl, privateKey, request } = {}) {
             },
           }),
         });
-        const request = await client.prepareTransactionRequest({
+        const prepared = await client.prepareTransactionRequest({
           chain: baseSepolia,
           to: BOOKED_SEPOLIA_ESCROW,
           data: tx.data,
           value: BigInt(tx.valueWei || "0"),
         });
-        const serialized = await client.signTransaction(request);
+        assertPreparedGasCaps(prepared, caps);
+        const serialized = await client.signTransaction(prepared);
         const signedHash = keccak256(serialized);
         const sentHash = await withClaimRetry(async () => {
           const sent = await guarded({ method: "eth_sendRawTransaction", params: [serialized] });
