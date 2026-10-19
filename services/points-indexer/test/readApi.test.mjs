@@ -1540,9 +1540,10 @@ describe("points read API", { concurrency: false }, () => {
     assert.equal(source.includes("config/reputation/sepolia.json"), true);
     const readme = readFileSync(README_FILE, "utf8");
     const section = readme.split("## Read API")[1].split("## What it stores")[0];
+    const shortName = JSON.parse(readFileSync(SEPOLIA_FILE, "utf8")).product.name;
     assert.equal(section.includes("Agent-B.V."), true);
-    assert.equal(section.includes("Agent-BV"), false);
-    assert.equal(section.includes("Agent BV"), false);
+    assert.equal(section.includes(shortName), false);
+    assert.equal(section.includes(shortName.replace("-", " ")), false);
     const main = readFileSync(MAIN_SOURCE, "utf8");
     const flag = readFileSync(FLAG_SOURCE, "utf8");
     assert.equal(main.includes("function pointsGate"), false);
