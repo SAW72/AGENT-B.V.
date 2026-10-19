@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Agent-B.V. points indexer on a SQLite Durable Object. Chain 84532 only.",
   "scripts": {
-    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.disabled.config.ts",
+    "test": "node --test test/disclaimer.test.mjs && node check-chain.mjs && vitest run --config vitest.config.ts && vitest run --config vitest.disabled.config.ts",
     "types": "wrangler types"
   },
   "dependencies": {

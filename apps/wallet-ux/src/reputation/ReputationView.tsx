@@ -245,7 +245,7 @@ function OpenItems({ links, capsAreDraft }: { links: DisclaimerLinks | null; cap
   const abuse = safeHref(links?.abuse_policy ?? null)
   const disclaimerSlots: { key: keyof DisclaimerLinks; label: string }[] = [
     { key: "master_disclaimer", label: "Master disclaimer" },
-    { key: "bvt_securities_disclaimer", label: "BVT securities disclaimer" },
+    { key: "legal_notice_url", label: "Legal notice" },
     { key: "as_is", label: "AS IS" },
     { key: "not_investment", label: "Not an investment" },
   ]

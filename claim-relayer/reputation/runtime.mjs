@@ -204,7 +204,7 @@ function disclaimerLinks(links) {
   const out = {};
   for (const key of [
     "master_disclaimer",
-    "bvt_securities_disclaimer",
+    "legal_notice_url",
     "as_is",
     "not_investment",
     "eligibility_notice",

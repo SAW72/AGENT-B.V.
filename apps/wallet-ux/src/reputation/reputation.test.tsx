@@ -235,7 +235,7 @@ describe("reputation panels", () => {
     const withLinks = structuredClone(exampleSnapshot) as ReputationSnapshot
     withLinks.balance.disclaimer.links = {
       master_disclaimer: "https://example.com/disclaimer",
-      bvt_securities_disclaimer: "https://example.com/securities",
+      legal_notice_url: "https://example.com/legal-notice",
       as_is: "https://example.com/as-is",
       not_investment: "https://example.com/not-investment",
       eligibility_notice: "https://example.com/eligibility",

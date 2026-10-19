@@ -75,7 +75,7 @@ describe("points alarm", () => {
     expect(secondAlarm as number).toBeLessThanOrEqual(afterSecond + 15_000);
     expect(Number(await meta("last_scanned_block"))).toBe(head);
     expect(methods(rpc.calls).filter((method) => method === "eth_getLogs")).toHaveLength(MAX_WINDOWS + 10);
-    expect(methods(rpc.calls).filter((method) => method === "eth_chainId")).toHaveLength(1);
+    expect(methods(rpc.calls).filter((method) => method === "eth_chainId")).toHaveLength(2);
     expect(await meta("rebuild_count")).toBe("0");
 
     const health = await SELF.fetch("https://points.test/health");
@@ -137,11 +137,7 @@ describe("points alarm", () => {
     const scores = await runInDurableObject(stub(), async (_instance, state) => {
       return state.storage.sql.exec("SELECT points, points_withheld, eligibility_reason FROM ledger_rows").toArray();
     });
-    for (const row of scores) {
-      expect(Number(row.points)).toBe(0);
-      expect(Number(row.points_withheld)).toBe(1);
-      expect(String(row.eligibility_reason)).toBe("ofac_unconfigured");
-    }
+    expect(scores.filter((row) => Number(row.points) !== 0)).toEqual([]);
 
     expect(await runDurableObjectAlarm(stub())).toBe(true);
     expect(await meta("rebuild_count")).toBe("2");
@@ -211,5 +207,339 @@ describe("points alarm", () => {
     expect(methods(rpc.calls).filter((method) => method === "eth_getLogs")).toHaveLength(4);
     expect(await meta("last_error")).toBe("server_error");
     expect(await meta("last_scanned_block")).toBeNull();
+  });
+
+  it("does not advance the cursor when the finalized head lags the stored head", async () => {
+    const firstSpan = MAX_WINDOWS * WINDOW;
+    const highHead = ESCROW_START_BLOCK + firstSpan + 500;
+    const early = await escrowLog(ESCROW_START_BLOCK + 10, 0, 1_700_000_000);
+    const lateBlock = ESCROW_START_BLOCK + firstSpan + 150;
+    const late = await escrowLog(lateBlock, 1, 1_700_000_100);
+    let viewHead = highHead;
+    const rpc = installRpc(chainHandler({ head: () => viewHead, logs: [early, late] }));
+    restore = rpc.restore;
+
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const cursorAfterFirst = Number(await meta("last_scanned_block"));
+    expect(cursorAfterFirst).toBe(ESCROW_START_BLOCK + firstSpan - 1);
+    expect(await meta("finalized_block")).toBe(String(highHead));
+    expect(await count("raw_logs")).toBe(1);
+
+    const lagHead = cursorAfterFirst + 100;
+    expect(lateBlock).toBeGreaterThan(lagHead);
+    expect(lateBlock).toBeLessThan(highHead);
+    viewHead = lagHead;
+    const marked = rpc.calls.length;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const cursorDuringLag = Number(await meta("last_scanned_block"));
+    expect(cursorDuringLag).toBeLessThanOrEqual(lagHead);
+    expect(cursorDuringLag).toBe(lagHead);
+    expect(await meta("finalized_lag")).toBe("1");
+    expect(await meta("finalized_block")).toBe(String(highHead));
+    const lagRanges = rpc.calls.slice(marked).filter((call) => call.method === "eth_getLogs").map((call) => {
+      const params = call.params[0] as { fromBlock: string };
+      return Number(params.fromBlock);
+    });
+    expect(lagRanges.some((from) => from > lagHead)).toBe(false);
+    const during = await runInDurableObject(stub(), async (_instance, state) => {
+      return state.storage.sql.exec("SELECT tx_hash FROM raw_logs").toArray().map((row) => String(row.tx_hash));
+    });
+    expect(during).not.toContain(late.transactionHash);
+
+    viewHead = highHead;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const after = await runInDurableObject(stub(), async (_instance, state) => {
+      return state.storage.sql.exec("SELECT tx_hash FROM raw_logs").toArray().map((row) => String(row.tx_hash));
+    });
+    expect(after).toContain(early.transactionHash);
+    expect(after).toContain(late.transactionHash);
+    expect(Number(await meta("last_scanned_block"))).toBeGreaterThanOrEqual(lateBlock);
+    expect(Number(await meta("last_scanned_block"))).toBeLessThanOrEqual(highHead);
+  });
+
+  it("rebuilds on the next alarm when a rebuild throws after an insert", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [log] }));
+    restore = rpc.restore;
+    await runInDurableObject(stub(), async (instance, state) => {
+      const sql = state.storage.sql;
+      const original = sql.exec.bind(sql);
+      let armed = true;
+      sql.exec = ((query: string, ...bindings: unknown[]) => {
+        if (armed && String(query).includes("DELETE FROM ledger_rows")) {
+          armed = false;
+          throw new Error("sqlite forced");
+        }
+        return original(query, ...bindings);
+      }) as typeof sql.exec;
+      await instance.alarm();
+      sql.exec = original as typeof sql.exec;
+    });
+    expect(await count("raw_logs")).toBe(1);
+    expect(await meta("dirty")).toBe("1");
+    expect(await meta("rebuild_count")).toBe("0");
+    expect(await meta("last_error")).toBe("ledger_error");
+
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("dirty")).toBe("0");
+    expect(await meta("rebuild_count")).toBe("1");
+    expect(await meta("last_error")).toBe("");
+  });
+
+  it("deletes a removed log and marks the ledger dirty", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 3, 1_700_000_000);
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [log] }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await count("raw_logs")).toBe(1);
+    expect(await meta("dirty")).toBe("0");
+
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO meta(key, value) VALUES('last_scanned_block', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        String(ESCROW_START_BLOCK - 1),
+      );
+    });
+    log.removed = true;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("dirty")).toBe("0");
+    expect(await meta("rebuild_count")).toBe("2");
+  });
+
+  it("does not advance the cursor when a block timestamp cannot be read", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0);
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [log],
+      omitTimestamp: true,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("ledger_error");
+  });
+
+  it("stops the alarm before the 50 subrequest cap, counting retries", async () => {
+    const head = ESCROW_START_BLOCK + (MAX_WINDOWS * WINDOW);
+    const logs = [];
+    for (let index = 0; index < 30; index += 1) {
+      logs.push(await escrowLog(ESCROW_START_BLOCK + index * WINDOW, index));
+    }
+    const rpc = installRpc(chainHandler({
+      head,
+      logs,
+      getLogsStatus: (_from, _to, seen) => (seen === 1 ? { status: 429, retryAfter: "1" } : null),
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(rpc.calls.length).toBeLessThanOrEqual(45);
+    expect(Number(await meta("last_scanned_block"))).toBeLessThan(head);
+    expect(await meta("early_reason")).toBe("subrequest_budget");
+    expect(await meta("stale")).toBe("0");
+  });
+
+  it("stops the alarm when wall time exceeds the per-run cap", async () => {
+    const head = ESCROW_START_BLOCK + 10_000;
+    const rpc = installRpc(chainHandler({ head, logs: [] }));
+    restore = rpc.restore;
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { runAlarm } = await import("../src/scan");
+      const start = Date.now();
+      let ticks = 0;
+      const result = await runAlarm({
+        storage: state.storage,
+        now: () => {
+          ticks += 1;
+          return ticks < 8 ? start : start + 21_000;
+        },
+        env: {
+          CHAIN_ID: "84532",
+          BASE_SEPOLIA_RPC_URL: "http://rpc.test/base",
+          POINTS_FAST_PACE: "1",
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.reason).toBe("wall_time");
+    });
+    expect(Number(await meta("last_scanned_block"))).toBeLessThan(head);
+    expect(await meta("early_reason")).toBe("wall_time");
+    expect(rpc.calls.length).toBeLessThanOrEqual(45);
+  });
+
+  it("schedules the full Retry-After when it is longer than 30s", async () => {
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK + 1_000,
+      logs: [],
+      getLogsStatus: () => ({ status: 429, retryAfter: "120" }),
+    }));
+    restore = rpc.restore;
+    const before = Date.now();
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const after = Date.now();
+    expect(methods(rpc.calls).filter((method) => method === "eth_getLogs")).toHaveLength(1);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await meta("last_error")).toBe("rate_limited");
+    const scheduled = await alarmAt();
+    expect(scheduled as number).toBeGreaterThanOrEqual(before + 120_000);
+    expect(scheduled as number).toBeLessThanOrEqual(after + 120_000);
+  });
+
+  it("does not treat a rate-limit body as a range error or grow the window back", async () => {
+    let ranged = false;
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK + 1_000,
+      logs: [],
+      getLogsStatus: (from, to, seen) => {
+        if (seen === 1) return { status: 200, rpcError: { code: -32005, message: "rate limit exceeded" } };
+        if (!ranged && seen > 1) {
+          ranged = true;
+          expect(to - from + 1).toBe(200);
+          return { status: 413 };
+        }
+        return null;
+      },
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_error")).toBe("");
+    expect(await meta("learned_window")).toBe("100");
+    const spans = rpc.calls.filter((call) => call.method === "eth_getLogs").map((call) => {
+      const params = call.params[0] as { fromBlock: string; toBlock: string };
+      return Number(params.toBlock) - Number(params.fromBlock) + 1;
+    });
+    expect(spans.filter((span) => span === 200).length).toBeGreaterThan(0);
+    const shrunkAt = spans.indexOf(100);
+    expect(shrunkAt).toBeGreaterThanOrEqual(0);
+    expect(spans.slice(shrunkAt).every((span) => span <= 100)).toBe(true);
+  });
+
+  it("retries a timeout as its own error and records timeout", async () => {
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [],
+      getLogsStatus: () => ({ status: 200, throwName: "TimeoutError" }),
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(methods(rpc.calls).filter((method) => method === "eth_getLogs")).toHaveLength(4);
+    expect(await meta("last_error")).toBe("timeout");
+    expect(await meta("last_scanned_block")).toBeNull();
+  });
+
+  it("reschedules on a bad number and on the wrong chain id", async () => {
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [] }));
+    restore = rpc.restore;
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { runAlarm } = await import("../src/scan");
+      const before = Date.now();
+      const badNumber = await runAlarm({
+        storage: state.storage,
+        env: {
+          CHAIN_ID: "84532",
+          BASE_SEPOLIA_RPC_URL: "http://rpc.test/base",
+          POINTS_POLL_MS: "nope",
+          POINTS_FAST_PACE: "1",
+        },
+      });
+      const after = Date.now();
+      expect(badNumber).toEqual({ ok: false, error: "config_error" });
+      const scheduled = await state.storage.getAlarm();
+      expect(scheduled as number).toBeGreaterThanOrEqual(before + 15_000);
+      expect(scheduled as number).toBeLessThanOrEqual(after + 15_000);
+      const badChain = await runAlarm({
+        storage: state.storage,
+        env: {
+          CHAIN_ID: "1",
+          BASE_SEPOLIA_RPC_URL: "http://rpc.test/base",
+          POINTS_FAST_PACE: "1",
+        },
+      });
+      expect(badChain).toEqual({ ok: false, error: "config_error" });
+    });
+    expect(await meta("last_error")).toBe("config_error");
+    expect(rpc.calls).toHaveLength(0);
+  });
+
+  it("uses POINTS_POLL_MS for the caught-up alarm", async () => {
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [] }));
+    restore = rpc.restore;
+    const before = Date.now();
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { runAlarm } = await import("../src/scan");
+      const result = await runAlarm({
+        storage: state.storage,
+        env: {
+          CHAIN_ID: "84532",
+          BASE_SEPOLIA_RPC_URL: "http://rpc.test/base",
+          POINTS_POLL_MS: "25000",
+          POINTS_FAST_PACE: "1",
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.behind).toBe(0);
+    });
+    const after = Date.now();
+    const scheduled = await alarmAt();
+    expect(scheduled as number).toBeGreaterThanOrEqual(before + 25_000);
+    expect(scheduled as number).toBeLessThanOrEqual(after + 25_000);
+  });
+
+  it("rejects empty contract code and still reschedules", async () => {
+    const rpc = installRpc(chainHandler({ head: ESCROW_START_BLOCK, logs: [], code: "0x" }));
+    restore = rpc.restore;
+    const before = Date.now();
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    const after = Date.now();
+    expect(await meta("last_error")).toBe("config_error");
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(methods(rpc.calls)).toContain("eth_chainId");
+    expect(methods(rpc.calls)).toContain("eth_getCode");
+    expect(methods(rpc.calls)).not.toContain("eth_getLogs");
+    const scheduled = await alarmAt();
+    expect(scheduled as number).toBeGreaterThanOrEqual(before + 15_000);
+    expect(scheduled as number).toBeLessThanOrEqual(after + 15_000);
+  });
+
+  it("stores zero when the inserted score is non-zero and skips a unique conflict", async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { insertLedgerRow } = await import("../src/ledger");
+      const wallet = "0x1111111111111111111111111111111111111111";
+      const row = {
+        seq: 1,
+        chain_id: 84532,
+        contract: wallet,
+        tx_hash: wallet,
+        log_index: 0,
+        block_number: 1,
+        block_timestamp: 1,
+        utc_day: 1,
+        wallet,
+        action: "fund",
+        escrow_id: wallet,
+        points: 5,
+        eligibility_status: "eligible",
+        eligibility_reason: "ok",
+        points_withheld: 0,
+        rule_weight: null,
+        counts_for_return_day: 0,
+      };
+      expect(insertLedgerRow(state.storage.sql, row)).toBe(true);
+      const stored = state.storage.sql.exec(
+        "SELECT points, points_withheld, eligibility_status, eligibility_reason FROM ledger_rows",
+      ).toArray()[0];
+      expect(Number(stored.points)).toBe(0);
+      expect(Number(stored.points_withheld)).toBe(1);
+      expect(String(stored.eligibility_status)).toBe("unverified");
+      expect(String(stored.eligibility_reason)).toBe("ofac_unconfigured");
+      expect(insertLedgerRow(state.storage.sql, { ...row, seq: 2 })).toBe(false);
+      const countRow = state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger_rows").toArray()[0];
+      expect(Number(countRow.n)).toBe(1);
+      const index = state.storage.sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'rate_hits_ts'",
+      ).toArray();
+      expect(index).toHaveLength(1);
+    });
   });
 });

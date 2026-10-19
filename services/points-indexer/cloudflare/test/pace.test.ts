@@ -43,12 +43,29 @@ describe("getLogs pacing", () => {
     expect(sleeps).toEqual([1_000, 2_000, 4_000]);
   });
 
-  it("clamps Retry-After to 30s", () => {
+  it("clamps Retry-After to 30s inside a retry and defers the rest", async () => {
     const error = new RpcError("rpc_http", {
       status: 429,
       headers: new Headers({ "retry-after": "60" }),
     });
     expect(retryWaitMs(error, 0, 0)).toBe(30_000);
+    const sleeps: number[] = [];
+    const pacer = createScanPacer({
+      now: () => 0,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      jitter: () => 0,
+    });
+    const result = await pacer.run(async () => {
+      throw new RpcError("rpc_http", {
+        status: 429,
+        headers: new Headers({ "retry-after": "120" }),
+      });
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.deferMs).toBe(120_000);
+    expect(sleeps).toEqual([]);
   });
 
   it("keeps at least the 200ms gap and adds jitter on top", async () => {

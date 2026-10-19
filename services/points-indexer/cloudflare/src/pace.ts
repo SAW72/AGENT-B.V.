@@ -173,14 +173,38 @@ function isNetworkError(error: unknown) {
   return false;
 }
 
-export function scanErrorClass(error: unknown): "rate_limited" | "server_error" | "network_error" | null {
+function isTimeout(error: unknown) {
+  for (const item of walk(error)) {
+    const record = item as { name?: string; kind?: string; message?: unknown };
+    if (record.name === "TimeoutError" || record.kind === "timeout") return true;
+    if (record.message === "rpc_timeout") return true;
+  }
+  return false;
+}
+
+export function scanErrorClass(error: unknown): "rate_limited" | "server_error" | "timeout" | "network_error" | null {
   if (!error || typeof error !== "object") return null;
   const status = statusFrom(error);
   if (status === 429) return "rate_limited";
   if (status != null && status >= 500 && status <= 599) return "server_error";
   if (textIsRateLimit(detailText(error))) return "rate_limited";
+  if (isTimeout(error)) return "timeout";
   if (isNetworkError(error)) return "network_error";
   return null;
+}
+
+/** Retry-After in milliseconds, not capped. Null when the header is absent. */
+export function retryAfterFullMs(error: unknown) {
+  const header = headerFrom(error, "retry-after");
+  if (header == null) return null;
+  if (/^\d+$/.test(header)) {
+    const seconds = Number(header);
+    if (!Number.isSafeInteger(seconds)) return null;
+    return seconds * 1000;
+  }
+  const dated = Date.parse(header);
+  if (Number.isNaN(dated)) return null;
+  return Math.max(0, dated - Date.now());
 }
 
 export function retryWaitMs(error: unknown, attempt: number, nowMs: number, options: { backoffMs?: readonly number[] } = {}) {
@@ -214,7 +238,9 @@ export function createScanPacer(options: {
     jitter: options.jitter,
   });
   return {
-    async run<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; reason: string; error: unknown }> {
+    async run<T>(fn: () => Promise<T>): Promise<
+      { ok: true; value: T } | { ok: false; reason: string; error: unknown; deferMs?: number }
+    > {
       let attempt = 0;
       for (;;) {
         await limiter.wait();
@@ -223,6 +249,10 @@ export function createScanPacer(options: {
         } catch (error) {
           const reason = classify(error);
           if (!reason) throw error;
+          const fullWait = retryAfterFullMs(error);
+          if (fullWait != null && fullWait > MAX_RETRY_AFTER_MS) {
+            return { ok: false, reason, error, deferMs: fullWait };
+          }
           if (attempt >= maxRetries) return { ok: false, reason, error };
           const wait = retryWaitMs(error, attempt, now(), { backoffMs: options.backoffMs });
           if (wait > 0) await sleep(wait);

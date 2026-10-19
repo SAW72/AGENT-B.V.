@@ -102,7 +102,7 @@ export function normalizeVersion(raw) {
     disclaimer: String(raw.display?.disclaimer || ""),
     disclaimer_links: {
       master_disclaimer: String(raw.disclaimer_links?.master_disclaimer || ""),
-      bvt_securities_disclaimer: String(raw.disclaimer_links?.bvt_securities_disclaimer || ""),
+      legal_notice_url: String(raw.disclaimer_links?.legal_notice_url || ""),
       as_is: String(raw.disclaimer_links?.as_is || ""),
       not_investment: String(raw.disclaimer_links?.not_investment || ""),
       eligibility_notice: String(raw.disclaimer_links?.eligibility_notice || ""),

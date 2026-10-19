@@ -1,9 +1,11 @@
 import pointsConfig from "../../config/points.json";
 import registerConfig from "../../config/arbitrator-register.json";
+import chainsConfig from "../../config/chains.json";
+import linksConfig from "../../config/links.json";
 import { attributeLogs, normalizeLog } from "../../src/attribute.mjs";
 import { compareRows } from "../../src/canonical.mjs";
 import { ACTION, CHAIN_ID, isAcceptedChain } from "../../src/constants.mjs";
-import { PointsError, lowerHex } from "../../src/hex.mjs";
+import { PointsError, isUniqueError, lowerHex } from "../../src/hex.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "../../src/signature.mjs";
 
 type Sql = {
@@ -113,6 +115,7 @@ const SCHEMA = [
     ts INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS rate_hits_ip_ts ON rate_hits (ip, ts)`,
+  `CREATE INDEX IF NOT EXISTS rate_hits_ts ON rate_hits (ts)`,
 ];
 
 function one(sql: Sql, query: string, ...params: unknown[]) {
@@ -188,12 +191,63 @@ function normalizeGates(gates: { gates?: Record<string, unknown> }) {
 export function ensureSchema(sql: Sql) {
   for (const statement of SCHEMA) sql.exec(statement);
   if (!metaGet(sql, "configured")) {
-    metaSet(sql, "register", JSON.stringify(normalizeRegister(registerConfig)));
-    metaSet(sql, "weights", JSON.stringify(normalizeWeights(pointsConfig)));
-    metaSet(sql, "gates", JSON.stringify(normalizeGates(pointsConfig)));
+    refreshBundled(sql);
     metaSet(sql, "configured", "1");
     metaSet(sql, "rebuild_count", "0");
+    metaSet(sql, "dirty", "0");
   }
+}
+
+/** Replace stored weights, gates, register, chains, and links from the bundled config. */
+export function refreshBundled(sql: Sql) {
+  metaSet(sql, "register", JSON.stringify(normalizeRegister(registerConfig)));
+  metaSet(sql, "weights", JSON.stringify(normalizeWeights(pointsConfig)));
+  metaSet(sql, "gates", JSON.stringify(normalizeGates(pointsConfig)));
+  const rule = (pointsConfig as { rule_version?: unknown }).rule_version;
+  metaSet(sql, "rule_version", typeof rule === "string" ? rule : "");
+  run(sql, "DELETE FROM chains");
+  for (const chain of chainsConfig as Array<{ wallet?: string; action?: string; escrow_id?: string; entries?: unknown }>) {
+    const wallet = lowerHex(chain.wallet);
+    const escrowId = lowerHex(chain.escrow_id);
+    if (!wallet || !escrowId || !chain.action) continue;
+    run(
+      sql,
+      "INSERT INTO chains(wallet, action, escrow_id, entries_json) VALUES(?, ?, ?, ?)",
+      wallet,
+      String(chain.action),
+      escrowId,
+      JSON.stringify(chain.entries ?? []),
+    );
+  }
+  run(sql, "DELETE FROM links");
+  for (const link of linksConfig as Array<Record<string, unknown>>) {
+    if (link.nonce == null || link.wallet == null) continue;
+    run(
+      sql,
+      `INSERT INTO links(nonce, escrow_id, action, tx_hash, log_index, expiry, wallet, signature, seq)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      String(link.nonce),
+      String(link.escrow_id ?? ""),
+      String(link.action ?? ""),
+      String(link.tx_hash ?? ""),
+      Number(link.log_index ?? 0),
+      Number(link.expiry ?? 0),
+      String(link.wallet),
+      String(link.signature ?? ""),
+      Number(link.seq ?? 0),
+    );
+  }
+}
+
+export function storedConfig(sql: Sql) {
+  const weights = JSON.parse(metaGet(sql, "weights") || "null");
+  const gates = JSON.parse(metaGet(sql, "gates") || "null");
+  const rule = metaGet(sql, "rule_version");
+  return {
+    weights,
+    gates,
+    rule_version: rule == null || rule === "" ? null : rule,
+  };
 }
 
 export function lastScannedBlock(sql: Sql) {
@@ -276,11 +330,37 @@ export function commitScanWindow(storage: Storage, logs: unknown[], scannedThrou
   if (previous != null && scannedThrough < previous) throw new PointsError("cursor_backwards");
   const normalized = logs.map((log) => normalizeLog(log));
   let inserted = 0;
+  let removed = 0;
   storage.transactionSync(() => {
-    for (const log of normalized) inserted += upsertRaw(storage.sql, chainId, log);
+    for (const log of normalized) {
+      if (log.removed) {
+        const existing = one(
+          storage.sql,
+          "SELECT 1 AS n FROM raw_logs WHERE chain_id = ? AND contract = ? AND tx_hash = ? AND log_index = ?",
+          chainId,
+          log.contract,
+          log.txHash,
+          log.logIndex,
+        );
+        if (existing) {
+          run(
+            storage.sql,
+            "DELETE FROM raw_logs WHERE chain_id = ? AND contract = ? AND tx_hash = ? AND log_index = ?",
+            chainId,
+            log.contract,
+            log.txHash,
+            log.logIndex,
+          );
+          removed += 1;
+        }
+      } else {
+        inserted += upsertRaw(storage.sql, chainId, log);
+      }
+    }
     metaSet(storage.sql, "last_scanned_block", String(scannedThrough));
+    if (inserted > 0 || removed > 0) metaSet(storage.sql, "dirty", "1");
   });
-  return { ok: true, inserted, scannedThrough };
+  return { ok: true, inserted, removed, scannedThrough };
 }
 
 export function setFinalizedBlock(sql: Sql, finalized: number) {
@@ -487,6 +567,59 @@ function linkFor(
   return { ok: false as const, reason };
 }
 
+export function applyFailClosed<T extends Record<string, unknown>>(row: T) {
+  return {
+    ...row,
+    points: 0,
+    eligibility_status: "unverified",
+    eligibility_reason: "ofac_unconfigured",
+    points_withheld: 1,
+  };
+}
+
+export function insertLedgerRow(sql: Sql, row: Record<string, unknown>) {
+  const stored = applyFailClosed(row);
+  if (stored.points !== 0) throw new PointsError("score_not_zero");
+  try {
+    run(
+      sql,
+      `INSERT INTO ledger_rows(
+         seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
+         wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
+         rule_weight, counts_for_return_day, register_status, dispute_id, support,
+         source_action, source_tx_hash, source_log_index
+       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      stored.seq,
+      stored.chain_id,
+      stored.contract,
+      stored.tx_hash,
+      stored.log_index,
+      stored.block_number,
+      stored.block_timestamp,
+      stored.utc_day,
+      stored.wallet,
+      stored.action,
+      stored.escrow_id,
+      stored.points,
+      stored.eligibility_status,
+      stored.eligibility_reason,
+      stored.points_withheld,
+      stored.rule_weight ?? null,
+      stored.counts_for_return_day,
+      stored.register_status ?? null,
+      stored.dispute_id ?? null,
+      stored.support ?? null,
+      stored.source_action ?? null,
+      stored.source_tx_hash ?? null,
+      stored.source_log_index ?? null,
+    );
+    return true;
+  } catch (error) {
+    if (isUniqueError(error)) return false;
+    throw error;
+  }
+}
+
 function settleNonceStatuses(sql: Sql, nonces: Map<string, Record<string, unknown>>) {
   const openByKey = new Map<string, Record<string, unknown>>();
   for (const row of nonces.values()) {
@@ -620,53 +753,21 @@ export function rebuild(storage: Storage) {
 
     pending.sort(compareRows);
     pending.forEach((row, index) => {
-      if (row.points !== 0) throw new PointsError("score_not_zero");
-      run(
-        sql,
-        `INSERT INTO ledger_rows(
-           seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
-           wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
-           rule_weight, counts_for_return_day, register_status, dispute_id, support,
-           source_action, source_tx_hash, source_log_index
-         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        index + 1,
-        row.chain_id,
-        row.contract,
-        row.tx_hash,
-        row.log_index,
-        row.block_number,
-        row.block_timestamp,
-        row.utc_day,
-        row.wallet,
-        row.action,
-        row.escrow_id,
-        0,
-        "unverified",
-        "ofac_unconfigured",
-        1,
-        row.rule_weight,
-        row.counts_for_return_day,
-        row.register_status,
-        row.dispute_id,
-        row.support,
-        row.source_action,
-        row.source_tx_hash,
-        row.source_log_index,
-      );
+      insertLedgerRow(sql, { ...row, seq: index + 1 });
     });
     settleNonceStatuses(sql, nonces);
     const count = metaInt(sql, "rebuild_count") ?? 0;
     metaSet(sql, "rebuild_count", String(count + 1));
+    metaSet(sql, "dirty", "0");
   });
 }
 
 export function publicConfig() {
-  const weights = normalizeWeights(pointsConfig);
-  const gates = normalizeGates(pointsConfig);
-  const rule = (pointsConfig as { rule_version?: unknown }).rule_version;
   return {
-    weights,
-    gates,
-    rule_version: typeof rule === "string" ? rule : null,
+    weights: normalizeWeights(pointsConfig),
+    gates: normalizeGates(pointsConfig),
+    rule_version: typeof (pointsConfig as { rule_version?: unknown }).rule_version === "string"
+      ? (pointsConfig as { rule_version: string }).rule_version
+      : null,
   };
 }

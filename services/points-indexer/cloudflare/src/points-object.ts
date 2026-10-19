@@ -6,12 +6,11 @@ import {
   lastScannedBlock,
   metaGet,
   metaInt,
-  publicConfig,
+  refreshBundled,
+  storedConfig,
 } from "./ledger";
-import { DEFAULT_RATE_PER_MINUTE, createReadApi, parseCorsList, type ReadInput } from "./read-api";
+import { createReadApi, parseCorsList, pointsEnabled, type ReadInput } from "./read-api";
 import { blocksBehind, healthDecision, runAlarm } from "./scan";
-
-const WINDOW_MS = 60_000;
 
 export class PointsObject extends DurableObject<Env> {
   #api: ReturnType<typeof createReadApi> | null = null;
@@ -19,17 +18,21 @@ export class PointsObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
+      if (!pointsEnabled(env)) return;
       ensureSchema(ctx.storage.sql);
+      refreshBundled(ctx.storage.sql);
       const existing = await ctx.storage.getAlarm();
       if (existing == null) await ctx.storage.setAlarm(Date.now() + 1_000);
     });
   }
 
   async alarm() {
+    if (!pointsEnabled(this.env)) return;
     const env = this.env;
     await runAlarm({
       storage: this.ctx.storage,
       env: {
+        CHAIN_ID: env.CHAIN_ID,
         BASE_SEPOLIA_RPC_URL: rpcUrl(env),
         POINTS_POLL_MS: env.POINTS_POLL_MS,
         POINTS_LOG_RANGE: env.POINTS_LOG_RANGE,
@@ -70,7 +73,7 @@ export class PointsObject extends DurableObject<Env> {
     const sql = this.ctx.storage.sql;
     this.#api = createReadApi({
       corsOrigins: parseCorsList(this.env.POINTS_CORS_ORIGINS),
-      allow: (ip) => this.allow(ip),
+      allow: () => ({ ok: true }),
       store: {
         getCursor: () => ({
           last_scanned_block: lastScannedBlock(sql),
@@ -95,35 +98,51 @@ export class PointsObject extends DurableObject<Env> {
           };
         },
         listLedgerRows: (address, query) => {
-          const rows = sql.exec(
-            `SELECT * FROM ledger_rows
-             WHERE wallet = ? AND chain_id = ?
-             ORDER BY block_number ASC, log_index ASC,
-               CASE action
+          const actionOrder = `CASE action
                  WHEN 'fund' THEN 1
                  WHEN 'release_or_refund' THEN 2
                  WHEN 'dispute_open_or_vote' THEN 3
                  WHEN 'first_activity' THEN 4
                  WHEN 'return_day' THEN 5
                  ELSE 9
-               END ASC,
-               utc_day ASC`,
-            address,
-            CHAIN_ID,
-          ).toArray();
+               END`;
           const after = query.after;
-          const filtered = after
-            ? rows.filter((row) => {
-              const key = [Number(row.block_number), Number(row.log_index), orderOf(String(row.action)), Number(row.utc_day)];
-              const bound = [after.block_number, after.log_index, orderOf(after.action), after.utc_day];
-              for (let index = 0; index < key.length; index += 1) {
-                if (key[index] > bound[index]) return true;
-                if (key[index] < bound[index]) return false;
-              }
-              return false;
-            })
-            : rows;
-          return filtered.slice(0, query.limit).map((row) => ({
+          const rows = after
+            ? sql.exec(
+              `SELECT * FROM ledger_rows
+               WHERE wallet = ? AND chain_id = ?
+                 AND (
+                   block_number > ?
+                   OR (block_number = ? AND log_index > ?)
+                   OR (block_number = ? AND log_index = ? AND (${actionOrder}) > ?)
+                   OR (block_number = ? AND log_index = ? AND (${actionOrder}) = ? AND utc_day > ?)
+                 )
+               ORDER BY block_number ASC, log_index ASC, ${actionOrder} ASC, utc_day ASC
+               LIMIT ?`,
+              address,
+              CHAIN_ID,
+              after.block_number,
+              after.block_number,
+              after.log_index,
+              after.block_number,
+              after.log_index,
+              orderOf(after.action),
+              after.block_number,
+              after.log_index,
+              orderOf(after.action),
+              after.utc_day,
+              query.limit,
+            ).toArray()
+            : sql.exec(
+              `SELECT * FROM ledger_rows
+               WHERE wallet = ? AND chain_id = ?
+               ORDER BY block_number ASC, log_index ASC, ${actionOrder} ASC, utc_day ASC
+               LIMIT ?`,
+              address,
+              CHAIN_ID,
+              query.limit,
+            ).toArray();
+          return rows.map((row) => ({
             ...row,
             block_number: Number(row.block_number),
             log_index: Number(row.log_index),
@@ -133,30 +152,10 @@ export class PointsObject extends DurableObject<Env> {
             action: String(row.action),
           }));
         },
-        getConfig: () => publicConfig(),
+        getConfig: () => storedConfig(sql),
       },
     });
     return this.#api;
-  }
-
-  allow(ip: string) {
-    const max = positiveRate(this.env.POINTS_READ_RATE_PER_MINUTE);
-    const now = Date.now();
-    return this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("DELETE FROM rate_hits WHERE ts < ?", now - WINDOW_MS);
-      const row = this.ctx.storage.sql.exec(
-        "SELECT COUNT(*) AS n, MIN(ts) AS oldest FROM rate_hits WHERE ip = ?",
-        ip,
-      ).toArray()[0];
-      const count = Number(row?.n ?? 0);
-      if (count >= max) {
-        const oldest = Number(row?.oldest ?? now);
-        const retryAfterMs = Math.max(0, oldest + WINDOW_MS - now);
-        return { ok: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
-      }
-      this.ctx.storage.sql.exec("INSERT INTO rate_hits(ip, ts) VALUES(?, ?)", ip, now);
-      return { ok: true };
-    });
   }
 }
 
@@ -167,13 +166,6 @@ function orderOf(action: string) {
   if (action === "first_activity") return 4;
   if (action === "return_day") return 5;
   return 9;
-}
-
-function positiveRate(value: string | undefined) {
-  const text = String(value ?? "").trim();
-  if (!/^[1-9][0-9]*$/.test(text)) return DEFAULT_RATE_PER_MINUTE;
-  const parsed = Number(text);
-  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_RATE_PER_MINUTE;
 }
 
 function rpcUrl(env: Env) {

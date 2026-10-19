@@ -8,7 +8,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           BASE_SEPOLIA_RPC_URL: "http://rpc.test/base",
-          POINTS_ENABLED: "1",
+          POINTS_ENABLED: "true",
           POINTS_FAST_PACE: "1",
           POINTS_CORS_ORIGINS: "https://agent-bv.pages.dev",
         },

@@ -6,6 +6,12 @@ import { createReadApi, pointsEnabled } from "../src/read-api";
 
 const DISCLAIMER = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
 
+function forbidRankAndEarn(payload: string) {
+  const lower = payload.toLowerCase();
+  expect(lower).not.toContain("rank");
+  expect(lower).not.toContain("earn");
+}
+
 function stub() {
   return env.POINTS.get(env.POINTS.idFromName("base-sepolia"));
 }
@@ -46,8 +52,7 @@ describe("points read API", () => {
       vote: null,
       return_day: null,
     });
-    expect(JSON.stringify(config)).not.toContain("rank");
-    expect(JSON.stringify(config).toLowerCase()).not.toContain("earn");
+    forbidRankAndEarn(JSON.stringify(config));
 
     const addressResponse = await SELF.fetch(`https://points.test/v1/points/${address}`, { headers: origin });
     expect(addressResponse.status).toBe(200);
@@ -67,6 +72,9 @@ describe("points read API", () => {
     expect(body.disclaimer.text).toBe(sepolia.display.disclaimer);
     expect(body.disclaimer.text).toBe(DISCLAIMER);
     expect(body.disclaimer.links.master_disclaimer).toBeNull();
+    expect(body.disclaimer.links.legal_notice_url).toBeNull();
+    expect(body.disclaimer.links).not.toHaveProperty("bvt_securities_disclaimer");
+    forbidRankAndEarn(JSON.stringify(body));
 
     const otherOrigin = await SELF.fetch(`https://points.test/v1/points/${address}`, {
       headers: { Origin: "https://example.com", "CF-Connecting-IP": "203.0.113.21" },
@@ -120,6 +128,16 @@ describe("points read API", () => {
     const rest = await secondPage.json() as { items: Array<{ block_number: number }>; next_cursor: string | null };
     expect(rest.items.map((item) => item.block_number)).toEqual([11]);
     expect(rest.next_cursor).toBeNull();
+    forbidRankAndEarn(JSON.stringify(page));
+    forbidRankAndEarn(JSON.stringify(rest));
+
+    const health = await SELF.fetch("https://points.test/health");
+    forbidRankAndEarn(await health.text());
+    const hits = await runInDurableObject(stub(), async (_instance, state) => {
+      const row = state.storage.sql.exec("SELECT COUNT(*) AS n FROM rate_hits").toArray()[0];
+      return Number(row?.n ?? 0);
+    });
+    expect(hits).toBe(0);
   });
 
   it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {
@@ -181,10 +199,43 @@ describe("points read API", () => {
     expect(blocked.body).toEqual({ ok: false, error: "points_unavailable" });
   });
 
-  it("treats an unset flag as disabled", () => {
+  it("turns on only for the exact string true", () => {
     expect(pointsEnabled(undefined)).toBe(false);
     expect(pointsEnabled({})).toBe(false);
-    expect(pointsEnabled({ POINTS_ENABLED: " " })).toBe(false);
-    expect(pointsEnabled({ POINTS_ENABLED: "1" })).toBe(true);
+    expect(pointsEnabled({ POINTS_ENABLED: "true" })).toBe(true);
+    expect(pointsEnabled({ POINTS_ENABLED: "TRUE" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: " true " })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "1" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "yes" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "on" })).toBe(false);
+  });
+
+  it("reads stored weights so a tamper shows until the bundle is applied again", async () => {
+    const tampered = {
+      first_activity: 5,
+      fund: 5,
+      release_or_refund: 5,
+      dispute_open_or_vote: 5,
+      vote: 5,
+      return_day: 5,
+    };
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO meta(key, value) VALUES('weights', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        JSON.stringify(tampered),
+      );
+    });
+    const tamperedResponse = await SELF.fetch("https://points.test/v1/points/config");
+    const tamperedBody = await tamperedResponse.json() as { weights: Record<string, unknown> };
+    expect(tamperedBody.weights).toEqual(tampered);
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { refreshBundled } = await import("../src/ledger");
+      refreshBundled(state.storage.sql);
+    });
+    const restored = await SELF.fetch("https://points.test/v1/points/config");
+    const restoredBody = await restored.json() as { weights: Record<string, number | null> };
+    expect(restoredBody.weights.first_activity).toBeNull();
+    expect(restoredBody.weights.fund).toBeNull();
+    expect(restoredBody.weights.return_day).toBeNull();
   });
 });

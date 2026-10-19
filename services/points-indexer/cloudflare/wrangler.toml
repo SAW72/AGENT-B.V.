@@ -2,11 +2,14 @@
 # Spencer deploys this himself. Nothing in this file is an account id,
 # a secret, or an RPC URL.
 #
-# BASE_SEPOLIA_RPC_URL is intentionally absent. Spencer sets it on his
-# machine: `npx wrangler secret put BASE_SEPOLIA_RPC_URL` for a keyed
-# endpoint, or a plain var for the public Base Sepolia endpoint.
+# BASE_SEPOLIA_RPC_URL is intentionally absent. A plain var is wiped by
+# the next `wrangler deploy`. Spencer sets it only with
+# `npx wrangler secret put BASE_SEPOLIA_RPC_URL`. Never put the URL in
+# this file or the repo.
 # POINTS_ENABLED is intentionally absent. Leave it unset until the
-# Verifier gives GO. While it is unset, /v1/points/* returns 503.
+# Verifier gives GO. Only the exact string true turns the indexer on.
+# While it is unset, /v1/points/* returns 503 and /health does not
+# touch the Durable Object.
 
 "$schema" = "./node_modules/wrangler/config-schema.json"
 name = "agent-bv-points"
@@ -21,11 +24,11 @@ enabled = true
 
 [observability.logs]
 enabled = true
-head_sampling_rate = 1
+head_sampling_rate = 0
 
 [observability.traces]
-enabled = true
-head_sampling_rate = 1
+enabled = false
+head_sampling_rate = 0
 
 [vars]
 CHAIN_ID = "84532"
@@ -40,6 +43,16 @@ POINTS_FAST_PACE = ""
 [[durable_objects.bindings]]
 name = "POINTS"
 class_name = "PointsObject"
+
+# Front Worker limit. /health and OPTIONS do not call this binding.
+# namespace_id is a placeholder Spencer's deploy creates. It is not a secret.
+[[ratelimits]]
+name = "POINTS_RATE_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 60
+period = 60
 
 [[migrations]]
 tag = "v1"

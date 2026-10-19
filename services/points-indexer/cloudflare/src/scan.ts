@@ -1,4 +1,4 @@
-import { CHAIN_ID, ESCROW_START_BLOCK, isAcceptedChain } from "../../src/constants.mjs";
+import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "../../src/constants.mjs";
 import {
   commitScanWindow,
   ensureSchema,
@@ -11,8 +11,9 @@ import {
   rebuild,
   setFinalizedBlock,
 } from "./ledger";
-import { createScanPacer, jitterMs, scanErrorClass, sleepMs } from "./pace";
-import { createRpc, redact, RpcError } from "./rpc";
+import { PointsError } from "../../src/hex.mjs";
+import { createScanPacer, jitterMs, scanErrorClass, sleepMs, textIsRateLimit } from "./pace";
+import { BudgetExceeded, createRpc, createSubrequestMeter, redact, RpcError, SUBREQUEST_BUDGET } from "./rpc";
 
 type Storage = {
   sql: {
@@ -24,6 +25,7 @@ type Storage = {
 
 const CATCH_UP_MS = 1_000;
 const STEADY_MS = 15_000;
+export const MAX_ALARM_WALL_MS = 20_000;
 
 function numericCode(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -52,6 +54,7 @@ function textIsRange(text: string) {
 export function isRangeError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const record = error as { code?: unknown; status?: unknown; statusCode?: unknown; details?: unknown; shortMessage?: unknown };
+  if (textIsRateLimit(rangeText(record))) return false;
   const code = numericCode(record.code);
   if (code === -32614) return true;
   const status = numericCode(record.status ?? record.statusCode);
@@ -103,16 +106,19 @@ export function healthDecision(status: { lastPassAt: number | null; pollMs: numb
 }
 
 function errorCode(error: unknown) {
+  if (error instanceof PointsError || (error instanceof Error && error.name === "PointsError")) return "ledger_error";
   if (isRangeError(error)) return "range_error";
-  if (error instanceof RpcError && error.status === 429) return "rate_limited";
-  if (error instanceof RpcError && error.status != null && error.status >= 500) return "server_error";
-  if (error instanceof Error && error.name === "TimeoutError") return "network_error";
+  const classified = scanErrorClass(error);
+  if (classified === "rate_limited" || classified === "server_error" || classified === "timeout") return classified;
+  if (error instanceof RpcError && error.kind === "timeout") return "timeout";
   const message = error instanceof Error ? error.message : "";
+  if (/sqlite|unique constraint/i.test(message)) return "ledger_error";
   if (
     message.startsWith("CHAIN_ID")
     || message.startsWith("RPC chain")
     || message.startsWith("POINTS_")
     || message.startsWith("missing_rpc")
+    || message.startsWith("contract code")
   ) {
     return "config_error";
   }
@@ -128,68 +134,88 @@ export async function runAlarm(options: {
   const env = options.env;
   const now = options.now ?? Date.now;
   ensureSchema(storage.sql);
-  const pollMs = positiveInt(env.POINTS_POLL_MS, STEADY_MS);
-  void pollMs;
-  const logRange = positiveInt(env.POINTS_LOG_RANGE, 200);
-  const maxWindows = positiveInt(env.POINTS_MAX_WINDOWS_PER_RUN, 40);
-  const fast = env.POINTS_FAST_PACE === "1";
-  const rpcUrl = String(env.BASE_SEPOLIA_RPC_URL ?? "").trim();
+  const started = now();
+  let pollMs = STEADY_MS;
+  let deferMs = 0;
 
-  const finish = async (behind: number) => {
-    const delay = behind > 0 ? CATCH_UP_MS : STEADY_MS;
+  const schedule = async (behind: number) => {
+    const base = behind > 0 ? CATCH_UP_MS : pollMs;
+    const delay = Math.max(base, deferMs);
     await storage.setAlarm(now() + delay);
     return delay;
   };
 
-  if (!rpcUrl) {
-    metaSet(storage.sql, "last_error", "config_error");
-    metaSet(storage.sql, "stale", "1");
-    console.error(JSON.stringify({ message: "missing_rpc" }));
-    await finish(0);
-    return { ok: false, error: "config_error" };
-  }
-
-  const scan = createScanPacer({
-    now,
-    sleep: fast ? async () => {} : sleepMs,
-    jitter: fast ? () => 0 : () => jitterMs(),
-    classify(error) {
-      if (isRangeError(error)) return null;
-      return scanErrorClass(error);
-    },
-  });
-
+  const rpcUrl = String(env.BASE_SEPOLIA_RPC_URL ?? "").trim();
   try {
-    const rpc = createRpc(rpcUrl);
-    if (metaGet(storage.sql, "chain_checked") !== String(CHAIN_ID)) {
-      const reported = await rpc.chainId();
-      if (!isAcceptedChain(reported)) {
-        throw new Error(`RPC chain id is ${String(reported)}, expected ${CHAIN_ID}`);
-      }
-      metaSet(storage.sql, "chain_checked", String(CHAIN_ID));
+    pollMs = positiveInt(env.POINTS_POLL_MS, STEADY_MS);
+    const logRange = positiveInt(env.POINTS_LOG_RANGE, 200);
+    const maxWindows = positiveInt(env.POINTS_MAX_WINDOWS_PER_RUN, 40);
+    if (String(env.CHAIN_ID ?? "").trim() !== String(CHAIN_ID)) {
+      throw new Error(`CHAIN_ID must be ${CHAIN_ID}`);
     }
+    const fast = env.POINTS_FAST_PACE === "1";
+    if (!rpcUrl) throw new Error("missing_rpc");
+
+    const scan = createScanPacer({
+      now,
+      sleep: fast ? async () => {} : sleepMs,
+      jitter: fast ? () => 0 : () => jitterMs(),
+      classify(error) {
+        if (error instanceof BudgetExceeded || error instanceof PointsError) return null;
+        if (isRangeError(error)) return null;
+        return scanErrorClass(error);
+      },
+    });
+
+    const meter = createSubrequestMeter(SUBREQUEST_BUDGET);
+    const rpc = createRpc(rpcUrl, fetch, meter);
+    const reported = await rpc.chainId();
+    if (!isAcceptedChain(reported)) {
+      throw new Error(`RPC chain id is ${String(reported)}, expected ${CHAIN_ID}`);
+    }
+    await rpc.getCode(ESCROW);
+    await rpc.getCode(PANEL);
     const headBlock = await rpc.finalizedBlock();
     if (!headBlock || !Number.isSafeInteger(headBlock.number) || headBlock.number < 0) {
       throw new Error("RPC finalized block is not a safe integer");
     }
-    const head = Math.max(finalizedBlock(storage.sql) ?? 0, headBlock.number);
+    const storedHead = finalizedBlock(storage.sql);
+    const rpcHead = headBlock.number;
+    if (storedHead != null && rpcHead < storedHead) {
+      metaSet(storage.sql, "finalized_lag", "1");
+      console.error(JSON.stringify({ message: "finalized_head_lag", rpcHead, storedHead }));
+    } else {
+      metaSet(storage.sql, "finalized_lag", "0");
+    }
+    const head = rpcHead;
     let from = lastScannedBlock(storage.sql);
     from = from == null ? ESCROW_START_BLOCK : Math.max(ESCROW_START_BLOCK, from + 1);
     let window = metaInt(storage.sql, "learned_window") ?? logRange;
     let inserted = 0;
+    let removed = 0;
     let committedWindows = 0;
     let earlyReason: string | null = null;
+    let stopReason: string | null = null;
     while (from <= head && committedWindows < maxWindows) {
+      if (now() - started >= MAX_ALARM_WALL_MS) {
+        stopReason = "wall_time";
+        break;
+      }
       const to = Math.min(head, from + window - 1);
       let logs;
       try {
-        const scanned = await scan.run(() => rpc.getLogs(from, to));
+        const scanned = await scan.run(() => rpc.getLogs(from as number, to));
         if (!scanned.ok) {
           earlyReason = scanned.reason;
+          deferMs = scanned.deferMs ?? 0;
           break;
         }
         logs = scanned.value;
       } catch (error) {
+        if (error instanceof BudgetExceeded) {
+          stopReason = "subrequest_budget";
+          break;
+        }
         if (isRangeError(error) && window > 1) {
           window = nextRangeWindow(window, error as { details?: unknown; shortMessage?: unknown }, logRange);
           metaSet(storage.sql, "learned_window", String(window));
@@ -199,20 +225,32 @@ export async function runAlarm(options: {
       }
       const committed = commitScanWindow(storage, logs, to, CHAIN_ID);
       inserted += committed.inserted;
+      removed += committed.removed;
       committedWindows += 1;
       from = to + 1;
-      window = Math.min(logRange, window * 2);
-      metaSet(storage.sql, "learned_window", String(window));
       metaSet(storage.sql, "last_pass_at", String(now()));
       metaSet(storage.sql, "last_error", "");
     }
     const previous = finalizedBlock(storage.sql);
     const headResult = setFinalizedBlock(storage.sql, head);
     const crossed = newlyFinalCount(storage.sql, previous, headResult.finalizedBlock);
+    const dirty = metaGet(storage.sql, "dirty") === "1";
     let rebuilds = 0;
-    if (inserted > 0 || crossed > 0) {
-      rebuild(storage);
-      rebuilds = 1;
+    if (inserted > 0 || removed > 0 || crossed > 0 || dirty) {
+      try {
+        rebuild(storage);
+        rebuilds = 1;
+      } catch (error) {
+        metaSet(storage.sql, "last_error", "ledger_error");
+        metaSet(storage.sql, "stale", "1");
+        console.error(JSON.stringify({
+          message: "ledger_error",
+          detail: redact(error instanceof Error ? error.message : "", rpcUrl),
+        }));
+        const cursor = lastScannedBlock(storage.sql);
+        await schedule(Math.max(1, blocksBehind(head, cursor)));
+        return { ok: false, error: "ledger_error", rebuilds: 0 };
+      }
     }
     const cursor = lastScannedBlock(storage.sql);
     const behind = blocksBehind(head, cursor);
@@ -224,16 +262,16 @@ export async function runAlarm(options: {
       console.error(JSON.stringify({ message: "pass_ended_early", reason: earlyReason }));
     } else {
       metaSet(storage.sql, "last_error", "");
-      metaSet(storage.sql, "early_reason", "");
+      metaSet(storage.sql, "early_reason", stopReason ?? "");
       metaSet(storage.sql, "stale", "0");
       metaSet(storage.sql, "pass_completed", "1");
       metaSet(storage.sql, "last_pass_at", String(now()));
     }
-    await finish(behind);
+    await schedule(behind);
     return {
       ok: true,
-      endedEarly: earlyReason != null,
-      reason: earlyReason,
+      endedEarly: earlyReason != null || stopReason != null,
+      reason: earlyReason ?? stopReason,
       inserted,
       rebuilds,
       behind,
@@ -241,16 +279,20 @@ export async function runAlarm(options: {
     };
   } catch (error) {
     const code = errorCode(error);
-    metaSet(storage.sql, "last_error", code);
-    metaSet(storage.sql, "stale", "1");
+    try {
+      metaSet(storage.sql, "last_error", code);
+      metaSet(storage.sql, "stale", "1");
+    } catch {
+      // Schema or storage failed. Still reschedule below.
+    }
     console.error(JSON.stringify({
       message: code,
       detail: redact(error instanceof Error ? error.message : "", rpcUrl),
     }));
     const cursor = lastScannedBlock(storage.sql);
     const storedHead = finalizedBlock(storage.sql);
-    const behind = storedHead == null ? 1 : blocksBehind(storedHead, cursor);
-    await finish(behind > 0 ? behind : 1);
+    const behind = code === "config_error" ? 0 : (storedHead == null ? 1 : Math.max(1, blocksBehind(storedHead, cursor)));
+    await schedule(behind);
     return { ok: false, error: code };
   }
 }

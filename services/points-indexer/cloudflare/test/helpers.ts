@@ -24,6 +24,8 @@ type HandlerResult = {
   status: number;
   body: unknown;
   headers?: Record<string, string>;
+  rpcError?: { code: number; message: string };
+  throwName?: string;
 };
 
 /**
@@ -57,6 +59,17 @@ export function installRpc(handler: (request: RpcRequest) => HandlerResult) {
     }
     calls.push(parsed);
     const result = handler(parsed);
+    if (result.throwName) {
+      const error = new Error(result.throwName);
+      error.name = result.throwName;
+      throw error;
+    }
+    if (result.rpcError) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: result.rpcError }), {
+        status: result.status,
+        headers: { "content-type": "application/json", ...(result.headers ?? {}) },
+      });
+    }
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: result.body, error: result.status === 200 ? undefined : { code: result.status, message: "rpc failed" } }), {
       status: result.status,
       headers: { "content-type": "application/json", ...(result.headers ?? {}) },
@@ -113,21 +126,32 @@ export function toRpcLog(log: FakeLog) {
 }
 
 export function chainHandler(options: {
-  head: number;
+  head: number | (() => number);
   logs?: FakeLog[];
-  getLogsStatus?: (fromBlock: number, toBlock: number, seen: number) => { status: number; retryAfter?: string } | null;
+  code?: string;
+  omitTimestamp?: boolean;
+  getLogsStatus?: (
+    fromBlock: number,
+    toBlock: number,
+    seen: number,
+  ) => { status: number; retryAfter?: string; rpcError?: { code: number; message: string }; throwName?: string } | null;
   timestamps?: Record<number, number>;
 }) {
   let getLogsSeen = 0;
+  const headNow = () => (typeof options.head === "function" ? options.head() : options.head);
   return (request: RpcRequest): HandlerResult => {
     if (request.method === "eth_chainId") {
       return { status: 200, body: hex(84532) };
     }
+    if (request.method === "eth_getCode") {
+      return { status: 200, body: options.code ?? "0x1" };
+    }
     if (request.method === "eth_getBlockByNumber") {
       const tag = String(request.params[0]);
       if (tag === "finalized") {
-        return { status: 200, body: { number: hex(options.head) } };
+        return { status: 200, body: { number: hex(headNow()) } };
       }
+      if (options.omitTimestamp) return { status: 200, body: null };
       const number = Number(tag);
       const timestamp = options.timestamps?.[number] ?? 1_700_000_000;
       return { status: 200, body: { number: tag, timestamp: hex(timestamp) } };
@@ -143,8 +167,11 @@ export function chainHandler(options: {
           status: failure.status,
           body: null,
           headers: failure.retryAfter ? { "retry-after": failure.retryAfter } : undefined,
+          rpcError: failure.rpcError,
+          throwName: failure.throwName,
         };
       }
+      if (fromBlock > headNow()) return { status: 200, body: [] };
       const rows = (options.logs ?? []).filter((log) => log.blockNumber >= fromBlock && log.blockNumber <= toBlock).map(toRpcLog);
       return { status: 200, body: rows };
     }

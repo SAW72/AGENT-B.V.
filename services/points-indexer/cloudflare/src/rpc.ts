@@ -2,7 +2,30 @@ import { decodeEventLog, type Abi } from "viem";
 import escrowAbi from "../../../../apps/wallet-ux/src/abi/BotAttestationEscrow.json";
 import panelAbi from "../../../../apps/wallet-ux/src/abi/DisputePanel.json";
 import { ESCROW, PANEL } from "../../src/constants.mjs";
+import { PointsError } from "../../src/hex.mjs";
 import { RPC_TIMEOUT_MS } from "./pace";
+
+export const SUBREQUEST_BUDGET = 45;
+
+export class BudgetExceeded extends Error {
+  constructor() {
+    super("subrequest_budget");
+    this.name = "BudgetExceeded";
+  }
+}
+
+export function createSubrequestMeter(max = SUBREQUEST_BUDGET) {
+  let used = 0;
+  return {
+    get used() {
+      return used;
+    },
+    charge() {
+      if (used >= max) throw new BudgetExceeded();
+      used += 1;
+    },
+  };
+}
 
 const URL_PATTERN = /https?:\/\/\S+/gi;
 
@@ -18,8 +41,9 @@ export class RpcError extends Error {
   details: string;
   shortMessage: string;
   headers: Headers | null;
+  kind: "timeout" | null;
 
-  constructor(message: string, fields: { status?: number | null; code?: number | null; details?: string; headers?: Headers | null } = {}) {
+  constructor(message: string, fields: { status?: number | null; code?: number | null; details?: string; headers?: Headers | null; kind?: "timeout" | null } = {}) {
     super(message);
     this.name = "RpcError";
     this.status = fields.status ?? null;
@@ -27,6 +51,7 @@ export class RpcError extends Error {
     this.details = fields.details ?? "";
     this.shortMessage = this.details;
     this.headers = fields.headers ?? null;
+    this.kind = fields.kind ?? null;
   }
 }
 
@@ -49,7 +74,13 @@ export function hexToInt(value: unknown) {
   return null;
 }
 
-async function postJson(url: string, body: unknown, fetchImpl: typeof fetch) {
+async function postJson(
+  url: string,
+  body: unknown,
+  fetchImpl: typeof fetch,
+  meter?: { charge(): void },
+) {
+  meter?.charge();
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -60,7 +91,7 @@ async function postJson(url: string, body: unknown, fetchImpl: typeof fetch) {
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
-      throw new RpcError("rpc_timeout", { details: "timeout" });
+      throw new RpcError("rpc_timeout", { details: "timeout", kind: "timeout" });
     }
     throw error;
   }
@@ -81,8 +112,14 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
-export async function rpcCall(url: string, method: string, params: unknown[], fetchImpl: typeof fetch = fetch) {
-  const { response, parsed } = await postJson(url, { jsonrpc: "2.0", id: 1, method, params }, fetchImpl);
+export async function rpcCall(
+  url: string,
+  method: string,
+  params: unknown[],
+  fetchImpl: typeof fetch = fetch,
+  meter?: { charge(): void },
+) {
+  const { response, parsed } = await postJson(url, { jsonrpc: "2.0", id: 1, method, params }, fetchImpl, meter);
   const record = asRecord(parsed);
   const error = asRecord(record?.error);
   if (error) {
@@ -145,13 +182,23 @@ function normalizeRpcLog(raw: RawLog, timestamp: number | null): RpcLog | null {
   return { ...log, decoded: decoded != null };
 }
 
-export function createRpc(url: string, fetchImpl: typeof fetch = fetch) {
+function emptyCode(code: unknown) {
+  const text = String(code ?? "").trim().toLowerCase();
+  return text === "" || text === "0x" || /^0x0+$/.test(text);
+}
+
+export function createRpc(url: string, fetchImpl: typeof fetch = fetch, meter?: { charge(): void }) {
   return {
     async chainId() {
-      return hexToInt(await rpcCall(url, "eth_chainId", [], fetchImpl));
+      return hexToInt(await rpcCall(url, "eth_chainId", [], fetchImpl, meter));
+    },
+    async getCode(address: string) {
+      const code = await rpcCall(url, "eth_getCode", [address, "latest"], fetchImpl, meter);
+      if (emptyCode(code)) throw new Error(`contract code is empty for ${address}`);
+      return code;
     },
     async finalizedBlock() {
-      const result = asRecord(await rpcCall(url, "eth_getBlockByNumber", ["finalized", false], fetchImpl));
+      const result = asRecord(await rpcCall(url, "eth_getBlockByNumber", ["finalized", false], fetchImpl, meter));
       if (!result) return null;
       const number = hexToInt(result.number);
       if (number == null) return null;
@@ -162,7 +209,7 @@ export function createRpc(url: string, fetchImpl: typeof fetch = fetch) {
         fromBlock: hexQuantity(fromBlock),
         toBlock: hexQuantity(toBlock),
         address: [ESCROW, PANEL],
-      }], fetchImpl);
+      }], fetchImpl, meter);
       const rows = Array.isArray(result) ? result.map((row) => asRecord(row)).filter((row): row is RawLog => row != null) : [];
       const missing = new Set<number>();
       for (const row of rows) {
@@ -179,7 +226,7 @@ export function createRpc(url: string, fetchImpl: typeof fetch = fetch) {
           method: "eth_getBlockByNumber",
           params: [hexQuantity(block), false],
         }));
-        const { response, parsed } = await postJson(url, calls, fetchImpl);
+        const { response, parsed } = await postJson(url, calls, fetchImpl, meter);
         const batch = Array.isArray(parsed) ? parsed : [parsed];
         for (const item of batch) {
           const record = asRecord(item);
@@ -203,7 +250,8 @@ export function createRpc(url: string, fetchImpl: typeof fetch = fetch) {
       for (const row of rows) {
         const block = hexToInt(row.blockNumber);
         const stamped = normalizeRpcLog(row, block == null ? null : timestamps.get(block) ?? null);
-        if (stamped) logs.push(stamped);
+        if (!stamped) throw new PointsError("unverifiable_log");
+        logs.push(stamped);
       }
       return logs;
     },

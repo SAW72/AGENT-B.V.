@@ -1,5 +1,6 @@
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "../../src/constants.mjs";
+import { DISCLAIMER } from "./disclaimer.mjs";
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
 export const HISTORY_DEFAULT_LIMIT = 25;
@@ -20,20 +21,15 @@ const HISTORY_ORDER: Record<string, number> = {
 };
 const DISCLAIMER_LINK_SLOTS = [
   "master_disclaimer",
-  "bvt_securities_disclaimer",
+  "legal_notice_url",
   "as_is",
   "not_investment",
   "eligibility_notice",
   "abuse_policy",
 ] as const;
 
-const DISCLAIMER_TEXT = sepolia.display.disclaimer;
-
 export function pointsEnabled(env: { POINTS_ENABLED?: string } | undefined) {
-  const raw = env?.POINTS_ENABLED;
-  if (raw == null || String(raw).trim() === "") return false;
-  const text = String(raw).trim().toLowerCase();
-  return text === "1" || text === "true" || text === "on" || text === "yes";
+  return env?.POINTS_ENABLED === "true";
 }
 
 export function parseExactHttpsOrigin(raw: unknown) {
@@ -120,10 +116,10 @@ function disclaimer() {
     const value = source?.[key];
     links[key] = value == null || String(value).trim() === "" ? null : String(value);
   }
-  if (DISCLAIMER_TEXT !== "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.") {
+  if (sepolia.display.disclaimer !== DISCLAIMER) {
     throw new Error("display.disclaimer mismatch");
   }
-  return { text: DISCLAIMER_TEXT, links };
+  return { text: DISCLAIMER, links };
 }
 
 function expandIPv6(input: string) {
