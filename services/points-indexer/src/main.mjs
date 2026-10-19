@@ -1102,6 +1102,7 @@ export async function start(options = {}) {
   let readDb = null;
   let configFailed = false;
   let configGate = null;
+  let moduleFreeHits = null;
   const env = options.env ?? process.env;
 
   function readDatabase() {
@@ -1117,7 +1118,7 @@ export async function start(options = {}) {
     if (readApi) return Promise.resolve(readApi);
     if (!readApiLoading) {
       readApiLoading = Promise.all([
-        import("./readApi.mjs"),
+        loadReadApiModule(),
         import("./readApiSqliteStore.mjs"),
       ]).then(([mod, stores]) => {
         const openRead = typeof options.readApiFactory === "function"
@@ -1148,8 +1149,66 @@ export async function start(options = {}) {
     return readApiLoading;
   }
 
+  function loadReadApiModule() {
+    if (typeof options.readApiImport === "function") return options.readApiImport();
+    return import("./readApi.mjs");
+  }
+
+  function moduleFreeRate() {
+    const raw = env?.POINTS_READ_RATE_PER_MINUTE;
+    if (raw == null || String(raw).trim() === "") return 60;
+    const text = String(raw).trim();
+    if (!/^[1-9][0-9]*$/.test(text)) return 60;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) ? parsed : 60;
+  }
+
+  function moduleFreeAllow(key) {
+    const max = moduleFreeRate();
+    const now = Date.now();
+    const windowMs = 60_000;
+    const id = key || "unknown";
+    if (!moduleFreeHits) moduleFreeHits = new Map();
+    const live = (moduleFreeHits.get(id) ?? []).filter((at) => now - at < windowMs);
+    if (live.length >= max) {
+      moduleFreeHits.set(id, live);
+      return {
+        ok: false,
+        retryAfterSec: Math.max(1, Math.ceil((live[0] + windowMs - now) / 1000)),
+      };
+    }
+    if (!moduleFreeHits.has(id) && moduleFreeHits.size >= 16384) {
+      return { ok: false, retryAfterSec: 60 };
+    }
+    live.push(now);
+    moduleFreeHits.set(id, live);
+    return { ok: true };
+  }
+
+  function replyConfigUnavailableWithoutModule(req, res) {
+    const headers = moduleFreeCorsHeaders(req, env);
+    const decision = moduleFreeAllow(req.socket?.remoteAddress);
+    if (!decision.ok) {
+      writeJson(res, 429, { ok: false, error: "rate_limited" }, {
+        ...headers,
+        "retry-after": String(decision.retryAfterSec),
+      });
+      return;
+    }
+    writeJson(res, 503, { ok: false, error: "config_unavailable" }, headers);
+  }
+
   async function countConfigUnavailable(req, res) {
-    const mod = await import("./readApi.mjs");
+    let mod = null;
+    try {
+      mod = await loadReadApiModule();
+    } catch {
+      mod = null;
+    }
+    if (!mod) {
+      replyConfigUnavailableWithoutModule(req, res);
+      return;
+    }
     if (!configGate) {
       const settings = mod.readSettings(env);
       configGate = {
@@ -1288,6 +1347,60 @@ export async function start(options = {}) {
 }
 
 const READ_ALLOW = "GET, HEAD, OPTIONS";
+const EXACT_HTTPS_ORIGIN =
+  /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+function exactHttpsOrigin(raw) {
+  const original = String(raw ?? "").trim();
+  if (!original || original.includes("*") || original.toLowerCase() === "null") return null;
+  const stripped = original.endsWith("/") ? original.slice(0, -1) : original;
+  const separator = stripped.indexOf("://");
+  if (separator <= 0) return null;
+  const scheme = stripped.slice(0, separator).toLowerCase();
+  if (scheme !== "https") return null;
+  const rest = stripped.slice(separator + 3);
+  if (!rest || rest.includes("@")) return null;
+  const tailAt = rest.search(/[/?#]/);
+  const hostRaw = tailAt === -1 ? rest : rest.slice(0, tailAt);
+  const tail = tailAt === -1 ? "" : rest.slice(tailAt);
+  if (tail || hostRaw.includes(":")) return null;
+  const entry = `https://${hostRaw.toLowerCase()}`;
+  if (!EXACT_HTTPS_ORIGIN.test(entry)) return null;
+  try {
+    const url = new URL(entry);
+    if (
+      url.origin !== entry
+      || url.protocol !== "https:"
+      || url.username
+      || url.password
+      || url.port
+      || url.search
+      || url.hash
+      || (url.pathname !== "/" && url.pathname !== "")
+    ) return null;
+  } catch {
+    return null;
+  }
+  return entry;
+}
+
+function moduleFreeCorsHeaders(req, env) {
+  const headers = {
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": READ_ALLOW,
+    vary: "Origin",
+  };
+  const rawList = env?.POINTS_CORS_ORIGINS;
+  if (rawList == null || String(rawList).trim() === "") return headers;
+  const allowed = new Set();
+  for (const part of String(rawList).split(",")) {
+    const parsed = exactHttpsOrigin(part);
+    if (parsed) allowed.add(parsed);
+  }
+  const origin = exactHttpsOrigin(req?.headers?.origin);
+  if (origin && allowed.has(origin)) headers["access-control-allow-origin"] = origin;
+  return headers;
+}
 
 async function readCorsHeaders(req, env) {
   const headers = {

@@ -35,6 +35,14 @@ const FLAG_SOURCE = fileURLToPath(new URL("../src/pointsFlag.mjs", import.meta.u
 const READ_SOURCE = fileURLToPath(new URL("../src/readApi.mjs", import.meta.url));
 const MAIN_SOURCE = fileURLToPath(new URL("../src/main.mjs", import.meta.url));
 const ADDRESS = "0x1111111111111111111111111111111111111111";
+
+function waitFor(promise, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), 5000);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 const PAGE_WALLET = "0x00000000000000000000000000000000000000a1";
 
 const FORBIDDEN_KEYS = new Set([
@@ -1010,9 +1018,11 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(limiter.allow(key("a", "1")).ok, true);
       assert.equal(limiter.allow(key("a", "2")).ok, true);
       assert.equal(limiter.coarseSize(), 1);
+      assert.equal(limiter.allow(key("a", "3")).ok, false);
+      assert.equal(limiter.coarseSize(), 1);
       assert.equal(limiter.allow(key("b", "1")).ok, false);
       assert.equal(limiter.coarseSize(), 1);
-      assert.equal(limiter.allow(key("a", "3")).ok, false);
+      assert.equal(limiter.allow(key("a", "4")).ok, false);
       assert.equal(limiter.coarseSize(), 1);
     } finally {
       limiter.close();
@@ -1387,17 +1397,21 @@ describe("points read API", { concurrency: false }, () => {
       POINTS_LOG_RANGE: "10",
       POINTS_MAX_WINDOWS_PER_PASS: "1",
     };
-    let release;
+    let releaseHead;
+    const headGate = new Promise((resolve) => { releaseHead = resolve; });
+    let markEntered;
+    const headEntered = new Promise((resolve) => { markEntered = resolve; });
+    let markListening;
+    const listening = new Promise((resolve) => { markListening = resolve; });
     let health;
     const pending = start({
       once: true,
       serve: true,
       port: 0,
       env,
-      paceNow: () => 0,
-      sleep: async () => {},
       onListening(info) {
         health = info;
+        markListening();
       },
       rpc: {
         async chainId() {
@@ -1407,7 +1421,8 @@ describe("points read API", { concurrency: false }, () => {
           return "0x6001600055";
         },
         async finalizedBlockNumber() {
-          if (!release) await new Promise((resolve) => { release = resolve; });
+          markEntered();
+          await headGate;
           return ESCROW_START_BLOCK - 1;
         },
         async getLogs() {
@@ -1417,14 +1432,9 @@ describe("points read API", { concurrency: false }, () => {
     });
     let running;
     try {
-      for (let attempt = 0; attempt < 100 && !health; attempt += 1) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      for (let attempt = 0; attempt < 100 && !release; attempt += 1) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
+      await waitFor(listening, "health listener did not open");
+      await waitFor(headEntered, "finalized head read did not start");
       assert.ok(health);
-      assert.equal(typeof release, "function");
       const origin = health.url.replace(/\/health$/, "");
       const earlyHealth = await request(origin, "/health");
       assert.equal(earlyHealth.response.status, 503);
@@ -1447,8 +1457,8 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(syncing.json.indexed_to_block, null);
       assert.equal(syncing.json.points_total, 0);
       assert.equal(syncing.json.points_withheld, true);
-      release();
-      release = null;
+      releaseHead();
+      releaseHead = null;
       running = await pending;
       const fresh = await request(origin, "/health");
       assert.equal(fresh.response.status, 200);
@@ -1499,7 +1509,7 @@ describe("points read API", { concurrency: false }, () => {
       const configAfter = await request(origin, "/v1/points/config");
       assert.equal(configAfter.response.status, 200);
     } finally {
-      if (release) release();
+      if (releaseHead) releaseHead();
       if (!running) {
         try {
           running = await pending;
@@ -1539,7 +1549,10 @@ describe("points read API", { concurrency: false }, () => {
       getLogs,
     });
     let running = null;
-    let releaseSecond = null;
+    let releaseSecond;
+    const secondGate = new Promise((resolve) => { releaseSecond = resolve; });
+    let markSecond;
+    const secondEntered = new Promise((resolve) => { markSecond = resolve; });
     try {
       const first = await start({
         once: true,
@@ -1563,8 +1576,6 @@ describe("points read API", { concurrency: false }, () => {
         serve: true,
         port: 0,
         env,
-        paceNow: () => 0,
-        sleep: async () => {},
         onListening(info) {
           health = info;
         },
@@ -1573,14 +1584,15 @@ describe("points read API", { concurrency: false }, () => {
         },
         rpc: codeRpc(liveHead, async () => {
           calls += 1;
-          if (calls === 2) await new Promise((resolve) => { releaseSecond = resolve; });
+          if (calls === 2) {
+            markSecond();
+            await secondGate;
+          }
           return [];
         }),
       });
       try {
-        for (let attempt = 0; attempt < 200 && (calls < 2 || !health); attempt += 1) {
-          await new Promise((resolve) => setImmediate(resolve));
-        }
+        await waitFor(secondEntered, "second window did not start");
         assert.equal(calls, 2);
         assert.ok(health);
         assert.ok(opened);
@@ -2138,7 +2150,10 @@ describe("points read API", { concurrency: false }, () => {
         key = null;
       }
     }
-    assert.equal(/stays 0/i.test(text), false);
+    const hopAt = text.indexOf("key: POINTS_TRUSTED_PROXY_HOPS");
+    const hopNote = text.slice(hopAt, hopAt + 220);
+    assert.match(hopNote, /until/i);
+    assert.match(hopNote, /echo/i);
     assert.equal(env.POINTS_TRUSTED_PROXY_HOPS, "0");
     assert.equal(Object.hasOwn(env, "POINTS_CLOUDFLARE_INGRESS"), false);
     const settings = readSettings(env);
@@ -2350,6 +2365,166 @@ describe("points read API", { concurrency: false }, () => {
     }
   });
 
+  it("counts a 503 when the read module fails to load", async () => {
+    const lines = [];
+    const original = console.error;
+    console.error = (line) => lines.push(String(line));
+    const env = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_CORS_ORIGINS: "https://app.invalid",
+      POINTS_READ_RATE_PER_MINUTE: "2",
+    };
+    let running;
+    try {
+      running = await start({
+        once: true,
+        serve: true,
+        port: 0,
+        env,
+        paceNow: () => 0,
+        sleep: async () => {},
+        readApiImport() {
+          throw new Error("load failed");
+        },
+        rpc: {
+          async chainId() {
+            return 84532;
+          },
+          async getCode() {
+            return "0x6001600055";
+          },
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        },
+      });
+      const health = await fetch(running.healthUrl);
+      assert.equal(health.status, 200);
+      await health.text();
+      env.POINTS_ENABLED = "true";
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      const allowed = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://app.invalid" },
+      });
+      assert.equal(allowed.response.status, 503);
+      assert.equal(allowed.json.error, "config_unavailable");
+      assert.equal(allowed.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      assert.equal(allowed.response.headers.get("vary"), "Origin");
+      const other = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://other.invalid" },
+      });
+      assert.equal(other.response.status, 503);
+      assert.equal(other.response.headers.get("access-control-allow-origin"), null);
+      const blocked = await request(origin, "/v1/points/config", {
+        headers: { origin: "https://app.invalid" },
+      });
+      assert.equal(blocked.response.status, 429);
+      assert.equal(blocked.json.error, "rate_limited");
+      assert.equal(blocked.response.headers.get("access-control-allow-origin"), "https://app.invalid");
+      assert.equal(blocked.response.headers.get("retry-after") != null, true);
+      const still = await fetch(running.healthUrl);
+      assert.equal(still.status, 200);
+      await still.text();
+      assert.equal(lines.filter((line) => line.includes("config_unavailable")).length, 1);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
+  it("keys the pre-load limiter by the hop count and the ingress header", async () => {
+    const original = console.error;
+    console.error = () => {};
+    const baseEnv = {
+      CHAIN_ID: "84532",
+      POINTS_DB_PATH: ":memory:",
+      POINTS_POLL_MS: "60000",
+      POINTS_LOG_RANGE: "10",
+      POINTS_ENABLED: "true",
+      POINTS_READ_RATE_PER_MINUTE: "1",
+    };
+    const rpc = {
+      async chainId() {
+        return 84532;
+      },
+      async getCode() {
+        return "0x6001600055";
+      },
+      async finalizedBlockNumber() {
+        return ESCROW_START_BLOCK;
+      },
+      async getLogs() {
+        return [];
+      },
+    };
+    async function boot(extra) {
+      return start({
+        once: true,
+        serve: true,
+        port: 0,
+        env: { ...baseEnv, ...extra },
+        paceNow: () => 0,
+        sleep: async () => {},
+        readApiFactory() {
+          throw new Error("config_unavailable");
+        },
+        rpc,
+      });
+    }
+    let running;
+    try {
+      running = await boot({ POINTS_TRUSTED_PROXY_HOPS: "1" });
+      const origin = running.healthUrl.replace(/\/health$/, "");
+      const first = await request(origin, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.5" },
+      });
+      const second = await request(origin, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.6" },
+      });
+      const again = await request(origin, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.5" },
+      });
+      assert.equal(first.response.status, 503);
+      assert.equal(second.response.status, 503);
+      assert.equal(again.response.status, 429);
+      await running.stop();
+      running = await boot({ POINTS_TRUSTED_PROXY_HOPS: "0" });
+      const shared = running.healthUrl.replace(/\/health$/, "");
+      const socketA = await request(shared, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.7" },
+      });
+      const socketB = await request(shared, "/v1/points/config", {
+        headers: { "x-forwarded-for": "203.0.113.8" },
+      });
+      assert.equal(socketA.response.status, 503);
+      assert.equal(socketB.response.status, 429);
+      await running.stop();
+      running = await boot({ POINTS_CLOUDFLARE_INGRESS: "true" });
+      const ingress = running.healthUrl.replace(/\/health$/, "");
+      const cfA = await request(ingress, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      });
+      const cfB = await request(ingress, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "203.0.113.10" },
+      });
+      const cfAgain = await request(ingress, "/v1/points/config", {
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      });
+      assert.equal(cfA.response.status, 503);
+      assert.equal(cfB.response.status, 503);
+      assert.equal(cfAgain.response.status, 429);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+    }
+  });
+
   it("reads CF-Connecting-IP only when Cloudflare ingress is declared", async () => {
     const input = {
       remoteAddress: "127.0.0.1",
@@ -2398,8 +2573,6 @@ describe("points read API", { concurrency: false }, () => {
       serve: true,
       port: 0,
       env,
-      paceNow: () => 0,
-      sleep: async () => {},
       onIndexer(indexer) {
         const original = indexer.rebuild.bind(indexer);
         indexer.rebuild = () => {
