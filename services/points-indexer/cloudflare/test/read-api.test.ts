@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { createReadApi, httpsUrl, pointsEnabled } from "../src/read-api";
+import { publicDetail } from "../src/rpc";
 
 const DISCLAIMER = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
 
@@ -163,6 +164,21 @@ describe("points read API", () => {
     expect(httpsUrl("https://example.com/legal")).toBe("https://example.com/legal");
     expect(httpsUrl("http://example.com/legal")).toBeNull();
     expect(httpsUrl("")).toBeNull();
+  });
+
+  it("drops client addresses and header secrets from log details", () => {
+    const address = `0x${"ab".repeat(20)}`;
+    const detail = publicDetail(
+      `empty ${address} from 203.0.113.8 via 2001:db8::1 Authorization: secret hmac=abcdef http://rpc.test/base`,
+      "http://rpc.test/base",
+    );
+    expect(detail).not.toContain(address);
+    expect(detail).not.toContain("203.0.113.8");
+    expect(detail).not.toContain("2001:db8");
+    expect(detail).not.toContain("secret");
+    expect(detail).not.toContain("abcdef");
+    expect(detail).not.toContain("rpc.test");
+    expect(detail).toContain("[redacted]");
   });
 
   it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {

@@ -1,4 +1,4 @@
-import { env, runInDurableObject, SELF } from "cloudflare:test";
+import { env, listDurableObjectIds, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { ESCROW_START_BLOCK } from "./helpers";
 
@@ -7,10 +7,44 @@ function stub() {
 }
 
 describe("points request budget", () => {
+  it("counts a duplicate query against the client and does not wake the object", async () => {
+    expect(await listDurableObjectIds(env.POINTS)).toEqual([]);
+    const healthHeaders = { "CF-Connecting-IP": "203.0.113.50" };
+    for (let index = 0; index < 3; index += 1) {
+      const response = await SELF.fetch("https://points.test/health?x=1&x=2", { headers: healthHeaders });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ ok: false, error: "duplicate_query" });
+    }
+    const healthBlocked = await SELF.fetch("https://points.test/health?x=1&x=2", { headers: healthHeaders });
+    expect(healthBlocked.status).toBe(429);
+    expect(await healthBlocked.json()).toEqual({ ok: false, error: "rate_limited" });
+    const healthOther = await SELF.fetch("https://points.test/health?y=1&y=2", {
+      headers: { "CF-Connecting-IP": "203.0.113.51" },
+    });
+    expect(healthOther.status).toBe(400);
+    expect(await healthOther.json()).toEqual({ ok: false, error: "duplicate_query" });
+
+    const readHeaders = { "CF-Connecting-IP": "203.0.113.60" };
+    for (let index = 0; index < 60; index += 1) {
+      const response = await SELF.fetch("https://points.test/v1/points/config?x=1&x=2", { headers: readHeaders });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ ok: false, error: "duplicate_query" });
+    }
+    const readBlocked = await SELF.fetch("https://points.test/v1/points/config?x=1&x=2", { headers: readHeaders });
+    expect(readBlocked.status).toBe(429);
+    expect(await readBlocked.json()).toEqual({ ok: false, error: "rate_limited" });
+    const readOther = await SELF.fetch("https://points.test/v1/points/config?y=1&y=2", {
+      headers: { "CF-Connecting-IP": "203.0.113.61" },
+    });
+    expect(readOther.status).toBe(400);
+    expect(await readOther.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expect(await listDurableObjectIds(env.POINTS)).toEqual([]);
+  });
+
   it("caches health, limits it, and caps durable object wakes across addresses", async () => {
     const repeated = await SELF.fetch("https://points.test/health?x=1&x=2");
     expect(repeated.status).toBe(400);
-    expect(await repeated.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expect(await repeated.json()).toEqual({ ok: false, error: "client_address_required" });
 
     const missingHealth = await SELF.fetch("https://points.test/health");
     expect(missingHealth.status).toBe(400);

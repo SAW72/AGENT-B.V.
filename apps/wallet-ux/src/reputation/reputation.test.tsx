@@ -258,6 +258,16 @@ describe("reputation panels", () => {
     renderView({ example: httpOnly, relayerUrl: null })
     expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
     expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
+    cleanup()
+    const missing = structuredClone(exampleSnapshot) as ReputationSnapshot
+    missing.balance.disclaimer.links = {
+      ...withLinks.balance.disclaimer.links,
+      legal_notice_url: null,
+    }
+    renderView({ example: missing, relayerUrl: null })
+    expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
+    expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
+    expect(screen.getByTestId("reputation-view").textContent ?? "").not.toContain("null")
   })
 })
 

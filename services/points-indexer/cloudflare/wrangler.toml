@@ -24,8 +24,10 @@ enabled = true
 
 [observability.logs]
 enabled = true
-# 1 keeps error and lag lines. Traces stay off on their own, below.
+# 1 keeps our error and lag lines. invocation_logs false drops Cloudflare's
+# per-request log. Traces stay off on their own, below.
 head_sampling_rate = 1
+invocation_logs = false
 
 [observability.traces]
 enabled = false

@@ -31,14 +31,14 @@ function guessWei(node, label) {
   return BigInt(value);
 }
 
-/** Keep an https link. Anything else, including http, becomes an empty string. */
+/** Keep an https link. http, garbage, and empty become null. */
 export function httpsLink(value) {
   const text = String(value ?? "").trim();
-  if (!text) return "";
+  if (!text) return null;
   try {
-    if (new URL(text).protocol !== "https:") return "";
+    if (new URL(text).protocol !== "https:") return null;
   } catch {
-    return "";
+    return null;
   }
   return text;
 }

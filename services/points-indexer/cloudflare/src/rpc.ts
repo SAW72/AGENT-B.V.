@@ -29,10 +29,24 @@ export function createSubrequestMeter(max = SUBREQUEST_BUDGET) {
 
 const URL_PATTERN = /https?:\/\/\S+/gi;
 
+const WALLET_ADDRESS = /0x[0-9a-f]{40}\b/gi;
+const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const IPV6 = /(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}/gi;
+const SENSITIVE_HEADER = /\b(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|hmac|cf-connecting-ip)\b[^,\n}]*/gi;
+
 export function redact(text: string, rpcUrl?: string) {
   let out = String(text ?? "");
   if (rpcUrl) out = out.split(String(rpcUrl)).join("[redacted-url]");
   return out.replace(URL_PATTERN, "[redacted-url]");
+}
+
+/** Strip client addresses, header secrets, and RPC URLs before a console line. */
+export function publicDetail(text: string, rpcUrl?: string) {
+  return redact(text, rpcUrl)
+    .replace(SENSITIVE_HEADER, "[redacted]")
+    .replace(WALLET_ADDRESS, "[redacted]")
+    .replace(IPV4, "[redacted]")
+    .replace(IPV6, "[redacted]");
 }
 
 export class RpcError extends Error {

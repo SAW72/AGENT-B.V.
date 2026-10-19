@@ -13,7 +13,7 @@ import {
 } from "./ledger";
 import { PointsError } from "../../src/hex.mjs";
 import { createScanPacer, jitterMs, scanErrorClass, sleepMs, textIsRateLimit } from "./pace";
-import { BudgetExceeded, createRpc, createSubrequestMeter, redact, RpcError, SUBREQUEST_BUDGET } from "./rpc";
+import { BudgetExceeded, createRpc, createSubrequestMeter, publicDetail, RpcError, SUBREQUEST_BUDGET } from "./rpc";
 
 type Storage = {
   sql: {
@@ -277,7 +277,7 @@ export async function runAlarm(options: {
         metaSet(storage.sql, "stale", "1");
         console.error(JSON.stringify({
           message: "ledger_error",
-          detail: redact(error instanceof Error ? error.message : "", rpcUrl),
+          detail: publicDetail(error instanceof Error ? error.message : "", rpcUrl),
         }));
         const cursor = lastScannedBlock(storage.sql);
         await schedule(Math.max(1, blocksBehind(head, cursor)));
@@ -319,7 +319,7 @@ export async function runAlarm(options: {
     }
     console.error(JSON.stringify({
       message: code,
-      detail: redact(error instanceof Error ? error.message : "", rpcUrl),
+      detail: publicDetail(error instanceof Error ? error.message : "", rpcUrl),
     }));
     const cursor = lastScannedBlock(storage.sql);
     const storedHead = finalizedBlock(storage.sql);
