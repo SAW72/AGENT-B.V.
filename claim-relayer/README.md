@@ -152,7 +152,7 @@ There is no shared browser secret. `CLAIM_API_SECRET` and the `x-claim-secret` h
 
 The live allowlist is `refund` only. `release` is **400** `release_not_relayable` as soon as the action is read, before signature recovery, domain checks, nonce claim, simulation, signing, or broadcast. A refused release does not consume an intent nonce. `ReleaseNotAuthorized` means: "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee." The relayer key is not that caller, so a relayed release would revert `ReleaseNotAuthorized` and burn gas. The payer sends an open release from their own wallet. `createEscrow`, `dispute`, `withdraw`, and `withdrawTo` are **400** `action_not_claim` before signature recovery. `createEscrow` stays on the connected wallet. `dispute` requires `msg.sender` to be a party, so a relayed dispute always reverts. `withdraw` and `withdrawTo` spend `pendingWithdrawals[msg.sender]`. The relayer key is that sender, so those calls would move the relayer's own credit, not the user's. They stay disabled.
 
-A per-IP token bucket runs after the kill switch and before the body is parsed. It returns **429** `rate_limited`. Render's proxy appends the connecting client to `X-Forwarded-For`, so only the rightmost hop is trusted. A missing header uses the socket address. `X-Real-IP` and Cloudflare headers are not read. This service is not behind Cloudflare.
+A per-IP token bucket and a global token bucket run after the kill switch and before the body is parsed. Either one returns **429** `rate_limited` with `Retry-After`. Nothing is signed or broadcast. Render's proxy appends the connecting client to `X-Forwarded-For`, so only the rightmost hop is trusted. A missing header uses the socket address. `X-Real-IP` and Cloudflare headers are not read. This service is not behind Cloudflare.
 
 ECDSA signatures must be 65 bytes with `v` in `{0, 1, 27, 28}` and low `s` (`s` at most `secp256k1n / 2`). Anything else on a 65-byte signature is **400** `invalid_signature` or **400** `high_s`, before `ecrecover`. The transaction is signed once. A timeout rebroadcasts that same raw transaction. It does not sign again with a new nonce or gas price.
 
@@ -179,14 +179,17 @@ The on-chain `msg.sender` is still the relayer key. The signature says who may a
 | Server-built calldata for that same escrow id | Relaying client bytes, a mismatched escrow id, or trailing bytes. |
 | Live allowlist of `refund` only, and `release_not_relayable` before a nonce is claimed | Relaying `release` (the relayer is not the payer), `createEscrow`, `dispute`, `withdraw`, or `withdrawTo`. |
 | Single-use `(sender, nonce)` | A second broadcast of the same approval. A replay is rejected. |
-| Per-IP token bucket before the body is read | A burst that would otherwise reach signature recovery. The rightmost `X-Forwarded-For` hop is the client. |
+| Per-IP and global token buckets before the body is read | A burst that would otherwise reach signature recovery. The rightmost `X-Forwarded-For` hop is the client. The global cap counts every client. |
+| Per-transaction gas, maxFeePerGas, and maxPriorityFeePerGas caps | A claim whose estimate or fee is above the cap. The relayer does not sign and does not broadcast. Caps are not raised automatically. |
 | Low `s` and `v` in `{0, 1, 27, 28}` | A malleable signature. |
 | Sign once, rebroadcast the same raw transaction | A timeout that would otherwise sign a second nonce. |
 | Per-escrow cap | Repeated submits against one claim. |
 | Daily gas budget | The relayer spending more than the configured gas for the day. |
 | Kill switch | Quote and claim traffic while the service is paused. |
 
-Rate limits, the escrow cap, and the gas budget are abuse controls. They are not authentication. They live in memory for one process. Defaults: 5 claims per sender per 60 seconds, 30 claims per IP per 60 seconds, 8 claims per escrow per 86400 seconds, and `10000000000000000` wei of gas per day priced at `1000000000` wei per gas. Override with `CLAIM_RATE_SENDER`, `CLAIM_RATE_IP`, `CLAIM_RATE_WINDOW_SEC`, `CLAIM_ESCROW_CAP`, `CLAIM_ESCROW_WINDOW_SEC`, `DAILY_GAS_BUDGET_WEI`, and `CLAIM_GAS_PRICE_WEI`.
+Rate limits, the escrow cap, the daily gas budget, and the per-transaction gas caps are abuse controls. They are not authentication. They live in memory for one process. Defaults: 5 claims per sender per 60 seconds, 30 claims per IP per 60 seconds, 60 claims globally per 60 seconds, 8 claims per escrow per 86400 seconds, and `10000000000000000` wei of gas per day priced at `1000000000` wei per gas. A prepared transaction is refused when gas is above `500000`, `maxFeePerGas` is above `5000000000` wei (5 gwei), or `maxPriorityFeePerGas` is above `2000000000` wei (2 gwei). Override with `CLAIM_RATE_SENDER`, `CLAIM_RATE_IP`, `CLAIM_RATE_GLOBAL`, `CLAIM_RATE_WINDOW_SEC`, `CLAIM_ESCROW_CAP`, `CLAIM_ESCROW_WINDOW_SEC`, `DAILY_GAS_BUDGET_WEI`, `CLAIM_GAS_PRICE_WEI`, `CLAIM_MAX_GAS`, `CLAIM_MAX_FEE_PER_GAS_WEI`, and `CLAIM_MAX_PRIORITY_FEE_WEI`.
+
+`KILL_SWITCH` unset means the switch is off (claims are not paused by the switch). `KILL_SWITCH=1` pauses quote and claim. Live broadcast still requires `LIVE_SUBMIT=1` and `SPENCER_RUN_AUTH=1`. There is no `CLAIM_API_SECRET`. A browser header named `x-claim-secret` is not an auth factor.
 
 ### Intent nonce store
 
