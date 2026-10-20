@@ -16,7 +16,7 @@ Privileged stamp writes (`POST /v1/bots`, denylist, history) are rejected withou
 ## Stage 1 — live model audit (you can do this today)
 - [ ] Set `XAI_API_KEY` (env only). Optional: `XAI_API_BASE=https://api.x.ai/v1` (HTTPS, env-only; no client-supplied base)
 - [ ] Run `python pipeline/end_to_end_runner.py --target grok --bot-id grok-001`
-- [ ] Keyword scores are demo-only. For an attestation-grade report use `--scorer llm --require-attestation` (or `ALLOW_KEYWORD_ATTESTATION=1` for an explicit demo exception)
+- [ ] The software scorer is the judgment. Run with `--require-attestation`. `--scorer llm` adds guidance and does not change the fingerprint. Do not treat a model score as the judgment.
 - [ ] Register with `X-API-Key: $STAMP_API_KEY`. `fingerprint_hash` must equal `sha256(canonical(fingerprint))`
 - [ ] Hit `GET /v1/bots/grok-001/stamp` (add `?attestation=true` only when the run is attestation-grade)
 

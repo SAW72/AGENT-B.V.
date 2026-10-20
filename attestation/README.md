@@ -25,6 +25,6 @@ Think of it like a notary who actually watched the signing instead of stamping a
 ## Status
 Design + schema + stub verifier. Next: pick a TEE provider and wire the first real enclave run.
 
-Keyword-only pipeline scores are **not** attestation-grade. The stamp API and `--require-attestation` refuse attestation-grade output unless the run used LLM-as-judge or `ALLOW_KEYWORD_ATTESTATION=1`.
+The software scorer is the judgment. The stamp API and `--require-attestation` accept that score. A model reply is guidance and is not attestation-grade.
 
 **Until a real TEE is wired and documented as live, do not market stamps as hardware-attested.** The current verifier is a stub; on-chain hashes do not prove an enclave ran. See [DISCLAIMER.md](../DISCLAIMER.md).
