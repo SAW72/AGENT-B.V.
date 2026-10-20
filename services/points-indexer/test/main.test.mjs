@@ -791,7 +791,16 @@ describe("process entry", () => {
       if (body.method === "eth_chainId") return send(200, { result: "0x14a34" });
       if (body.method === "eth_getCode") return send(200, { result: "0x60016000" });
       if (body.method === "eth_getBlockByNumber") {
-        return send(200, { result: { number: `0x${head.toString(16)}` } });
+        const tag = body.params?.[0];
+        if (tag === "finalized") return send(200, { result: { number: `0x${head.toString(16)}` } });
+        return send(200, {
+          result: {
+            number: tag,
+            hash: `0x${"11".repeat(32)}`,
+            logsBloom: `0x${"00".repeat(256)}`,
+            transactions: [],
+          },
+        });
       }
       if (body.method === "eth_getLogs") {
         const params = body.params?.[0] ?? {};
@@ -826,6 +835,7 @@ describe("process entry", () => {
       assert.equal(isRangeError(sample), true);
       running = await start({
         once: true,
+        sleep: async () => {},
         env: {
           CHAIN_ID: "84532",
           POINTS_DB_PATH: join(dir, "ledger.sqlite"),
