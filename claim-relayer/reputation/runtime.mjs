@@ -58,6 +58,7 @@ export function createReputationRuntime(options = {}) {
 }
 
 export function handleReputationRequest(runtime, url) {
+  // TODO: require auth before mainnet. This GET stays open on Base Sepolia.
   const path = url.pathname.replace(/\/+$/, "") || "/";
   parseReputationChainQuery(url.searchParams.get("chainId"));
   if (path === "/v1/reputation/config") return configBody(runtime);
@@ -140,6 +141,7 @@ function configBody(runtime) {
     product: latest.product,
     product_title: latest.product_title,
     status,
+    ...(latest.points_ledger_status ? { points_ledger_status: latest.points_ledger_status } : {}),
     caps: {
       usage_points_per_wallet_per_day: slot(latest.caps.usage_points_per_wallet_per_day),
       usage_points_per_bot_per_day: slot(latest.caps.usage_points_per_bot_per_day),

@@ -124,6 +124,7 @@ export function normalizeVersion(raw) {
       abuse_policy: httpsLink(raw.disclaimer_links?.abuse_policy),
     },
     caps_label: String(raw.display?.caps_label || "DRAFT/GUESS"),
+    points_ledger_status: pointsLedgerPublicStatus(raw.points_ledger),
     read_api: {
       rate_limit_per_minute: guessInt({ value: raw.read_api?.rate_limit_per_minute ?? 60 }, "rate"),
       history_page_default: guessInt({ value: raw.read_api?.history_page_default ?? 25 }, "page"),
@@ -131,6 +132,12 @@ export function normalizeVersion(raw) {
     },
     scan_max_block_range: guessInt({ value: raw.scan?.max_block_range ?? 625 }, "scan"),
   };
+}
+
+function pointsLedgerPublicStatus(ledger) {
+  if (!ledger || typeof ledger !== "object" || Array.isArray(ledger)) return null;
+  if (ledger.approved_for_live === true) return null;
+  return "pending verification";
 }
 
 function productNames(value) {
