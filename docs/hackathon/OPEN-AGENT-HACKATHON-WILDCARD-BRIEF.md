@@ -25,7 +25,7 @@ Regular tracks require building core functionality during the build window — p
 - Agentic tool-use layer (`agentic/tool_calling_loop.py`)
 - On-chain attestation on Base Sepolia: Denylist, Vault, Liability, InsuranceFund, DisputePanel, and the live **BotAttestationEscrow** at `0x3d660502D75f1e97b08c110255921b437A3C4C42`
 - Gate B seated with three arbitrators; ownership with the governance timelock
-- Wallet UX at https://agent-bv.pages.dev reading live contracts. https://agent-a-wallet-ux.pages.dev stays live until a live refund passes on the new site
+- Wallet UX at https://agent-bv.pages.dev reading live contracts. The previous Pages project `agent-a-wallet-ux` has been deleted.
 - Full test run passed (all tests green)
 - Dual license: AGPL-3.0 or commercial
 - Open items in `SECURITY.md` before mainnet: one ruling can settle two deployments; an early vote blocks the link; `release()` has no caller check
@@ -85,7 +85,7 @@ Meterless's repo ships hackathon starter templates, so the integration path is d
               ┌────────────────────────────┐
               │  Wallet UX (existing)      │
               │  agent-bv.pages.dev        │
-              │  old site stays live       │
+              │  old Pages project deleted │
               │  + new Zetaris-fed views   │
               └────────────────────────────┘
 ```

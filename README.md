@@ -111,7 +111,7 @@ Core `Deploy.s.sol`, `DeployDenylist.s.sol`, `DeployBotAttestationEscrow.s.sol`,
 
 ### Wallet UI (Base Sepolia)
 
-`apps/wallet-ux` connects an injected wallet and reads Gate A, the seated dispute panel, and live escrow. It refuses every chain except Base Sepolia (84532), including Ethereum mainnet and Base mainnet. Escrow and dispute calldata can be submitted from a wallet that is on Base Sepolia. The current Pages site is https://agent-bv.pages.dev. https://agent-a-wallet-ux.pages.dev stays live until a live refund passes on the new site.
+`apps/wallet-ux` connects an injected wallet and reads Gate A, the seated dispute panel, and live escrow. It refuses every chain except Base Sepolia (84532), including Ethereum mainnet and Base mainnet. Escrow and dispute calldata can be submitted from a wallet that is on Base Sepolia. The only Pages site is https://agent-bv.pages.dev. The previous project `agent-a-wallet-ux` has been deleted, and https://agent-a-wallet-ux.pages.dev no longer serves the wallet. Do not recreate it.
 
 ```bash
 cd apps/wallet-ux
