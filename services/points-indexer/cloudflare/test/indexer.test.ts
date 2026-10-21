@@ -884,8 +884,27 @@ describe("points alarm", () => {
       expect(String(stored.eligibility_status)).toBe("unverified");
       expect(String(stored.eligibility_reason)).toBe("ofac_unconfigured");
       expect(insertLedgerRow(state.storage.sql, { ...row, seq: 2 })).toBe(false);
+      const matched = insertLedgerRow(state.storage.sql, {
+        ...row,
+        seq: 3,
+        tx_hash: "0x2222222222222222222222222222222222222222",
+        log_index: 1,
+        utc_day: 2,
+        points: 9,
+        eligibility_status: "ineligible",
+        eligibility_reason: "sanctions_match",
+        points_withheld: 0,
+      });
+      expect(matched).toBe(true);
+      const kept = state.storage.sql.exec(
+        "SELECT points, points_withheld, eligibility_status, eligibility_reason FROM ledger_rows WHERE log_index = 1",
+      ).toArray()[0];
+      expect(Number(kept.points)).toBe(0);
+      expect(Number(kept.points_withheld)).toBe(1);
+      expect(String(kept.eligibility_status)).toBe("ineligible");
+      expect(String(kept.eligibility_reason)).toBe("sanctions_match");
       const countRow = state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger_rows").toArray()[0];
-      expect(Number(countRow.n)).toBe(1);
+      expect(Number(countRow.n)).toBe(2);
       const index = state.storage.sql.exec(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'rate_hits_ts'",
       ).toArray();
@@ -978,6 +997,42 @@ describe("points alarm", () => {
         expect(read("error_backoff_ms")).toBe(String(wait));
         expect(read("last_error")).toBe("ledger_error");
       }
+    });
+  });
+
+  it("keeps a sanctions match across rebuild and skips a fresh cache", async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { rebuild, refreshSanctionsCache } = await import("../src/ledger");
+      const sql = state.storage.sql;
+      sql.exec(
+        "INSERT INTO meta(key, value) VALUES('finalized_block', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      );
+      const wallet = "0x00000000000000000000000000000000000000a1";
+      let calls = 0;
+      const xml = `<?xml version="1.0"?><Sanctions>
+        <DateOfIssue><Year>2026</Year><Month>10</Month><Day>21</Day></DateOfIssue>
+        <FeatureType ID="345">Digital Currency Address - ETH</FeatureType>
+        <Feature FeatureTypeID="345"><FeatureVersion><VersionDetail>${wallet}</VersionDetail></FeatureVersion></Feature>
+        </Sanctions>`;
+      const fetchList = async () => {
+        calls += 1;
+        return new Response(xml, { status: 200 });
+      };
+      const first = await refreshSanctionsCache(sql, { fetch: fetchList, now: 1_000 });
+      expect(first.refreshed).toBe(true);
+      expect(first.count).toBe(1);
+      const again = await refreshSanctionsCache(sql, { fetch: fetchList, now: 2_000 });
+      expect(again.refreshed).toBe(false);
+      expect(calls).toBe(1);
+      sql.exec(
+        "INSERT INTO sanctions_wallets(wallet, reason, checked_at, list_version) VALUES(?, 'sanctions_match', 1, '2026-10-21')",
+        wallet,
+      );
+      rebuild({ sql, transactionSync: state.storage.transactionSync.bind(state.storage) });
+      const kept = sql.exec("SELECT wallet FROM sanctions_wallets").toArray();
+      expect(kept.map((row) => String(row.wallet))).toEqual([wallet]);
+      const ledger = sql.exec("SELECT COUNT(*) AS n FROM ledger_rows").toArray()[0];
+      expect(Number(ledger.n)).toBe(0);
     });
   });
 
