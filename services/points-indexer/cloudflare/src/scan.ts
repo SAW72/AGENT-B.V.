@@ -9,9 +9,11 @@ import {
   metaSet,
   newlyFinalCount,
   rebuild,
+  refreshSanctionsCache,
   setFinalizedBlock,
 } from "./ledger";
 import { PointsError } from "../../src/hex.mjs";
+import type { SanctionsFetch } from "../../src/sanctions.mjs";
 import { createScanPacer, jitterMs, scanErrorClass, sleepMs, textIsRateLimit } from "./pace";
 import { BudgetExceeded, createRpc, createSubrequestMeter, publicDetail, RpcError, SUBREQUEST_BUDGET } from "./rpc";
 
@@ -141,6 +143,7 @@ export async function runAlarm(options: {
   storage: Storage;
   env: Record<string, string | undefined>;
   now?: () => number;
+  sanctionsFetch?: SanctionsFetch;
 }) {
   const storage = options.storage;
   const env = options.env;
@@ -300,8 +303,20 @@ export async function runAlarm(options: {
       : setFinalizedBlock(storage.sql, verified);
     const crossed = newlyFinalCount(storage.sql, previous, headResult.finalizedBlock);
     const dirty = metaGet(storage.sql, "dirty") === "1";
+    let sanctionsRefreshed = false;
+    if (typeof options.sanctionsFetch === "function") {
+      try {
+        const outcome = await refreshSanctionsCache(storage.sql, {
+          fetch: options.sanctionsFetch,
+          now: now(),
+        });
+        sanctionsRefreshed = outcome.refreshed === true;
+      } catch {
+        console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      }
+    }
     let rebuilds = 0;
-    if (inserted > 0 || removed > 0 || crossed > 0 || dirty) {
+    if (inserted > 0 || removed > 0 || crossed > 0 || dirty || sanctionsRefreshed) {
       try {
         rebuild(storage);
         rebuilds = 1;
