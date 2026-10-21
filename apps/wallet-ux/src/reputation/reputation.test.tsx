@@ -115,7 +115,7 @@ describe("reputation fixtures", () => {
     expect(config.thresholds.season_start_block.value).toBeNull()
     expect(config.thresholds.season_start_timestamp.value).toBeNull()
     expect(config.thresholds.day_boundary.value).toBe("utc_day_by_block_timestamp")
-    expect(config.status).toBe("draft")
+    expect(config.status).toBe("locked")
   })
 
   it("renders both panels, withheld balances, and history from the fixtures", async () => {
@@ -142,8 +142,8 @@ describe("reputation fixtures", () => {
     expect(screen.getByTestId("placeholder-7").textContent).toMatch(/#7/)
     expect(screen.getByTestId("placeholder-9").textContent).toMatch(/#9/)
     expect(screen.getByTestId("placeholder-11").textContent).toMatch(/#11/)
-    expect(screen.getByTestId("placeholder-12").textContent).toMatch(/#12/)
-    expect(screen.getByTestId("draft-caps").textContent?.toLowerCase()).toContain("draft")
+    expect(screen.queryByTestId("placeholder-12")).toBeNull()
+    expect(screen.getByTestId("draft-caps").textContent?.toLowerCase()).toContain("locked")
     expect(screen.getByTestId("cap-usage_points_per_wallet_per_day").textContent).toContain("20")
     const caps = screen.getByTestId("draft-caps").textContent ?? ""
     expect(caps).toContain("Season length: 90 days")
