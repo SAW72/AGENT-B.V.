@@ -263,7 +263,7 @@ export function chainHandler(options: {
     }
     if (request.method === "eth_getBlockReceipts") {
       if (options.receiptMethodMissing) {
-        return { status: 200, rpcError: { code: -32601, message: "method not found" } };
+        return { status: 200, body: null, rpcError: { code: -32601, message: "method not found" } };
       }
       if (options.omitReceipts) return { status: 200, body: null };
       const number = Number(request.params[0]);
