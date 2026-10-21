@@ -201,6 +201,7 @@ describe("reputation config", () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const claimDomainName = "Agent-BV Relayer";
     const pointsDomainName = "Agent-BV Points";
+    const enforcerDomainName = "Agent-BV Enforcer";
     for (const label of [raw.product.name, raw.product.title]) {
       const hits = filesContaining(root, label).filter((file) => {
         if (allowed.has(file)) return false;
@@ -214,7 +215,9 @@ describe("reputation config", () => {
         // those domain names stays allowed.
         if (label === raw.product.name) {
           let body = readFileSync(file, "utf8");
-          for (const domainName of [claimDomainName, pointsDomainName]) body = body.split(domainName).join("");
+          for (const domainName of [claimDomainName, pointsDomainName, enforcerDomainName]) {
+            body = body.split(domainName).join("");
+          }
           if (!body.includes(label)) return false;
         }
         return true;
