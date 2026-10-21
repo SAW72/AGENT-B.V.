@@ -1,10 +1,10 @@
-# Agent-BV Points Spec
+# Agent-B.V. Points Spec
 
-**Status:** Draft. Docs only. Not announced. No contract change is proposed here.
+**Status:** Will be a public testnet beta with open signup. Base Sepolia only. Docs only. No contract change is proposed here.
 
-Points in this spec are off-chain and unpaid. They have no value, no token, and no promise about anything later. The only network is Base Sepolia (testnet). Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope.
+Points in this spec are an off-chain record of activity on Base Sepolia (testnet). Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope. The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
 
-This file is the points spec for that testnet ledger. It does not announce the program, deploy anything, or change a contract, a config file, or application code. Counsel review called for in `docs/POINTS-AND-ACCOUNTABILITY.md` still applies before any public announcement.
+This file is the points spec for that testnet ledger. It does not deploy anything, or change a contract, a config file, or application code. Lawyer reviews the first announcement text and a screenshot before any public post. Later posts reuse that approved text. See `docs/POINTS-ANNOUNCEMENT-DRAFT.md`.
 
 ## Sources
 
@@ -17,24 +17,23 @@ Built only from:
 
 Checklist #7, #9, and #12 use the definitions already written in `docs/reputation-ledger.md`, `docs/reputation/INDEXER_SPEC.md`, and `config/reputation/sepolia.json`. Where a fact is not in those files, this spec says **TBD**.
 
-`contracts/BotAttestationEscrow.sol` at the commit named below is the same file as in the tree this spec was written from (`git diff` against `7fe4a863e9bce0b70b629dab76ddd2728c97b536` is empty). Event topic0 values below are keccak256 of the canonical Solidity signature. `docs/reputation/EVENT_MAP.md` records the same `EscrowCreated`, `EscrowReleased`, `EscrowRefunded`, and three-argument `EscrowDisputed` topic0 values. Retired commits `78e3ba04` and `444c427` still emit the two-argument `EscrowDisputed`. This ledger does not count those retired logs.
+`contracts/BotAttestationEscrow.sol` at the commit named below is the same file as in the tree this spec was written from (`git diff` against `7fe4a863e9bce0b70b629dab76ddd2728c97b536` is empty). Event topic0 strings below are keccak256 of the canonical Solidity signature. `docs/reputation/EVENT_MAP.md` records the same `EscrowCreated`, `EscrowReleased`, `EscrowRefunded`, and three-argument `EscrowDisputed` topic0 strings. Retired commits `78e3ba04` and `444c427` still emit the two-argument `EscrowDisputed`. This ledger does not count those retired logs.
 
 ## What points are
 
 From `docs/POINTS-AND-ACCOUNTABILITY.md`:
 
-- Points record activity that already happened. They are post-facto only.
+- Points are recorded for activity that already happened. They are post-facto only.
 - There is no purchase, no referral bonus, and no holding requirement.
-- No token is minted during the points phase. `deployments/base-sepolia.json` has `BVT.address` set to `null`. No dollar amount is attached to a point.
-- The existing disclaimer line in `docs/reputation-ledger.md` is the posture of this ledger: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
-- This spec has no conversion rate, no allocation table, and no later redemption.
-- The dashboard is read-only. It reads the wallet address you entered and shows points by category and rank. It does not read a connected wallet. No login, no sign-up, no connect-wallet button. This spec does not add a dashboard.
+- `deployments/base-sepolia.json` has `BVT.address` set to `null`. No dollar amount is attached to a point.
+- The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
+- The dashboard reads the connected wallet. Points are tied to that wallet. Signup will be open on this public testnet beta. This spec does not add a dashboard.
 
 ## Where the events come from
 
 Count logs from one contract only:
 
-| Field | Value |
+| Field | Entry |
 |---|---|
 | Contract | `BotAttestationEscrow` |
 | Address | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |
@@ -169,7 +168,7 @@ Negative test for retired escrows. The panel address is shared with the retired 
 
 Point weights are **TBD**. This spec does not copy a verification-run, attestation, integration, bug-bounty, or mirrored-point rubric. Those are different actions. It also does not copy the GUESS weights in `config/reputation/sepolia.json`.
 
-The `action` value stored in the ledger is one of the strings in this table. That string is the `action` column of `UNIQUE(wallet, action, utc_day)`.
+The `action` name stored in the ledger is one of the strings in this table. That string is the `action` column of `UNIQUE(wallet, action, utc_day)`.
 
 | Action | What satisfies it | Wallet | Weight |
 |---|---|---|---|
@@ -183,7 +182,7 @@ The `action` value stored in the ledger is one of the strings in this table. Tha
 
 These rules are named here. Their numbers are **TBD**. No point weight is assigned until the numbers are set. They are not the GUESS floors or pair caps in `config/reputation/sepolia.json`.
 
-| Rule | What it compares | Value |
+| Rule | What it compares | Setting |
 |---|---|---|
 | `same_pair` | How many credited escrow logs share the unordered pair of `EscrowCreated.payer` and `EscrowCreated.payee`. The two lowercase addresses are one pair in either order. One cap per UTC day and one cap for the life of the ledger, on the credited wallet's counter for that pair. A same-controller identity beyond that pair is not defined in the sources, so this is the named rule. | **TBD** |
 | `min_escrow_amount` | `EscrowCreated.amount` for that `escrowId`. A log whose create amount is below the minimum is not credited. This is the gate against 1-wei farming. | **TBD** |
@@ -197,7 +196,7 @@ These rules are named here. Their numbers are **TBD**. No point weight is assign
 
 ### First activity
 
-`first_activity` replaces the name `first_connect`. There is no connect signal. The read-only dashboard reads the wallet address you entered. It does not read a connected wallet.
+`first_activity` replaces the name `first_connect`. Wallet connect is how the dashboard selects the address. The connect action itself is not a points row. Points for the connected wallet are the rows in this ledger.
 
 `first_activity` is one row per wallet. Its own key is `UNIQUE (wallet) WHERE action = 'first_activity'`. The chain-log unique key does not include this action, so the row does not collide with its source and does not need a NULL column to slip past that key. Every key column on the row is NOT NULL. `chain_id`, `contract`, `tx_hash`, `log_index`, and `block_number` are copies of the source log, stored for the link. They are not a second insert of `UNIQUE (chain_id, contract, tx_hash, log_index)`.
 
@@ -244,11 +243,11 @@ The same closed failure applies when the server cannot verify the log, when `cha
 
 Further columns (bot ids, `dispute_id`, `support`, point weight) are **TBD**. `escrow_id` on an escrow log is the event's `escrowId`. On a matched `VoteCast` it is the matching `EscrowDisputed.escrowId`. Checklist #12 stays open. The unique keys above are the caps this spec defines. They are not a locked numeric weight.
 
-## Decision chain: proved on Agent-BV first
+## Decision chain: proved on Agent-B.V. first
 
 The accountability layer is the decision chain in `docs/decision-chain-spec.md` and section 6 of `docs/POINTS-AND-ACCOUNTABILITY.md`. A badge is a label on that chain. The chain is the record.
 
-Agent-BV is where that layer is proved first. `docs/POINTS-AND-ACCOUNTABILITY.md` section 5 says STRANDED, RAT Score, and any other partner count AI-assisted activity only after Agent-BV has issued a human-verified attestation with the decision chain attached. Those programs do not decide human versus AI. Agent-BV does, and this ledger is the first points record that withholds credit when the chain fails.
+Agent-B.V. is where that layer is proved first. `docs/POINTS-AND-ACCOUNTABILITY.md` section 5 says STRANDED, RAT Score, and any other partner count AI-assisted activity only after Agent-B.V. has issued a human-verified attestation with the decision chain attached. Those programs do not decide human versus AI. Agent-B.V. does, and this ledger is the first points record that withholds credit when the chain fails.
 
 ### Chain the server already has to store
 
@@ -324,7 +323,7 @@ A credit for one of those actions is committed only when all of the following ar
 
 A matched `VoteCast` can pass these checks and still receive no numeric credit. Vote credit stays **TBD** until the human/AI arbitrator register exists. A stored vote whose points are 0 because that weight is unset does not produce a `return_day`. That exclusion is the vote-weight rule. It is independent of checklist #7. OFAC screening can zero a different row for `ofac_unconfigured`. It is not what keeps a vote at 0 here.
 
-If the terminal approver is `ai`, Agent-BV already blocks the action and logs the full chain. The points consequence, which is the proof on this ledger, is that no points row is committed. A decision-chain signature added after the escrow transaction is a confirmation, not prior authority, so a chain attached after the log does not make the log eligible. That rule does not apply to `PointsLink`, which is signed after the log. Both signatures, in that order, are necessary. They are not sufficient. The log still has to pass the rest of this spec, including a finalized block, a log that is not removed, a matching wallet, a low-`s` signature with nonzero `r` and `s` and a normalized `v`, an expiry inside the block-timestamp window, and the ledger gates. If the escrow was called outside that path and the log exists anyway, a missing or out-of-order signature means no credit, and so does a signature pair that fails any of those other gates.
+If the terminal approver is `ai`, Agent-B.V. already blocks the action and logs the full chain. The points consequence, which is the proof on this ledger, is that no points row is committed. A decision-chain signature added after the escrow transaction is a confirmation, not prior authority, so a chain attached after the log does not make the log count. That rule does not apply to `PointsLink`, which is signed after the log. Both signatures, in that order, are necessary. They are not sufficient. The log still has to pass the rest of this spec, including a finalized block, a log that is not removed, a matching wallet, a low-`s` signature with nonzero `r` and `s` and a normalized `v`, an expiry inside the block-timestamp window, and the ledger gates. If the escrow was called outside that path and the log exists anyway, a missing or out-of-order signature means no credit, and so does a signature pair that fails any of those other gates.
 
 The badge when the check passes is `Human-instructed`: a verified human approved before execution. `Bot-instructed` means every actor is `ai`. That badge is allowed only inside a non-financial scope, so it does not authorize a credit for these four events. `Human` by itself does not authorize fund movement. `Trusted` and `Not trusted` are labels on a scenario-library result. None of the badges is an action in the table above, and none of them has a point weight.
 
@@ -336,24 +335,24 @@ Whether large transfers need more than one human signature is undecided in both 
 
 The escrow contract does not read the chain. The check lives in the points writer. That split is intentional and is restated for Blockchain Builder under "No contract change".
 
-## Checklist #7 — OFAC screening
+## Checklist #7: OFAC screening
 
-**Open.** Definition from `docs/reputation-ledger.md`: OFAC / sanctions before soft launch. The `eligibility` hook fails closed, as Tokenomics decided. Every row is not eligible and `points` is 0 until a real screen is plugged in.
+**Open.** Scoring stays 0 until OFAC screening is configured. That is fail-closed. Definition from `docs/reputation-ledger.md`: OFAC / sanctions before soft launch. The screen hook fails closed, as that ledger doc decided. Every row keeps `points` at 0 until a real screen is plugged in.
 
 The running definition in that same doc, which this spec uses:
 
-- Default eligibility result: `{ eligible: false, status: "unverified", reason: "ofac_unconfigured" }`.
+- Default screen result: `{ eligible: false, status: "unverified", reason: "ofac_unconfigured" }`.
 - The API reports `eligibility.status` `"unverified"` and `points_withheld: true`.
 - The row is still stored. `points` is 0 so a raw sum does not credit it.
-- `docs/reputation/INDEXER_SPEC.md` shows a staging stub `{ eligible: true, reason: "pending-#7" }` and says public launch is blocked until #7 closes. `docs/reputation-ledger.md` says this service does not use that stub. This spec follows the ledger doc: eligible is false until a real screen exists.
+- `docs/reputation/INDEXER_SPEC.md` shows a staging stub `{ eligible: true, reason: "pending-#7" }` and says public launch is blocked until #7 closes. `docs/reputation-ledger.md` says this service does not use that stub. This spec follows the ledger doc: the screen stays closed until a real screen exists.
 
-`docs/TERMS.md` section 4 already bars comprehensively sanctioned jurisdictions, OFAC SDN and similar denied-party listings, and persons owned or controlled by them. There is no screen implementation named in the sources. Provider, list set, and refresh interval are **TBD**.
+`TERMS.md` at the repository root, section 4, already bars comprehensively sanctioned jurisdictions, OFAC SDN and similar denied-party listings, and persons owned or controlled by them. There is no screen implementation named in the sources. Provider, list set, and refresh interval are **TBD**.
 
 Interaction with the append-only ledger: a #7 zero row still occupies `UNIQUE(wallet, action, utc_day)` and, when it is a chain log, the partial unique key on `(chain_id, contract, tx_hash, log_index)`. A later screen does not rewrite the row. Backfill of points onto a zero row is **TBD** and is not assumed. A #7 zero row still counts as the `first_activity` source when it is that wallet's earliest stored escrow log.
 
-`allowAllEligibility` is a test hook in the reputation doc. It is not a production path for this ledger.
+The reputation doc's test hook that bypasses the screen is not a production path for this ledger.
 
-## Checklist #9 — Enforcer
+## Checklist #9: Enforcer
 
 **Open.** Definition from `docs/reputation-ledger.md`: name the sybil / abuse enforcer and write the policy. The `enforcer` hook has no named owner, so flags do not auto-cancel. `O5_REPEAT` and `DISPUTE_PREDATES_ESCROW` are review only. Burns and listings are signals. Cancels are ADJ. Checklist #7 stays fail closed.
 
@@ -366,13 +365,13 @@ Hook shape from `docs/reputation/INDEXER_SPEC.md`, still open (Spencer names the
 
 - `O5_REPEAT`: `withhold_wallet: false`, reason `review_only`. It does not zero later rows. The threshold cited there is at least 3 O5 rows whose UTC days fall in `[D - 6, D]`.
 - `DISPUTE_PREDATES_ESCROW`: one flag per dispute, `withhold_wallet` forced false, other rows left alone.
-- `BOT_BURNED`, `DENYLIST_LISTED`, `DENYLIST_UNLISTED`, and `PAIR_CAP`: recorded, not withheld. Denylist listings are not an earning source.
+- `BOT_BURNED`, `DENYLIST_LISTED`, `DENYLIST_UNLISTED`, and `PAIR_CAP`: recorded, not withheld. Denylist listings are not a points source.
 
 No owner is named, so this spec does not auto-cancel. ADJ lives on the reputation ledger (`config/reputation/adjustments.json`, pull request only, no admin write endpoint). Whether an ADJ row can target an action in this spec is **TBD**. Until that exists, abuse handling on this ledger is the closed cap: the extra row is not committed. Flags do not mint a negative point.
 
-## Checklist #12 — Caps
+## Checklist #12: Caps
 
-**Open.** Definition from `docs/reputation-ledger.md`: lock caps before soft launch. The numbers in `config/reputation/sepolia.json` are labeled `DRAFT/GUESS`. `GET /v1/reputation/config` returns `status: "draft"` on the body and on each cap and threshold. `config/reputation/sepolia.json` says every value under `points`, `floors`, `caps`, and `flags` is a Tokenomics GUESS until Spencer locks checklist #12, and it must not be used against live data until Blockchain Verifier APPROVE and Spencer's GO via BOB.
+**Open.** Definition from `docs/reputation-ledger.md`: lock caps before soft launch. The numbers in `config/reputation/sepolia.json` are labeled `DRAFT/GUESS`. `GET /v1/reputation/config` returns `status: "draft"` on the body and on each cap and threshold. `config/reputation/sepolia.json` says every figure under `points`, `floors`, `caps`, and `flags` is a GUESS until Spencer locks checklist #12, and it must not be used against live data until Blockchain Verifier APPROVE and Spencer's GO via BOB.
 
 This spec does not lock those numbers and does not reuse them as weights for `first_activity`, `fund`, `release_or_refund`, `dispute_open_or_vote`, or `return_day`. The GUESS figures (including 20 usage points per wallet per day, 500 per season, and 30 arbitrator points per day) stay in that config. They are not the daily cap for this ledger.
 
@@ -380,7 +379,16 @@ This spec does not lock those numbers and does not reuse them as weights for `fi
 
 ## No contract change
 
-No contract change is expected. Blockchain Builder confirmation is pending. It was looked for as his review of commit `6bf8488ce6c983e2f008a84020f55fff34fd693f`. Pull request #85 has no review, no issue comment, no review comment, and no commit comment on that SHA.
+No contract change is expected. An earlier look for Blockchain Builder confirmation, as his review of commit `6bf8488ce6c983e2f008a84020f55fff34fd693f`, found that pull request #85 has no review, no issue comment, no review comment, and no commit comment on that SHA.
+
+The confirmation below is a build record for Blockchain Builder. It is not announcement text. Blockchain Builder confirms that no contract change is needed for soft-launch scopes S, M, or L as those scopes are written in "Soft launch scope S". Checked on `main` at `6b67ad26aa35a3c87e980acfce12aab89ab21d76`:
+
+- The events this ledger counts are already in the source. `EscrowCreated` is `contracts/BotAttestationEscrow.sol:149-157`. `EscrowReleased` is `contracts/BotAttestationEscrow.sol:158`. `EscrowRefunded` is `contracts/BotAttestationEscrow.sol:159`. `EscrowDisputed` is `contracts/BotAttestationEscrow.sol:169` and is emitted at `contracts/BotAttestationEscrow.sol:578`. `VoteCast` is `contracts/DisputePanel.sol:28` and is emitted at `contracts/DisputePanel.sol:108`.
+- `git diff --quiet 7fe4a863e9bce0b70b629dab76ddd2728c97b536 HEAD -- contracts/BotAttestationEscrow.sol contracts/DisputePanel.sol` exited 0. Both files are byte-identical to that deployed commit.
+- Topic hashes were not recomputed. `cast` was not on the machine that checked this draft. The topic0 strings already in this spec match `services/points-indexer/src/constants.mjs:20-26` by text comparison only.
+- Chain, nonce, `PointsLink`, and the human/AI register stay off-chain, as this spec already says. Scope M is that off-chain write path. Scope L is the off-chain screen, the enforcer, the links, the caps, and the register. Neither scope asks the escrow or the panel to read them.
+
+Do not edit the header comment "Not deployed" at `contracts/BotAttestationEscrow.sol:4` to chase the deployment record. A source edit changes the verified-source hash. That is general compiler behavior. It was not tested here.
 
 This spec reads events the deployed escrow and the deployed panel already emit. It does not add a function, an event, a storage field, a salt, or a check inside `BotAttestationEscrow` or `DisputePanel`. The escrow does not verify `PointsLink`. The decision-chain check is off-chain, in the points writer. The approval is signed before the transaction. The link is signed after it. The escrow does not take a chain, an `actor_type`, a nonce, or a point balance.
 
@@ -390,10 +398,101 @@ Vote-event gap, for that confirmation: the escrow has no vote event. This spec c
 
 The header comment "Not deployed" in `contracts/BotAttestationEscrow.sol` disagrees with `deployments/base-sepolia.json`. This spec follows the deployment record. No source edit is requested.
 
+## Soft launch scope S
+
+Scope S will be a public testnet beta with open signup. The only network is Base Sepolia. Chain id is `84532`. Wallet connect is in. Points are tied to the connected wallet. Scoring stays 0 until OFAC screening is configured, fail-closed: the points total is 0, `points_withheld` is true, and the reason is `ofac_unconfigured`. That is the same triple `rowFrom` stores on a committed row (`services/points-indexer/src/indexer.mjs:984-987`). Scope S adds no write route.
+
+`claim-relayer/reputation/runtime.mjs:6` rejects the copy patterns named in that file. Public wording for what points are not is the disclaimer in "What points are".
+
+Scope M is the write path: nonce issue, chain submit, link submit, wallet signing, and an identity anchor. It needs its own design plan. It is later. It is not part of the soft launch.
+
+Scope L is a total above 0. It needs checklist #7 (OFAC), checklist #9 (the enforcer), checklist #11 (links), checklist #12 (locked caps), the vote register, and Lawyer. It is later. It is not part of the soft launch. This file does not lock a weight, a cap, or a gate. The checklist sections above stay open. Checklist #11 stays open.
+
+The public testnet beta is this ledger, shown for the connected wallet. The older reputation read API remains a separate system. Its fate is not decided here.
+
+No contract change is needed for scopes S, M, or L as written here. The confirmation and the file check are in "No contract change".
+
+### Two systems on main
+
+Two separate systems exist on `main` at `6b67ad26aa35a3c87e980acfce12aab89ab21d76`. They are not one ledger.
+
+(a) The older reputation read API and the new ledger are both in the tree.
+
+The older one is the O1–O5 and A1–A2 reputation read API in the claim-relayer. The routes are `GET /v1/reputation/config`, `GET /v1/reputation/:address`, and `GET /v1/reputation/:address/history` (`claim-relayer/app.mjs:219-240`, `claim-relayer/reputation/runtime.mjs:63-64`). `config/reputation/sepolia.json:3-4` names `config_version` `sepolia-draft-1` and `rule_version` `design-v2.2`. On 2026-10-17 a read-only GET of the claim-relayer `/health` route returned HTTP 200, `chainId` 84532, `mode` `live`, `liveSubmit` true, and `build.commit` `6b67ad26aa35a3c87e980acfce12aab89ab21d76`. `GET /v1/reputation/config?chainId=84532` on that host returned `status` `draft`. `GET /v1/reputation/0x0000000000000000000000000000000000000001?chainId=84532` returned `final` 0 and `provisional` 0 on both ledgers, `eligibility.status` `unverified`, `points_withheld` true, and `indexed_to_block` null. That address is the only live balance read recorded here. `docs/reputation-ledger.md:28` says there is no durable store and the in-memory batch is empty unless a caller injects one. The wallet UI is under `apps/wallet-ux/src/reputation/`. `ReputationView` appears only inside the collapsed "System status" details (`apps/wallet-ux/src/App.tsx:325-330` and `apps/wallet-ux/src/App.tsx:422-428`) and only when that wallet is connected on chain 84532 (`apps/wallet-ux/src/reputation/ReputationView.tsx:364`). The address it sends is `account.address` (`apps/wallet-ux/src/App.tsx:426`). "What points are" uses that same rule: wallet connect is in, and points are tied to the connected wallet. There is no typed-address lookup.
+
+The new ledger is this spec plus `services/points-indexer`. `GET /health` and `GET /health/` stay on that process (`services/points-indexer/src/main.mjs:480`). The read routes below are on the same Node process and on the Worker. They answer only when `POINTS_ENABLED` is the exact string `true`.
+
+(b) There is no write path, so as specced no real user can get even a zero-point row.
+
+`setOrigin`, `submitChain`, `issueNonce`, and `submitLink` are methods on the in-process indexer (`services/points-indexer/src/indexer.mjs:318`, `services/points-indexer/src/indexer.mjs:447`, `services/points-indexer/src/indexer.mjs:468`, and `services/points-indexer/src/indexer.mjs:550`). A search of `services/points-indexer/src/main.mjs` finds none of those four names. A search of `apps/` and `claim-relayer/` for `PointsLink`, `DecisionEntry`, `submitChain`, `issueNonce`, and `submitLink` found no match, so nothing in the wallet signs them. `rebuild` skips a candidate unless the chain is accepted and the link is accepted (`services/points-indexer/src/indexer.mjs:745-753`). A human entry is accepted only when the server origin has an identity anchor and behavioral signals (`services/points-indexer/src/signature.mjs:203-206`). Without those stored rows, `rebuild` commits nothing.
+
+### Storage (plan pending)
+
+The indexer host is Cloudflare: D1 plus a Worker or a Durable Object. That choice replaces the earlier host list. The storage design is plan pending. This document does not design it. One alarm on the Worker does at most 45 subrequests.
+
+### Read API contract
+
+The Node process and the Worker both implement this contract. Public reads stay off unless `POINTS_ENABLED` is the exact string `true`. `TRUE`, a space-padded `true`, `1`, `yes`, and `on` leave the reads off.
+
+The routes are on the points-indexer process, not on the claim-relayer. The claim-relayer is the submit process: the health read in "Two systems on main" returned `mode` `live`. `claim-relayer/README.md:21` says `RELAYER_PRIVATE_KEY` is a runtime environment variable only. The indexer process does not read a signing key.
+
+- `GET /v1/points/config`
+- `GET /v1/points/:address`
+- `GET /v1/points/:address/history`
+
+Chain id `84532` only. Any other chain id is rejected, including `1` and `8453`. An address that is not `0x` plus 40 hexadecimal digits is rejected, and a stored address is lowercase. The reputation route already uses that shape (`claim-relayer/reputation/runtime.mjs:64-71`).
+
+There is no authentication. The body is public data derived from chain logs plus the connected wallet. The limit below is not an auth control, which is also what `claim-relayer/reputation/rateLimit.mjs:1-3` says about its own limiter. The limit is 60 requests per minute per IP, in memory (`claim-relayer/reputation/rateLimit.mjs:5`), and it is empty again after a restart. On the Node process the client IP is the socket address. `X-Forwarded-For` is used only when `POINTS_TRUSTED_PROXY_HOPS` is a positive hop count, counted from the right. Hop 0, the default, ignores that header. `CF-Connecting-IP` is used only when `POINTS_CLOUDFLARE_INGRESS` is the exact string `true`. The Worker uses `CF-Connecting-IP` only and does not read `X-Forwarded-For`.
+
+CORS is an exact-origin allowlist on both runtimes. Unset `POINTS_CORS_ORIGINS` is an empty allowlist, so no origin is allowed. That is separate from the claim-relayer default. Methods are GET, HEAD, and OPTIONS. There is no wildcard. Responses send `Cache-Control: no-store`. There is no write route and no admin route. `GET /health` stays as it is. `setOrigin`, `submitChain`, `issueNonce`, and `submitLink` stay off HTTP. A repeated query parameter is HTTP 400 `duplicate_query` on every runtime.
+
+`GET /v1/points/config` returns chain id `84532`, `status` `draft`, `rule_version`, and the weights and gates in `services/points-indexer/config/points.json`. Every weight and every gate in that file is null. This draft does not set them. The response also carries `disclaimer`, with `text` and `links`.
+
+`GET /v1/points/:address` is the scope S read for the connected wallet. `points_total` is 0. `points_withheld` is true. `eligibility.status` is `unverified`. `eligibility.reason` is `ofac_unconfigured`. Scoring stays 0 until OFAC screening is configured. `indexed_to_block` is the cursor `last_scanned_block` (`services/points-indexer/src/indexer.mjs:274`, written inside `commitScanWindow` at `services/points-indexer/src/indexer.mjs:386`). It is not `finalized_block`. `setFinalizedBlock` stores the finalized head and only moves that head forward (`services/points-indexer/src/indexer.mjs:263-269`). The pass computes that head at `services/points-indexer/src/main.mjs:742`, reads the cursor at `services/points-indexer/src/main.mjs:743`, and stores the head at `services/points-indexer/src/main.mjs:815` even when the cursor is still behind. The address and history responses also include `finalized_block`, `stale`, and `disclaimer`. `GET /v1/points/:address/history` returns committed `ledger_rows` only. A page is 25 rows by default and 100 at most (`config/reputation/sepolia.json:160-161`).
+
+Open decision, not made here. This spec defines committed rows. `attributeLogs` (`services/points-indexer/src/attribute.mjs:30`) can name candidates in `raw_logs` that were not committed. Whether the address route may also return a count of activity seen on chain, with no points attached, is open. Until that is decided, the contract is committed rows only.
+
+Disclaimer link slots stay empty while checklist #11 is open (`config/reputation/sepolia.json:145-152`). The display sentence is `config/reputation/sepolia.json:155`. This draft does not fill the slots. `disclaimer.links` includes `legal_notice_url`, and each slot is empty until Lawyer confirms the surface.
+
+### Pacing before the first deploy
+
+This is a requirement before the first deploy. The work is PR-3. Pacing of `getLogs`, and stopping a pass when the RPC returns HTTP 429, uses the numbers proposed in PR #103. Those numbers are still Spencer's decision.
+
+The values proposed in PR #103 wait 200 ms between `getLogs` calls. A failed call is retried 3 times, at 1 s, then 2 s, then 4 s. The `Retry-After` cap is 30 s. A value at or under that cap stays inside the pass. A longer value ends the pass and the next pass carries the remaining wait. Windows are 200 blocks. One pass scans at most 500 windows. The final pacing numbers are Spencer's decision and are still pending.
+
+The only measured evidence recorded here is the figure from the soft-launch plan, which attributes it to the PR #100 Verifier verdict: 50 HTTP 429 responses in 1,055 requests, at 25 to 35 requests per second, on the public RPC. That count is not in the git tree. Pull request #100 on GitHub had no reviews and no comments when those lists were read for this draft. The count was not measured again here.
+
+Two other items stay parked. They are not planned. Grok Bot's ruling still covers both.
+
+- Storing `finalized_block` as the minimum of the reported head and the cursor. Today the stored head can move while `last_scanned_block` is behind, as cited in the read API section.
+- Removing the `DATABASE_URL` fallback at `services/points-indexer/src/main.mjs:150-152`.
+
+### Open items and owners
+
+| Owner | Open items |
+|---|---|
+| Spencer | The RPC secret. The Pages upload (`apps/wallet-ux/CLOUDFLARE_PAGES.md:3` is Direct Upload). Checklist #12 caps. Checklist #9 enforcer owner. The human/AI arbitrator register. |
+| Spencer | Pacing numbers for PR-3: Spencer's call, pending. |
+| Lawyer | Checklist #11 links. Checklist #7 OFAC provider. The first announcement text and a screenshot, before any public post. |
+| Grok Bot | The two parked items in the pacing section. |
+
+Checklists #7, #9, and #12 stay **Open** in the sections above. Checklist #11 stays open. No weight in this file is locked.
+
+### Later pull requests
+
+PR-1 is this docs amendment. Each item below waits until PR-1 is merged and until Grok Bot has ruled. This file does not authorize any of them.
+
+- PR-2. The indexer read API in the contract above. It waits for PR-1 merged plus Grok Bot's ruling.
+- PR-3. `getLogs` pacing, and stopping a pass on HTTP 429. Required before the first deploy. It waits for PR-1 merged plus Spencer's ruling on the pacing numbers. The parked `finalized_block` change and the parked `DATABASE_URL` removal are not PR-3.
+- PR-4. Storage on Cloudflare (D1 plus a Worker or a Durable Object) is plan pending. A later pull request may add that design. This file does not design it and it does not hold a secret.
+- PR-5. A wallet surface for the connected wallet on chain `84532`. Points are tied to that wallet. Signup will be open. It waits for PR-1 merged plus Grok Bot's ruling. The Pages upload stays with Spencer.
+
+Scope M and scope L are not in that list. Each needs its own plan. They are not the soft launch.
+
 ## Out of scope
 
 - Code, config, migrations, and deploys.
-- A new on-chain ledger, a token, a claim, a sale, or a mainnet deployment.
+- A new on-chain ledger, a sale, or a mainnet deployment.
 - Scoring `Credited`, `Withdrawn`, governance swap events, Denylist logs, or Vault logs as points. Denylist logs stay enforcer signals at 0 points where the indexer spec already says so.
 - The O1–O5 and A1–A2 reputation ledgers. They keep their own spec. This file does not sum with them.
 - Choosing the multi-human threshold. That question stays open in `docs/decision-chain-spec.md`.
