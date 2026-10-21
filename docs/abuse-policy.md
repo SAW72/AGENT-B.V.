@@ -24,6 +24,8 @@ The enforcer may cancel or freeze a flag when any of the following is true:
 3. The enforcer submits the cancellation or freeze through the designated admin path in the reputation config or relayer.
 4. The action is logged with timestamp and transaction hash where applicable.
 
+Designated admin path: `node claim-relayer/admin/cancelFlag.mjs` with the flagged wallet, flag type, reason, status (`cancelled` or `frozen`), timestamp, and the enforcer EIP-712 signature.
+
 ## Limits
 - The enforcer may not create new flags. Manual action is cancellation or freeze only.
 - The enforcer may not override points_ledger caps or gates.
