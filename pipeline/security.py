@@ -2,7 +2,7 @@
 
 Covers off-chain Breaker findings not handled by the on-chain PR:
 - F-03: bind fingerprint_hash to canonical(fingerprint)
-- F-05: keyword scorer is not attestation-grade unless explicitly allowed
+- F-05: the software scorer is the judgment. A model score is guidance and is not attestation-grade.
 - F-09: cap + isolate untrusted conversation / rap-sheet history
 - F-11: xAI base URL from env only (no client-supplied SSRF)
 """
@@ -29,12 +29,15 @@ DEFAULT_HISTORY_STORE_DETAILS_MAX = 2000
 
 UNTRUSTED_HISTORY_ROLES = frozenset({"user", "assistant"})
 HISTORY_STORE_KINDS = frozenset({"version", "incident", "provenance", "note"})
-SCORING_MODES = frozenset({"keyword", "llm_judge"})
+SCORING_MODES = frozenset({"software", "llm_judge"})
 
-KEYWORD_SCORER_NOTE = (
-    "Keyword scorer is demo-only and not attestation-grade. "
-    "Do not treat keyword scores as a production attestation."
+GUIDANCE_ONLY_NOTE = (
+    "The model provides guidance only. The software scorer is the judgment. "
+    "A model score is not part of the fingerprint."
 )
+
+# Kept so older imports still resolve. The env flag no longer grants attestation.
+KEYWORD_SCORER_NOTE = GUIDANCE_ONLY_NOTE
 
 
 def _int_env(name: str, default: int) -> int:
@@ -78,33 +81,31 @@ def keyword_attestation_allowed() -> bool:
 
 
 def normalize_scoring_mode(mode: Optional[str]) -> str:
-    raw = (mode or "keyword").strip().lower()
-    if raw in ("llm", "llm-judge", "llm_as_judge"):
-        raw = "llm_judge"
-    if raw not in SCORING_MODES:
-        raise ValueError(
-            f"unknown scoring_mode {mode!r}; expected keyword or llm_judge"
-        )
-    return raw
+    raw = (mode or "software").strip().lower()
+    if raw in ("keyword", "software"):
+        return "software"
+    if raw in ("llm", "llm-judge", "llm_as_judge", "llm_judge"):
+        return "llm_judge"
+    raise ValueError(
+        f"unknown scoring_mode {mode!r}; expected software or llm_judge"
+    )
 
 
 def attestation_grade_allowed(scoring_mode: Optional[str]) -> bool:
-    """Fail-closed: keyword stamps are not attestation-grade unless flagged (F-05)."""
+    """The software scorer is the judgment. A model mode is guidance only."""
     try:
         mode = normalize_scoring_mode(scoring_mode)
     except ValueError:
         return False
-    if mode == "llm_judge":
-        return True
-    return keyword_attestation_allowed()
+    return mode == "software"
 
 
 def refuse_attestation_reason(scoring_mode: Optional[str]) -> Optional[str]:
     if attestation_grade_allowed(scoring_mode):
         return None
     return (
-        "attestation-grade output refused: keyword-only scoring is demo-only. "
-        "Use scoring_mode=llm_judge or set ALLOW_KEYWORD_ATTESTATION=1"
+        "attestation-grade output refused: the model provides guidance only. "
+        "Judgment is the software scorer."
     )
 
 

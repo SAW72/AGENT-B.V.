@@ -40,13 +40,11 @@ The glue between scenarios and fingerprints.
 - Whatever runs without you babysitting.
 
 ## Scoring integrity
-The default keyword/heuristic scorer in `end_to_end_runner.py` is **demo-only**. It is gameable (keyword stuffing / refusal templates) and must not be treated as attestation-grade.
+The software scorer in `end_to_end_runner.py` is the judgment. It is a keyword heuristic, so a score can be wrong or gamed. A model does not replace it.
 
-Production path:
-
-1. Prefer `--scorer llm` (LLM-as-judge) when `XAI_API_KEY` is set.
-2. Stamp/attest outputs fail closed on keyword-only runs unless `ALLOW_KEYWORD_ATTESTATION=1` is set explicitly for a demo exception.
-3. Reports and stamps carry `scoring_mode` and `attestation_grade`.
+1. The fingerprint uses the software scores. `scoring_mode` is `software`.
+2. `--scorer llm` and `--scorer auto` attach model guidance beside those scores. The guidance is not hashed into the fingerprint.
+3. Stamps and `--require-attestation` accept `software`. They refuse `llm_judge`.
 
 ## Output
 JSON fingerprint + human-readable report. Both get hashed for the chain.

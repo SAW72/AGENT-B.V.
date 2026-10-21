@@ -24,16 +24,18 @@ def test_canonical_fingerprint_hash_is_stable():
     assert hashes_match("0x" + expected.upper(), expected)
 
 
-def test_attestation_grade_keyword_fail_closed(monkeypatch):
+def test_software_score_is_the_judgment(monkeypatch):
     monkeypatch.delenv("ALLOW_KEYWORD_ATTESTATION", raising=False)
-    assert attestation_grade_allowed("keyword") is False
-    assert refuse_attestation_reason("keyword")
-    assert attestation_grade_allowed("llm_judge") is True
-    assert refuse_attestation_reason("llm_judge") is None
+    assert attestation_grade_allowed("software") is True
+    assert attestation_grade_allowed("keyword") is True
+    assert refuse_attestation_reason("software") is None
+    assert attestation_grade_allowed("llm_judge") is False
+    assert "guidance only" in refuse_attestation_reason("llm_judge")
 
 
-def test_attestation_grade_keyword_opt_in(monkeypatch):
+def test_keyword_flag_does_not_make_a_model_score_the_judgment(monkeypatch):
     monkeypatch.setenv("ALLOW_KEYWORD_ATTESTATION", "1")
+    assert attestation_grade_allowed("llm_judge") is False
     assert attestation_grade_allowed("keyword") is True
 
 
