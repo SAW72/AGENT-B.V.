@@ -18,8 +18,9 @@ Auth split (F-02):
 Fingerprint bind (F-03): register recomputes sha256(canonical(fingerprint))
 and rejects mismatch.
 
-Scoring (F-05): keyword scorer is demo-only. Attestation-grade stamps are
-refused unless scoring_mode=llm_judge or ALLOW_KEYWORD_ATTESTATION=1.
+Scoring: the software scorer is the judgment. scoring_mode software (keyword
+is the same mode) is attestation-grade. scoring_mode llm_judge is guidance
+only and is refused when require_attestation is set.
 
 History (F-09): rap-sheet writes are operator-only, append-only, and capped.
 
@@ -39,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from pipeline.security import (
-    KEYWORD_SCORER_NOTE,
+    GUIDANCE_ONLY_NOTE,
     attestation_grade_allowed,
     canonical_fingerprint_hash,
     hashes_match,
@@ -92,7 +93,7 @@ class RegisterBody(BaseModel):
     tier: int = 1
     # Experimental claims-backstop tier. Not an insurance product or coverage level.
     claims_backstop_tier: str = "standard"
-    scoring_mode: str = "keyword"
+    scoring_mode: str = "software"
     require_attestation: bool = False
 
 
@@ -135,7 +136,7 @@ def _record_scoring_mode(record: Dict[str, Any]) -> str:
     try:
         return normalize_scoring_mode(record.get("scoring_mode"))
     except ValueError:
-        return "keyword"
+        return "software"
 
 
 def _stamp(record: Dict[str, Any], *, require_attestation: bool = False) -> Dict[str, Any]:
@@ -155,8 +156,8 @@ def _stamp(record: Dict[str, Any], *, require_attestation: bool = False) -> Dict
         "issued_at": int(time.time()),
         "expires_at": int(time.time()) + 3600,
     }
-    if scoring_mode == "keyword" and not grade:
-        payload["scorer_note"] = KEYWORD_SCORER_NOTE
+    if scoring_mode == "llm_judge":
+        payload["scorer_note"] = GUIDANCE_ONLY_NOTE
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["stamp_hash"] = hashlib.sha256(raw.encode()).hexdigest()
     payload["disclaimer"] = DISCLAIMER_TEXT

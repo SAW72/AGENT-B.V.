@@ -179,7 +179,7 @@ function renderScreens() {
   return render(
     <>
       <VoteScreen panel={ADDRESSES.disputePanel} />
-      <WithdrawScreen escrow={bookedEscrow} readsEnabled />
+      <WithdrawScreen escrow={bookedEscrow} reads="allowed" />
     </>,
   )
 }
@@ -441,7 +441,7 @@ describe("vote and withdraw screens", () => {
 
   it("disables withdraw at zero credit and enables it when credit is available", async () => {
     world.balance = 0n
-    render(<WithdrawScreen escrow={escrow} readsEnabled />)
+    render(<WithdrawScreen escrow={escrow} reads="allowed" />)
     await waitFor(() => expect(screen.getByTestId("withdraw-available").textContent).toBe("Available to withdraw: 0 ETH"))
     const blocked = screen.getByRole("button", { name: NOTHING_TO_WITHDRAW_TEXT }) as HTMLButtonElement
     expect(blocked.disabled).toBe(true)
@@ -451,7 +451,7 @@ describe("vote and withdraw screens", () => {
     cleanup()
     resetWorld()
     world.balance = 2_000_000_000_000_000_000n
-    render(<WithdrawScreen escrow={escrow} readsEnabled />)
+    render(<WithdrawScreen escrow={escrow} reads="allowed" />)
     await waitFor(() => expect(screen.getByTestId("withdraw-available").textContent).toBe("Available to withdraw: 2 ETH"))
     const prepare = screen.getByRole("button", { name: "Prepare withdraw" }) as HTMLButtonElement
     expect(prepare.disabled).toBe(false)

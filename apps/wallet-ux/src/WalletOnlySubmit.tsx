@@ -1,9 +1,11 @@
 import { useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import type { Address } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
 import {
   ActionButton,
   ActionStatus,
+  NextStepLink,
   NO_WALLET_REASON,
   PendingClearedNote,
   useWalletHint,
@@ -35,12 +37,16 @@ export function WalletOnlySubmit({
   preview,
   allowed,
   hold = false,
+  guided = false,
   onConfirmed,
+  statusRoot = null,
 }: {
   preview: CallPreview
   allowed: readonly Address[]
   hold?: boolean
+  guided?: boolean
   onConfirmed?: () => void
+  statusRoot?: HTMLElement | null
 }) {
   const account = useAccount()
   const { switchChain } = useSwitchChain()
@@ -52,8 +58,8 @@ export function WalletOnlySubmit({
   const [signing, setSigning] = useState(false)
   const [cancelled, setCancelled] = useState(false)
   const [submitError, setSubmitError] = useState<ErrorPresentation | null>(null)
-  const progress = actionProgress(preview.functionName)
   const sent = subjectFromCalldata(preview.calldata)
+  const progress = actionProgress(preview.functionName, sent?.subjectId ?? null)
   const slot = pendingSlot(sent?.action ?? preview.functionName, sent?.subjectId ?? null)
   const lockRef = useRef("")
   const receipt = usePendingReceipt(slot, publicClient, lockRef, () => onConfirmed?.())
@@ -134,8 +140,6 @@ export function WalletOnlySubmit({
           label: progress.done,
           resultId: receipt.subjectId ?? undefined,
           resultLabel: receipt.subjectId ? pendingSubjectLabel(preview.functionName) ?? undefined : undefined,
-          nextHref: progress.next?.href,
-          nextLabel: progress.next?.label,
         }
       : receipt.phase === "pending" && receipt.txHash
         ? {
@@ -146,14 +150,38 @@ export function WalletOnlySubmit({
             unsaved: receipt.unsaved,
           }
         : receipt.phase === "unconfirmed" && receipt.txHash
-          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice) }
+          ? { status: "unconfirmed", hash: receipt.txHash, message: unconfirmedNote(receipt.notice), unsaved: receipt.unsaved }
           : waiting
             ? { status: "waiting-wallet" }
             : { status: "idle", label: "Submit on Base Sepolia" }
 
+  const status = (
+    <>
+      {guided ? <p>{submitSenderNote(preview.functionName)}</p> : null}
+      <ActionStatus
+        state={state}
+        walletHint={walletHint}
+        cancelled={cancelled}
+        onTryAgain={state.status === "pending" || state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
+      />
+      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
+      <PendingClearedNote banner={receipt.banner} />
+      {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
+      {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
+      {submitError?.link ? (
+        <p>
+          <a href={submitError.link.href}>{submitError.link.label}</a>
+        </p>
+      ) : null}
+    </>
+  )
+
   return (
-    <div>
-      <p>{submitSenderNote(preview.functionName)}</p>
+    <>
+      {guided ? null : <p>{submitSenderNote(preview.functionName)}</p>}
+      {state.status === "confirmed" ? (
+        progress.next ? <NextStepLink href={progress.next.href} label={progress.next.label} /> : null
+      ) : (
       <ActionButton
         testId={control.testId}
         state={state}
@@ -175,21 +203,8 @@ export function WalletOnlySubmit({
           void onClick()
         }}
       />
-      <ActionStatus
-        state={state}
-        walletHint={walletHint}
-        cancelled={cancelled}
-        onTryAgain={state.status === "pending" || state.status === "unconfirmed" ? () => receipt.tryAgain() : undefined}
-      />
-      {receipt.banner?.kind === "reverted" ? <ActionStatus state={{ status: "error", message: TX_REVERTED_TEXT }} /> : null}
-      <PendingClearedNote banner={receipt.banner} />
-      {submitError ? <ActionStatus state={{ status: "error", message: submitError.main }} /> : null}
-      {submitError?.detail ? <p className="hint">{submitError.detail}</p> : null}
-      {submitError?.link ? (
-        <p>
-          <a href={submitError.link.href}>{submitError.link.label}</a>
-        </p>
-      ) : null}
-    </div>
+      )}
+      {statusRoot ? createPortal(status, statusRoot) : status}
+    </>
   )
 }

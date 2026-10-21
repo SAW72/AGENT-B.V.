@@ -5,6 +5,7 @@ import { ADDRESSES } from "./addresses"
 import { GOVERNANCE_TIMELOCK_PIN, liveExpectedOwner } from "./gate"
 import { parseBytes32 } from "./bytes32"
 import { FlowPreview } from "./FlowPreview"
+import { flowHref, navigate } from "./routes"
 import { errorText, formatEth, isZeroAddress, payeeOpenExpiryNotice } from "./format"
 import { PAYEE_NOW_INTERVAL_MS, nowSecondsFrom, startNowTicker } from "./nowClock"
 import { escrowStateLabel, readEscrowById, type EscrowRecord, type EscrowStatus, type SepoliaClient } from "./read"
@@ -14,10 +15,12 @@ export function EscrowPanel({
   client,
   status,
   readsEnabled,
+  forms = true,
 }: {
   client: SepoliaClient
   status: EscrowStatus | null
   readsEnabled: boolean
+  forms?: boolean
 }) {
   const address = ADDRESSES.botAttestationEscrow
   if (address == null) {
@@ -38,7 +41,7 @@ export function EscrowPanel({
       <AddressRow label="Contract" value={address} testId="escrow-address" />
       {status ? <EscrowReads status={status} /> : <p className="muted">Escrow reads follow the Base Sepolia contract read.</p>}
       <EscrowLookup client={client} address={address} enabled={readsEnabled} />
-      <FlowPreview escrow={address} panel={ADDRESSES.disputePanel} />
+      {forms ? <FlowPreview escrow={address} panel={ADDRESSES.disputePanel} /> : null}
     </section>
   )
 }
@@ -190,7 +193,15 @@ function EscrowLookup({
                   <p>{expiryNotice.text}</p>
                   {expiryNotice.cta ? (
                     <p>
-                      <a href="#open-dispute" data-testid="payee-dispute-cta">
+                      <a
+                        href="#open-dispute"
+                        data-testid="payee-dispute-cta"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          const escrowId = parseBytes32(id)
+                          navigate(flowHref("dispute", 1, { escrow: escrowId }))
+                        }}
+                      >
                         {expiryNotice.cta}
                       </a>
                     </p>

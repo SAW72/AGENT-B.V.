@@ -1,0 +1,33 @@
+# Measured by the python job in .github/workflows/ci.yml.
+# Test modules stay out of the percentage so the report is product code.
+
+[run]
+branch = True
+source =
+    api
+    attestation
+    agentic
+    bot2bot
+    comparison
+    meta_audit
+    pipeline
+omit =
+    */test_*.py
+    tests/*
+    */__pycache__/*
+
+[report]
+show_missing = True
+skip_empty = False
+
+[html]
+directory = coverage/python/html
+
+[xml]
+output = coverage/python/coverage.xml
+
+[json]
+output = coverage/python/coverage.json
+
+[lcov]
+output = coverage/python/lcov.info

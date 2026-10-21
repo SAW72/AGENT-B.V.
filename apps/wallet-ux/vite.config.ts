@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { applyBrandHtml, brandManifestSource } from "./src/brand.ts"
+import { requiredBuildEnvPlugin } from "./scripts/require-build-env.mjs"
 
 const port = Number(process.env.PORT) || 5173
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
@@ -44,7 +45,7 @@ function walletBrand(): Plugin {
 export default defineConfig({
   base: "/app/",
   build: { outDir: "dist/app", emptyOutDir: true },
-  plugins: [react(), walletBrand()],
+  plugins: [requiredBuildEnvPlugin(), react(), walletBrand()],
   server: {
     host: "0.0.0.0",
     port,
@@ -57,6 +58,19 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.mjs"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "text-summary", "html", "json-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.{ts,tsx}", "scripts/**/*.{mjs,js,ts}"],
+      exclude: [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.mjs",
+        "**/*.d.ts",
+        "**/dist/**",
+      ],
+    },
     // Cross-package tests load the relayer as real Node modules so claimIntent.json
     // stays next to import.meta.url. Vite must not bundle that package.
     server: {

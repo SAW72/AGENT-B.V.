@@ -1,0 +1,16 @@
+{
+  "weights": {
+    "first_activity": null,
+    "fund": null,
+    "release_or_refund": null,
+    "dispute_open_or_vote": null,
+    "vote": null,
+    "return_day": null
+  },
+  "gates": {
+    "same_pair_per_day": null,
+    "same_pair_lifetime": null,
+    "min_escrow_amount_wei": null,
+    "min_escrow_duration_seconds": null
+  }
+}

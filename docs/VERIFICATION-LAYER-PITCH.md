@@ -1,3 +1,5 @@
+> **INTERNAL, counsel review only, not an offer or announcement.**
+
 # AGENT B.V. — Verification Layer for Points Programs
 
 **Status:** Draft pitch. Do not send until counsel reviews the mirrored-points angle.

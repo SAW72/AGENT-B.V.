@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { presentError } from "./format"
+import { useClearOnReadinessChange } from "./guidedFooter"
 
 /** Shown on the clicked Prepare button while its result is still being built. */
 export const PREPARING_LABEL = "Preparing…"
@@ -45,6 +46,7 @@ export function usePrepareSession<T>(slot: string, active: string | null) {
   const [reveal, setReveal] = useState(0)
   const preparingRef = useRef(false)
   const nodeRef = useRef<HTMLElement | null>(null)
+  useClearOnReadinessChange(() => setError(null))
 
   const setNode = useCallback((node: HTMLElement | null) => {
     nodeRef.current = node
@@ -86,4 +88,45 @@ export function usePrepareSession<T>(slot: string, active: string | null) {
   }
 
   return { preparing, error, preview, setNode, begin, publish, clear, finish }
+}
+
+/**
+ * Drops a prepared preview when the route id, action, or step changes, including browser Back/Forward.
+ * `arm` marks the identity Next is about to open so that advance is not treated as a stale route.
+ */
+export function usePreparedRouteGuard(clear: () => void, identity: string) {
+  const clearRef = useRef(clear)
+  clearRef.current = clear
+  const armed = useRef<string | null>(null)
+  const seen = useRef<string | null>(null)
+  const [, setTick] = useState(0)
+
+  useEffect(() => {
+    const onPop = () => {
+      armed.current = null
+      clearRef.current()
+      setTick((value) => value + 1)
+    }
+    window.addEventListener("popstate", onPop)
+    return () => window.removeEventListener("popstate", onPop)
+  }, [])
+
+  useEffect(() => {
+    if (armed.current === identity) {
+      seen.current = identity
+      return
+    }
+    if (seen.current !== null && seen.current !== identity) {
+      clearRef.current()
+      armed.current = null
+    }
+    seen.current = identity
+  }, [identity])
+
+  return {
+    arm(next: string) {
+      armed.current = next
+    },
+    allowed: armed.current === identity,
+  }
 }

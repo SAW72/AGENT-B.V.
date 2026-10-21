@@ -16,6 +16,7 @@ function keyAddress(value) {
  * @param {object} limits
  * @param {number} limits.senderLimit
  * @param {number} limits.ipLimit
+ * @param {number} limits.globalLimit
  * @param {number} limits.windowMs
  * @param {number} limits.escrowCap
  * @param {number} limits.escrowWindowMs
@@ -52,21 +53,68 @@ export function createAbuseGuard(limits, opts = {}) {
     const budget = BigInt(limits.dailyGasBudgetWei);
     let senderCount = 0;
     let ipCount = 0;
+    let globalCount = 0;
     let escrowCount = 0;
     let gas = 0n;
+    let oldestSender = null;
+    let oldestIp = null;
+    let oldestGlobal = null;
+    let oldestEscrow = null;
     for (const event of events) {
-      if (atMs - event.atMs < limits.windowMs) {
-        if (event.sender === sender) senderCount += 1;
-        if (event.ip === ip) ipCount += 1;
+      const age = atMs - event.atMs;
+      if (age < limits.windowMs) {
+        globalCount += 1;
+        if (oldestGlobal === null || event.atMs < oldestGlobal) oldestGlobal = event.atMs;
+        if (event.sender === sender) {
+          senderCount += 1;
+          if (oldestSender === null || event.atMs < oldestSender) oldestSender = event.atMs;
+        }
+        if (event.ip === ip) {
+          ipCount += 1;
+          if (oldestIp === null || event.atMs < oldestIp) oldestIp = event.atMs;
+        }
       }
-      if (atMs - event.atMs < limits.escrowWindowMs && event.escrowId === escrowId) escrowCount += 1;
-      if (atMs - event.atMs < DAY_MS) gas += event.gasWei;
+      if (age < limits.escrowWindowMs && event.escrowId === escrowId) {
+        escrowCount += 1;
+        if (oldestEscrow === null || event.atMs < oldestEscrow) oldestEscrow = event.atMs;
+      }
+      if (age < DAY_MS) gas += event.gasWei;
     }
-    if (senderCount >= limits.senderLimit || ipCount >= limits.ipLimit) {
-      throw httpError(429, "rate_limited");
+    if (senderCount >= limits.senderLimit) {
+      throw httpError(429, "rate_limited", { retryAfter: retryAfterWindow(atMs, limits.windowMs, oldestSender) });
     }
-    if (escrowCount >= limits.escrowCap) throw httpError(429, "escrow_cap");
-    if (gas + gasWei > budget) throw httpError(429, "gas_budget_exhausted");
+    if (ipCount >= limits.ipLimit) {
+      throw httpError(429, "rate_limited", { retryAfter: retryAfterWindow(atMs, limits.windowMs, oldestIp) });
+    }
+    if (globalCount >= limits.globalLimit) {
+      throw httpError(429, "rate_limited", { retryAfter: retryAfterWindow(atMs, limits.windowMs, oldestGlobal) });
+    }
+    if (escrowCount >= limits.escrowCap) {
+      throw httpError(429, "escrow_cap", { retryAfter: retryAfterWindow(atMs, limits.escrowWindowMs, oldestEscrow) });
+    }
+    if (gas + gasWei > budget) throw httpError(429, "gas_budget_exhausted", { retryAfter: 1 });
+  }
+
+  function retryAfterWindow(atMs, windowMs, oldestAt) {
+    if (oldestAt === null) return 1;
+    return Math.max(1, Math.ceil((windowMs - (atMs - oldestAt)) / 1000));
+  }
+
+  function refill(key, capacity, nowMs) {
+    const refillPerMs = capacity / limits.windowMs;
+    const prev = buckets.get(key) || { tokens: capacity, atMs: nowMs };
+    const elapsed = Math.max(0, nowMs - prev.atMs);
+    return {
+      tokens: Math.min(capacity, prev.tokens + elapsed * refillPerMs),
+      atMs: nowMs,
+      refillPerMs,
+    };
+  }
+
+  function retryAfterTokens(bucket) {
+    if (bucket.tokens >= 1) return 0;
+    const need = 1 - bucket.tokens;
+    return Math.max(1, Math.ceil(need / bucket.refillPerMs / 1000));
   }
 
   return {
@@ -79,19 +127,19 @@ export function createAbuseGuard(limits, opts = {}) {
     takeIp(ip, atMs) {
       return withLock(async () => {
         const nowMs = atMs ?? now();
-        const capacity = limits.ipLimit;
-        const refillPerMs = capacity / limits.windowMs;
-        const key = String(ip || "unknown");
-        const bucket = buckets.get(key) || { tokens: capacity, atMs: nowMs };
-        const elapsed = Math.max(0, nowMs - bucket.atMs);
-        bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerMs);
-        bucket.atMs = nowMs;
-        if (bucket.tokens < 1) {
-          buckets.set(key, bucket);
-          throw httpError(429, "rate_limited");
+        const ipKey = `ip:${String(ip || "unknown")}`;
+        const ipBucket = refill(ipKey, limits.ipLimit, nowMs);
+        const globalBucket = refill("global", limits.globalLimit, nowMs);
+        if (ipBucket.tokens < 1 || globalBucket.tokens < 1) {
+          buckets.set(ipKey, ipBucket);
+          buckets.set("global", globalBucket);
+          const wait = ipBucket.tokens < 1 ? ipBucket : globalBucket;
+          throw httpError(429, "rate_limited", { retryAfter: retryAfterTokens(wait) });
         }
-        bucket.tokens -= 1;
-        buckets.set(key, bucket);
+        ipBucket.tokens -= 1;
+        globalBucket.tokens -= 1;
+        buckets.set(ipKey, ipBucket);
+        buckets.set("global", globalBucket);
       });
     },
 

@@ -71,9 +71,9 @@ def test_register_and_stamp():
     assert stamp["claims_backstop_tier"] == "standard"
     assert "insurance_level" not in stamp
     _assert_no_insurance_field_keys(stamp)
-    assert stamp["attestation_grade"] is False
-    assert stamp["scoring_mode"] == "keyword"
-    assert "demo-only" in stamp["scorer_note"]
+    assert stamp["attestation_grade"] is True
+    assert stamp["scoring_mode"] == "software"
+    assert "scorer_note" not in stamp
     assert "not a certification" in stamp["disclaimer"].lower()
     assert "not_insurance" in stamp["limitations"]
     assert stamp["attestation_status"] == "stub_not_hardware_attested"
@@ -187,40 +187,45 @@ def test_register_accepts_matching_fingerprint_hash():
     assert rec["fingerprint_hash"] == canonical_fingerprint_hash(fp)
 
 
-def test_keyword_attestation_stamp_refused_by_default():
-    c = _client()
-    r = c.post("/v1/bots", json=_register_body(require_attestation=True), headers=_auth())
-    assert r.status_code == 403
-    assert "keyword-only" in r.json()["detail"]
-
-
-def test_keyword_attestation_query_refused():
-    c = _client()
-    assert c.post("/v1/bots", json=_register_body(), headers=_auth()).status_code == 200
-    r = c.get("/v1/bots/bot-1/stamp", params={"attestation": "true"})
-    assert r.status_code == 403
-
-
-def test_allow_keyword_attestation_opt_in(monkeypatch):
-    monkeypatch.setenv("ALLOW_KEYWORD_ATTESTATION", "1")
+def test_software_attestation_stamp_is_accepted():
     c = _client()
     r = c.post("/v1/bots", json=_register_body(require_attestation=True), headers=_auth())
     assert r.status_code == 200
+    stamp = r.json()["stamp"]
+    assert stamp["scoring_mode"] == "software"
+    assert stamp["attestation_grade"] is True
+
+
+def test_software_attestation_query_is_accepted():
+    c = _client()
+    assert c.post("/v1/bots", json=_register_body(), headers=_auth()).status_code == 200
+    r = c.get("/v1/bots/bot-1/stamp", params={"attestation": "true"})
+    assert r.status_code == 200
+    assert r.json()["attestation_grade"] is True
+
+
+def test_keyword_alias_is_software_judgment(monkeypatch):
+    monkeypatch.setenv("ALLOW_KEYWORD_ATTESTATION", "0")
+    c = _client()
+    r = c.post(
+        "/v1/bots",
+        json=_register_body(scoring_mode="keyword", require_attestation=True),
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    assert r.json()["stamp"]["scoring_mode"] == "software"
     assert r.json()["stamp"]["attestation_grade"] is True
 
 
-def test_llm_judge_register_is_attestation_grade():
+def test_llm_judge_register_is_guidance_only():
     c = _client()
     r = c.post(
         "/v1/bots",
         json=_register_body(scoring_mode="llm_judge", require_attestation=True),
         headers=_auth(),
     )
-    assert r.status_code == 200
-    stamp = r.json()["stamp"]
-    assert stamp["scoring_mode"] == "llm_judge"
-    assert stamp["attestation_grade"] is True
-    assert "scorer_note" not in stamp
+    assert r.status_code == 403
+    assert "guidance only" in r.json()["detail"]
 
 
 def test_history_write_requires_auth():

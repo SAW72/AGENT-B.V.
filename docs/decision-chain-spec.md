@@ -75,4 +75,4 @@ Whether human approval is a single signature, or a threshold (for example two hu
 
 ## Legal note
 
-This spec describes verification and authority. It does not create a token, a reward, or a promise of value. Counsel should review it together with `docs/POINTS-PROGRAM.md` before either is announced.
+This spec describes verification and authority. It does not create a token, a reward, or a promise of value. Counsel should review it together with `docs/AGENT-BV-POINTS-SPEC.md` before either is announced.

@@ -44,7 +44,7 @@ function request(port, method, path, body, headers = {}) {
           } catch {
             json = null;
           }
-          resolve({ status: res.statusCode, json, raw });
+          resolve({ status: res.statusCode, json, raw, headers: res.headers });
         });
       },
     );
@@ -716,6 +716,7 @@ describe("signed claim intent auth", () => {
       const second = await request(ctx.port, "POST", "/v1/claims", "not-json");
       assert.equal(second.status, 429);
       assert.equal(second.json.error, "rate_limited");
+      assert.equal(Number(second.headers["retry-after"]) > 0, true);
       assert.equal(chain.calls.reads.length, reads);
       assert.equal(chain.calls.erc1271.length, 0);
       assert.equal(ctx.sent.length, 1);
@@ -754,6 +755,55 @@ describe("signed claim intent auth", () => {
       );
       assert.equal(other.status, 200);
       assert.equal(ctx.sent.length, 2);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("returns 429 from the global cap before a second signer is used", async () => {
+    const chain = trackingChain({ payer: accounts.payer.address, payee: accounts.payee.address });
+    const ctx = await boot({ CLAIM_RATE_GLOBAL: "1", CLAIM_RATE_IP: "30" }, { chain });
+    try {
+      const first = await request(
+        ctx.port,
+        "POST",
+        "/v1/claims",
+        await releaseBody(accounts.payer, { nonce: "901" }),
+        { "x-forwarded-for": "198.51.100.1" },
+      );
+      assert.equal(first.status, 200);
+      const second = await request(
+        ctx.port,
+        "POST",
+        "/v1/claims",
+        await releaseBody(accounts.payer, { nonce: "902" }),
+        { "x-forwarded-for": "198.51.100.2" },
+      );
+      assert.equal(second.status, 429);
+      assert.equal(second.json.error, "rate_limited");
+      assert.equal(Number(second.headers["retry-after"]) > 0, true);
+      assert.equal(ctx.sent.length, 1);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("refuses an over-cap gas estimate before broadcast", async () => {
+    const chain = trackingChain({ payer: accounts.payer.address, payee: accounts.payee.address });
+    chain.simulate = async () => ({ ok: true, gasUsed: 50_000n, revertData: null });
+    const ctx = await boot({ CLAIM_MAX_GAS: "1000" }, { chain });
+    try {
+      const res = await request(
+        ctx.port,
+        "POST",
+        "/v1/claims",
+        await releaseBody(accounts.payer, { nonce: "903" }),
+      );
+      assert.equal(res.status, 429);
+      assert.equal(res.json.error, "gas_cap");
+      assert.equal(res.json.field, "gas");
+      assert.equal(res.json.txHash, null);
+      assert.equal(ctx.sent.length, 0);
     } finally {
       await ctx.close();
     }

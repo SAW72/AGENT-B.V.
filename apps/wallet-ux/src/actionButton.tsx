@@ -1,7 +1,8 @@
-import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react"
+import { useEffect, useState, type ButtonHTMLAttributes, type MouseEvent, type ReactNode } from "react"
 import { CANCELLED_IDLE_TEXT, PENDING_SLOW_MS, PENDING_SLOW_TEXT } from "./actionProgress"
 import { chunkHex, shortHash } from "./format"
 import { receiptWatchConfig } from "./pendingWatch"
+import { navigate } from "./routes"
 import { ChunkedHex, CopyButton } from "./ui"
 import type { PendingBanner } from "./usePendingReceipt"
 import {
@@ -44,7 +45,7 @@ export type ActionButtonState =
   | { status: "busy"; label: string }
   | { status: "waiting-wallet" }
   | { status: "pending"; hash: string; label?: string; startedAt?: number; unsaved?: boolean }
-  | { status: "unconfirmed"; hash: string; message?: string }
+  | { status: "unconfirmed"; hash: string; message?: string; unsaved?: boolean }
   | {
       status: "confirmed"
       hash: string
@@ -93,6 +94,7 @@ export function ActionButton({
   testId,
   disabled = false,
   reason,
+  keepFocusable = false,
   ...rest
 }: {
   state: ActionButtonState
@@ -101,6 +103,8 @@ export function ActionButton({
   testId?: string
   disabled?: boolean
   reason?: string | null
+  /** Guided Next stays in the tab order and announces its reason. Other buttons use `disabled`. */
+  keepFocusable?: boolean
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type" | "onClick" | "disabled">) {
   const busy = state.status === "busy" || state.status === "waiting-wallet" || state.status === "pending"
   const locked =
@@ -112,6 +116,7 @@ export function ActionButton({
     state.status === "unconfirmed" ||
     state.status === "confirmed"
   const shownReason = locked ? reason : null
+  const stayFocusable = keepFocusable && locked
   return (
     <>
       {shownReason ? (
@@ -124,9 +129,16 @@ export function ActionButton({
         data-testid={testId}
         {...rest}
         data-action-button={state.status}
-        disabled={locked}
+        disabled={stayFocusable ? false : locked}
+        aria-disabled={stayFocusable ? true : undefined}
         aria-busy={busy || undefined}
-        onClick={onClick}
+        onClick={(event) => {
+          if (locked) {
+            event.preventDefault()
+            return
+          }
+          onClick?.()
+        }}
       >
         {actionButtonLabel(state)}
       </button>
@@ -239,6 +251,11 @@ export function ActionStatus({
         <p className="may-confirm" data-testid="tx-may-confirm">
           {state.message ?? RECEIPT_MAY_CONFIRM_TEXT}
         </p>
+        {state.unsaved ? (
+          <p className="hint" data-testid="pending-unsaved">
+            {PENDING_UNSAVED_TEXT}
+          </p>
+        ) : null}
         {onTryAgain ? (
           <button type="button" className="secondary" data-testid="try-again" onClick={onTryAgain}>
             {TRY_AGAIN_LABEL}
@@ -250,7 +267,7 @@ export function ActionStatus({
   if (state.status === "confirmed") {
     const done = state.label ?? DONE_LABEL
     return (
-      <div role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
+      <div className="action-confirmed" role="status" aria-live="polite" tabIndex={-1} ref={nodeRef} data-testid="action-confirmed">
         <p className="action-done">
           <Mark kind="ok" glyph="✓" /> <span data-testid={confirmedTestId}>{done}</span>
         </p>
@@ -266,7 +283,12 @@ export function ActionStatus({
         <TransactionRow hash={state.hash} />
         {state.nextHref ? (
           <p>
-            <a className="next-step" href={state.nextHref} data-testid="next-step">
+            <a
+              className="next-step"
+              href={state.nextHref}
+              data-testid="next-step"
+              onClick={(event) => followNext(event, state.nextHref)}
+            >
               {state.nextLabel ?? "Next step"}
             </a>
           </p>
@@ -278,7 +300,28 @@ export function ActionStatus({
   return null
 }
 
-export function PendingClearedNote({ banner }: { banner: PendingBanner | null }) {
+function followNext(event: MouseEvent<HTMLAnchorElement>, href: string | undefined) {
+  if (!href?.startsWith("/")) return
+  event.preventDefault()
+  navigate(href)
+}
+
+/** The one Next after a confirmed action. `href` is a route, not an in-page anchor. */
+export function NextStepLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a className="next-step" href={href} data-testid="next-step" onClick={(event) => followNext(event, href)}>
+      {label}
+    </a>
+  )
+}
+
+export function PendingClearedNote({
+  banner,
+  onDismiss,
+}: {
+  banner: PendingBanner | null
+  onDismiss?: () => void
+}) {
   if (!banner || banner.kind === "reverted") return null
   const text =
     banner.kind === "expired" ? PENDING_EXPIRED_TEXT : banner.kind === "clock" ? PENDING_CLOCK_TEXT : PENDING_UNKNOWN_TEXT
@@ -295,6 +338,11 @@ export function PendingClearedNote({ banner }: { banner: PendingBanner | null })
           {TX_LINK_LABEL}
         </a>
       </p>
+      {onDismiss ? (
+        <button type="button" className="secondary" data-testid="try-again" onClick={onDismiss}>
+          {TRY_AGAIN_LABEL}
+        </button>
+      ) : null}
     </div>
   )
 }

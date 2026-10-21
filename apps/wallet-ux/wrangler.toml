@@ -1,7 +1,6 @@
 # Cloudflare Pages config for the static wallet UI.
 # Dashboard settings (root directory, build command, production branch, env)
 # are documented in CLOUDFLARE_PAGES.md. This file does not deploy.
-# Do not run `wrangler pages deploy` or `wrangler deploy` until Spencer GO.
 name = "agent-bv"
 compatibility_date = "2026-09-26"
 pages_build_output_dir = "./dist"

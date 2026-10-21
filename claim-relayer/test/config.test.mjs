@@ -39,10 +39,17 @@ describe("config gates", () => {
     assert.equal(config.acceptLegacyDomainName, true);
     assert.equal(acceptLegacyDomainName({}), true);
     assert.equal(acceptLegacyDomainName({ ACCEPT_LEGACY_DOMAIN_NAME: "0" }), false);
+    assert.equal(config.killSwitchInitial, false);
+    assert.equal(loadConfig({ KILL_SWITCH: "1" }).killSwitchInitial, true);
+    assert.equal(loadConfig({ KILL_SWITCH: "0" }).killSwitchInitial, false);
     assert.equal(config.abuse.senderLimit, 5);
     assert.equal(config.abuse.ipLimit, 30);
+    assert.equal(config.abuse.globalLimit, 60);
     assert.equal(config.abuse.escrowCap, 8);
     assert.equal(config.abuse.dailyGasBudgetWei, "10000000000000000");
+    assert.equal(config.abuse.maxGas, 500_000);
+    assert.equal(config.abuse.maxFeePerGasWei, "5000000000");
+    assert.equal(config.abuse.maxPriorityFeePerGasWei, "2000000000");
     assert.equal(config.corsOrigins, DEFAULT_CORS_ORIGINS);
     assert.equal(
       config.corsOrigins,

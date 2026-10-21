@@ -5,28 +5,41 @@ on:
     branches: [main]
   pull_request:
 
+# Tests only read the repo. upload-artifact@v4 authenticates with the runner token.
+permissions:
+  contents: read
+
 jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install deps
         run: pip install -r requirements.txt
       - name: Unit / smoke tests (Grok is mocked; no API key)
-        run: pytest
+        # Same pytest selection as before, plus a coverage report. No fail-under gate.
+        run: |
+          mkdir -p coverage/python
+          pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml --cov-report=json --cov-report=lcov
+      - name: Upload Python coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-python
+          path: coverage/python/
+          if-no-files-found: error
       - name: Stub audit path
         run: ./pipeline/run_audit.sh
 
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       - name: Install zsh
         run: sudo apt-get update && sudo apt-get install -y zsh
       - name: Check operator guard in bash and zsh
@@ -48,20 +61,64 @@ jobs:
         env:
           MIGRATE_ESCROWS: "0"
         run: forge test
+      - name: Coverage
+        # forge test above is unchanged. Coverage runs the suite again and fails if a test fails.
+        env:
+          MIGRATE_ESCROWS: "0"
+        run: |
+          mkdir -p coverage/contracts out
+          forge coverage --report summary --report lcov --exclude-tests --report-file coverage/contracts/lcov.info
+      - name: Upload contract coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-contracts
+          path: coverage/contracts/
+          if-no-files-found: error
 
   claim-relayer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
       - name: Install claim relayer deps
         working-directory: claim-relayer
         run: npm ci
       - name: Claim relayer unit tests (no network)
+        # Same test/*.test.mjs files as npm test, with the built-in Node coverage report.
         working-directory: claim-relayer
+        run: npm run test:coverage
+      - name: Upload claim-relayer coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-claim-relayer
+          path: claim-relayer/coverage/
+          if-no-files-found: error
+
+  points-indexer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/points-indexer/package-lock.json
+      - name: Install points indexer deps
+        working-directory: services/points-indexer
+        run: npm ci
+      - name: Points indexer tests (offline fixtures, no network)
+        working-directory: services/points-indexer
         run: npm test
+      - name: Points indexer tests in a non-UTC timezone
+        working-directory: services/points-indexer
+        run: npm test
+        env:
+          TZ: America/New_York
 
   # Public Base Sepolia fork of LiveDenylistVaultTest. continue-on-error so an RPC
   # failure cannot fail the required CI checks. No keys, no broadcast.
@@ -70,10 +127,10 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       - name: Install forge-std
         run: forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-commit
       - name: Live Denylist and Vault fork test (public Base Sepolia)
@@ -87,8 +144,8 @@ jobs:
       run:
         working-directory: apps/wallet-ux
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -99,9 +156,23 @@ jobs:
         # The cross-package domain test loads claim-relayer as Node modules.
         working-directory: claim-relayer
         run: npm ci
+      - name: Install Chrome for the footer layout test
+        run: |
+          if ! command -v google-chrome >/dev/null 2>&1 && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get update
+            sudo apt-get install -y /tmp/chrome.deb
+          fi
       - name: Test
         # Includes src/**/*.test.ts and scripts/**/*.test.mjs (deploy guard scripts).
-        run: npm test
+        # test:coverage is vitest run --coverage: same files, plus the coverage report.
+        run: npm run test:coverage
+      - name: Upload wallet-ux coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-wallet-ux
+          path: apps/wallet-ux/coverage/
+          if-no-files-found: error
       - name: Build
         run: npm run build
       - name: Reject retired claim-secret markers

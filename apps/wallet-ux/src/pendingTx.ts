@@ -2,6 +2,7 @@ import { decodeFunctionData, type Hex } from "viem"
 import { disputePanelAbi, escrowAbi } from "./abi"
 
 const PREFIX = "agent-bv.pending."
+const CLOCK_PREFIX = "agent-bv.clock."
 const HEX_32 = /^0x[0-9a-fA-F]{64}$/
 const CALL_ABI = [...escrowAbi, ...disputePanelAbi]
 
@@ -18,9 +19,17 @@ export type PendingRecord = {
 /** A stored clock more than a minute ahead is not a live transaction. */
 export const PENDING_FUTURE_SKEW_MS = 60_000
 
+export type ClockNote = {
+  hash: Hex
+  action: string
+  subjectId: Hex | null
+}
+
 const listeners = new Set<() => void>()
 const memoryRecords = new Map<string, PendingRecord>()
-const clockNotes = new Map<string, Hex>()
+const clockNotes = new Map<string, ClockNote>()
+/** Dismissals that must stick for this page even when removeItem throws. A reload clears this set. */
+const dismissedHashes = new Set<string>()
 let storageVersion = 0
 
 export function subscribePending(listener: () => void): () => void {
@@ -44,17 +53,85 @@ export function pendingStorageVersion(): number {
 export function resetPendingStore(): void {
   memoryRecords.clear()
   clockNotes.clear()
+  dismissedHashes.clear()
   freshSlots.clear()
   bumpStorageVersion()
 }
 
-function rememberClockNote(hash: Hex) {
-  clockNotes.set(hash, hash)
+function clockStorageKey(hash: Hex): string {
+  return `${CLOCK_PREFIX}${hash.toLowerCase()}`
 }
 
-/** Records dropped because their clock was in the future. Kept until the page reloads. */
-export function listClockNotes(): Hex[] {
-  return [...clockNotes.values()]
+function rememberClockNote(note: ClockNote) {
+  clockNotes.set(note.hash.toLowerCase(), note)
+}
+
+function parseClockNote(raw: string | null): ClockNote | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<ClockNote>
+    if (!isHex32(parsed.hash)) return null
+    const subjectId = parsed.subjectId == null ? null : parsed.subjectId
+    if (subjectId != null && !isHex32(subjectId)) return null
+    const action = typeof parsed.action === "string" && parsed.action.trim() !== "" ? parsed.action : "unknown"
+    return { hash: parsed.hash, action, subjectId }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A future clock is not treated as a live send, but the hash stays on disk and holds the lock
+ * until the user dismisses it. Reloading must not drop the hash or open submit.
+ */
+function persistClockNote(note: ClockNote) {
+  rememberClockNote(note)
+  if (typeof localStorage === "undefined") return
+  try {
+    localStorage.setItem(clockStorageKey(note.hash), JSON.stringify(note))
+  } catch {
+    // The in-memory note still holds the lock for this page.
+  }
+}
+
+export function listClockNotes(): ClockNote[] {
+  const out = new Map<string, ClockNote>()
+  if (typeof localStorage !== "undefined") {
+    const keys: string[] = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key?.startsWith(CLOCK_PREFIX)) keys.push(key)
+    }
+    for (const key of keys) {
+      const note = parseClockNote(localStorage.getItem(key))
+      if (!note || dismissedHashes.has(note.hash.toLowerCase())) continue
+      out.set(note.hash.toLowerCase(), note)
+    }
+  }
+  for (const note of clockNotes.values()) {
+    if (dismissedHashes.has(note.hash.toLowerCase())) continue
+    if (!out.has(note.hash.toLowerCase())) out.set(note.hash.toLowerCase(), note)
+  }
+  return [...out.values()]
+}
+
+export function hasClockHold(): boolean {
+  return listClockNotes().length > 0
+}
+
+export function dismissClockNote(hash: Hex): void {
+  const key = hash.toLowerCase()
+  dismissedHashes.add(key)
+  clockNotes.delete(key)
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(clockStorageKey(hash))
+    } catch {
+      // The dismissed set is checked before the stored copy, so the note stays gone until reload.
+    }
+  }
+  bumpStorageVersion()
+  emitPending()
 }
 
 if (typeof window !== "undefined") {
@@ -95,13 +172,16 @@ export function readPending(slot: string): PendingRecord | null {
     if (!isHex32(parsed.hash)) return null
     if (typeof parsed.startedAt !== "number" || !Number.isFinite(parsed.startedAt)) return null
     if (parsed.startedAt > Date.now() + PENDING_FUTURE_SKEW_MS) {
+      const subjectId = isHex32(parsed.subjectId) ? parsed.subjectId : null
+      const action = typeof parsed.action === "string" && parsed.action.trim() !== "" ? parsed.action : "unknown"
+      persistClockNote({ hash: parsed.hash, action, subjectId })
       try {
         localStorage.removeItem(pendingStorageKey(slot))
       } catch {
-        // The record is still ignored when storage will not delete it.
+        // The clock note is already stored. The original row is still ignored.
       }
-      if (isHex32(parsed.hash)) rememberClockNote(parsed.hash)
       bumpStorageVersion()
+      emitPending()
       return null
     }
     if (typeof parsed.action !== "string" || parsed.action.trim() === "") return null
@@ -200,13 +280,25 @@ export function writeRelayerPending(slot: string, hash: Hex, startedAt = Date.no
 export function clearPending(slot: string): void {
   freshSlots.delete(slot)
   memoryRecords.delete(slot)
-  if (typeof localStorage !== "undefined") localStorage.removeItem(pendingStorageKey(slot))
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(pendingStorageKey(slot))
+    } catch {
+      // The in-memory record is already gone. A stuck row must not throw into the receipt watch.
+    }
+  }
   bumpStorageVersion()
   emitPending()
 }
 
-/** Escrow id or dispute id taken from the calldata that was sent. Withdraw has none. */
-export function subjectFromCalldata(calldata: Hex): { action: string; subjectId: Hex | null } | null {
+export type CallParties = {
+  action: string
+  escrowId: Hex | null
+  disputeId: Hex | null
+}
+
+/** Ids encoded in a prepared call. Dispute carries both the escrow id and the dispute id. */
+export function calldataParties(calldata: Hex): CallParties | null {
   try {
     const decoded = decodeFunctionData({ abi: CALL_ABI, data: calldata })
     const args = decoded.args ?? []
@@ -214,19 +306,44 @@ export function subjectFromCalldata(calldata: Hex): { action: string; subjectId:
       case "createEscrow":
       case "release":
       case "refund":
-        return { action: decoded.functionName, subjectId: args[0] as Hex }
+        return { action: decoded.functionName, escrowId: args[0] as Hex, disputeId: null }
       case "dispute":
-        return { action: "dispute", subjectId: args[1] as Hex }
+        return { action: "dispute", escrowId: args[0] as Hex, disputeId: args[1] as Hex }
       case "vote":
-        return { action: "vote", subjectId: args[0] as Hex }
+        return { action: "vote", escrowId: null, disputeId: args[0] as Hex }
       case "withdraw":
-        return { action: "withdraw", subjectId: null }
+        return { action: "withdraw", escrowId: null, disputeId: null }
       default:
         return null
     }
   } catch {
     return null
   }
+}
+
+function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (left == null || right == null) return false
+  return left.toLowerCase() === right.toLowerCase()
+}
+
+/** True only when the prepared call is this action and every id the caller passes is the one in the calldata. */
+export function preparedMatches(
+  calldata: Hex,
+  expected: { action: string; escrowId?: string | null; disputeId?: string | null },
+): boolean {
+  const parties = calldataParties(calldata)
+  if (!parties || parties.action !== expected.action) return false
+  if (expected.escrowId != null && !sameId(parties.escrowId, expected.escrowId)) return false
+  if (expected.disputeId != null && !sameId(parties.disputeId, expected.disputeId)) return false
+  return true
+}
+
+/** Escrow id or dispute id taken from the calldata that was sent. Withdraw has none. */
+export function subjectFromCalldata(calldata: Hex): { action: string; subjectId: Hex | null } | null {
+  const parties = calldataParties(calldata)
+  if (!parties) return null
+  const subjectId = parties.action === "dispute" || parties.action === "vote" ? parties.disputeId : parties.escrowId
+  return { action: parties.action, subjectId }
 }
 
 export function pendingSubjectLabel(action: string): "Escrow ID" | "Dispute ID" | null {

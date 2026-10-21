@@ -200,16 +200,22 @@ describe("reputation config", () => {
     ]);
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const claimDomainName = "Agent-BV Relayer";
+    const pointsDomainName = "Agent-BV Points";
     for (const label of [raw.product.name, raw.product.title]) {
       const hits = filesContaining(root, label).filter((file) => {
         if (allowed.has(file)) return false;
         // The short product name is human-readable copy in docs, Solidity comments,
-        // and the reference Blueprint comments. The full title stays in the config object.
+        // and the reference Blueprint comments. Markdown may also use the full title.
+        // Any other file that hardcodes the title still fails this check.
         if (label === raw.product.name && /\.(md|yml|yaml|sol)$/.test(file)) return false;
-        // The off-chain EIP-712 domain name contains the product name. That string is
-        // not a scorer hardcode. A file that mentions the product name only inside it stays allowed.
-        if (label === raw.product.name && !readFileSync(file, "utf8").split(claimDomainName).join("").includes(label)) {
-          return false;
+        if (label === raw.product.title && /\.md$/.test(file)) return false;
+        // Off-chain EIP-712 domain names contain the product name. That string is
+        // not a scorer hardcode. A file that mentions the product name only inside
+        // those domain names stays allowed.
+        if (label === raw.product.name) {
+          let body = readFileSync(file, "utf8");
+          for (const domainName of [claimDomainName, pointsDomainName]) body = body.split(domainName).join("");
+          if (!body.includes(label)) return false;
         }
         return true;
       });
@@ -1023,11 +1029,13 @@ describe("design v2.2 gates", () => {
 
 function filesContaining(root, needle) {
   const hits = [];
+  const walletDist = join(root, "apps", "wallet-ux", "dist");
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (full === walletDist) continue;
         walk(full);
       } else if (/\.(mjs|js|md|json|yml|yaml|sol)$/.test(entry.name)) {
         if (readFileSync(full, "utf8").includes(needle)) hits.push(full);

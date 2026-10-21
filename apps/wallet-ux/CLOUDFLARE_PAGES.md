@@ -4,112 +4,170 @@ The current Pages project is `agent-bv` (https://agent-bv.pages.dev). It is a Di
 
 The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) stays live. Retire it only after a live refund passes on https://agent-bv.pages.dev. Do not delete or disable `agent-a-wallet-ux` before that. Relayer defaults now allow only https://agent-bv.pages.dev.
 
-Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. This workflow never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet unless `VITE_CLAIM_RELAYER_URL` is set, in which case a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
+Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. The production deploy never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet unless `VITE_CLAIM_RELAYER_URL` is set, in which case a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
 
 [`wrangler.toml`](wrangler.toml) records the project name and `pages_build_output_dir = "./dist"`. That file is not a git connection. Cloudflare does not read it to build the site.
 
-## Before the first deploy
+## Production deploy
 
-GitHub auto-creates a missing environment the first time a job names it, and that auto-created environment has no protection. Create the `production` environment before the first **Run workflow**, or that first dispatch is unreviewed.
+Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is CI, Look, QA, Verifier, Security, and Lawyer when copy or legal text changes, then Grok Bot's per-SHA GO for that head. A GO for a different SHA does not cover this head. Nothing reaches `main` without every gate on that head.
 
-1. Create the GitHub Environment named `production` (Settings → Environments) before any `workflow_dispatch`.
-2. Restrict that environment's deployment branches to `main` only.
-3. Add SAW72 as a required reviewer.
-4. Protect the `main` branch: require a pull request before merging, block force pushes, and block deletion.
-5. On that `production` environment, store `CLOUDFLARE_API_TOKEN` (Pages:Edit scope only) and `CLOUDFLARE_ACCOUNT_ID` as environment secrets. Never store them as repository secrets. Spencer: delete any existing repository-level copies of those values.
-6. Store `VITE_CLAIM_RELAYER_URL` as a `production` environment variable (the public Base Sepolia claim-relayer URL, for example `https://bot-verifier-claim-relayer.onrender.com`). Spencer: delete any existing repository variable of the same name.
-7. `VITE_CLAIM_API_SECRET` is retired. It must not exist anywhere: not as a repository secret, not as a `production` environment secret or variable, and not as a Cloudflare Pages environment variable. Spencer: delete any existing copy.
+A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
 
-## Manual deploy
+Spencer is still required for mainnet, spending, outside messages, and deletes.
 
-Publish from GitHub with **Actions → Deploy wallet-ux → Run workflow** on `main`, only after the checklist above. The workflow is [`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml). `on` is `workflow_dispatch` only, so a push or a pull request does not publish. The workflow has no input that can embed a claim secret.
+Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
-The job runs only when `github.ref` is `refs/heads/main`. Its first step exits with an error if that ref is anything else. The job uses the GitHub Environment `production`, so it reads that environment's secrets and variables.
+From a checkout of that SHA:
 
-The job token permission is `contents: read`. It uses Node.js 22, from `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. That is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). The job checks out that ref, then in `apps/wallet-ux` runs `npm ci`, `npm test`, and `npm run build`. Checkout is `actions/checkout` v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`). Node setup is `actions/setup-node` v7.0.0 (`820762786026740c76f36085b0efc47a31fe5020`). The job timeout is 15 minutes.
+```bash
+cd apps/wallet-ux
+npm ci
+cd ../../claim-relayer
+npm ci
+cd ../apps/wallet-ux
+npm test
+npm run build
+node scripts/guard-claim-secret.mjs dist
+```
 
-Upload uses `cloudflare/wrangler-action` v4.1.3 (`953926a2e2182532811c01a25e53647d93bf07c0`), the latest v4 release. That release installs Wrangler 4 by default. The action is not given `gitHubToken`, and the workflow does not grant `deployments: write`.
+`npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
-Direct Upload has no native promote. The job first uploads `dist` with `--branch=preview-<run id>`. It downloads that deployment's `index.html` and JavaScript and runs the bundle checks. Only after those checks pass does it upload the same `dist` again with `--branch=main`. That second upload is the production deployment. Both commands also pass the commit hash of the dispatched ref.
+`npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://bot-verifier-claim-relayer.onrender.com` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value does not. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset. Any RPC URL must answer `eth_chainId` with `84532`.
 
-After that, the job tries `wrangler pages deployment delete <preview deployment id> --project-name=agent-bv --force`, including when a later step failed (`if: always()`). `continue-on-error: true` means a cleanup failure does not fail a production deploy that already succeeded. Cloudflare will not delete the latest deployment on a branch, and `preview-<run id>` has only that one deployment, so the delete is expected to be refused. Pages does not expire preview deployments on its own. Each run can leave that single preview deployment in place: it is not the `main` production alias, and preview responses send `X-Robots-Tag: noindex`. Delete it from the dashboard only after another deployment exists on that same branch. Until then, leave it.
+Before the production upload, note the deployment ID of the live production deployment (the current `main` deployment). That ID is the rollback target. Preview deployment IDs are not rollback targets.
 
-The workflow does nothing until the `production` environment has `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `VITE_CLAIM_RELAYER_URL`. If either secret is empty, or if the production environment variable `VITE_CLAIM_RELAYER_URL` is empty or does not start with `https://`, the Require step fails before `npm ci` and does not upload. The build env is `VITE_CLAIM_RELAYER_URL` only. `VITE_CLAIM_API_SECRET` is retired and is not passed in.
+Direct Upload has no promote. Upload the same `dist` twice. Wrangler reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the environment. The token is **Pages:Edit** scope only. Do not store either value as a repository secret.
+
+Preview, with `<PR#>` the pull request that produced the merge and `<sha>` the merge SHA:
+
+```bash
+npx wrangler pages deploy dist --project-name=agent-bv --branch=preview-<PR#> --commit-hash=<sha>
+```
+
+Live-check that preview deployment before uploading `main`. From `apps/wallet-ux`, run the served-bundle check against the deployment URL Wrangler prints. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
+
+```bash
+DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html node scripts/verify-served-bundle.mjs
+```
+
+The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
+
+The same preview URL also has to pass these checks. The script does not cover them:
+
+- `GET /` returns 200.
+- `GET /app/` returns 200.
+- Asset content types are right. Wallet JavaScript (`/app/assets/*.js`) is `text/javascript`, `application/javascript`, or `application/x-javascript` (a `charset` parameter is fine). Landing CSS is `text/css`. Landing PNG assets are `image/png`.
+- Redirects go to `/app/`. `/app` (no trailing slash), `/points`, `/claim`, and `/release` are 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
+- The security headers are present: `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`.
+
+A failed preview check stops the deploy. Do not upload `--branch=main`.
+
+Then deploy production with the same `dist` and the same merge SHA:
+
+```bash
+npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>
+```
+
+Run `scripts/verify-served-bundle.mjs` again with `DEPLOYMENT_URL` set to the production deployment URL Wrangler prints, and the same `APP_PATH` and `DIST_INDEX`. Run the same `/`, `/app/`, content-type, redirect, and security-header checks against `https://agent-bv.pages.dev`. If any production check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
+
+### Deploy record
+
+Write one record for the deploy. The head SHA is the PR head the gates and the GO covered. The merge SHA is the squash commit that was built, uploaded, and checked.
+
+```
+PR:
+head SHA:
+merge SHA:
+preview deploy ID:
+production deploy ID:
+rollback target:
+relayer deploy ID:
+/health build.commit:
+relayer rollback target:
+VITE_CLAIM_RELAYER_URL:
+check results:
+```
+
+`VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set: the checked-in URL, or a non-empty shell override. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
 
 | Name | Where | Role |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | `production` environment secret only. Never a repository secret. | API token with **Pages:Edit** scope only. Wrangler uses it to upload `dist`. Spencer: delete any repository-level copy. |
-| `CLOUDFLARE_ACCOUNT_ID` | `production` environment secret only. Never a repository secret. | Cloudflare account that owns `agent-bv` and the still-live `agent-a-wallet-ux` project. Spencer: delete any repository-level copy. |
-| `VITE_CLAIM_RELAYER_URL` | `production` environment variable. Never a repository variable. | Must be a non-empty `https://` URL. The Require step fails before `npm ci` when it is empty or does not start with `https://`. Passed into every `npm run build`. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. Spencer: delete any repository-level copy. |
-| `VITE_CLAIM_API_SECRET` | Retired. Must not exist anywhere. | Do not set a claim secret on Pages. Not a repository secret, not a `production` environment secret or variable, and not a Cloudflare Pages environment variable. Spencer: delete any existing copy. |
-
-`VITE_BASE_SEPOLIA_RPC_URL` is optional and is not passed by the workflow. Leave it unset to use `https://sepolia.base.org`. Any URL must answer `eth_chainId` with `84532`.
+| `CLOUDFLARE_API_TOKEN` | Environment of the deploy command. Never a repository secret. | API token with **Pages:Edit** scope only. Wrangler uses it to upload `dist`. |
+| `CLOUDFLARE_ACCOUNT_ID` | Environment of the deploy command. Never a repository secret. | Cloudflare account that owns `agent-bv` and the still-live `agent-a-wallet-ux` project. |
+| `VITE_CLAIM_RELAYER_URL` | [`build-env.required.json`](build-env.required.json). Not a GitHub variable. | Public `https://bot-verifier-claim-relayer.onrender.com`. `npm run build` fails if the resolved value is empty. A non-empty shell value overrides the file. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. |
+| `VITE_BASE_SEPOLIA_RPC_URL` | [`build-env.required.json`](build-env.required.json). | Public `https://sepolia.base.org`. `npm run build` fails if the resolved value is empty. `npm run dev` uses that URL when the variable is unset. Any URL must answer `eth_chainId` with `84532`. |
+| `VITE_CLAIM_API_SECRET` | Retired. Must not exist anywhere. | Do not set a claim secret on Pages. Not a repository secret, not an environment secret or variable, and not a Cloudflare Pages environment variable. |
 
 ### Relayer submit
 
-The claim API secret is retired. Do not set a claim secret on Pages. Relayer authentication is EIP-712 signed intents (PR #46). The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret. Wallet submit still works. This workflow does not pass a claim secret into the build.
+The claim API secret is retired. Do not set a claim secret on Pages. Relayer authentication is EIP-712 signed intents (PR #46). The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret. Wallet submit still works. This deploy does not pass a claim secret into the build.
 
 Signed-intent auth is live in production only after cutover. The order is `claim-relayer/CUTOVER.md` in [PR #51](https://github.com/SAW72/AGENT-B.V./pull/51).
+
+### Stale workflow
+
+[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Deploy wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above. If that file is run anyway, its build reads [`build-env.required.json`](build-env.required.json) and does not pass `vars.VITE_CLAIM_RELAYER_URL`. An empty GitHub variable passed into the build would override the file and strip the relayer from the bundle.
+
+## Claim relayer
+
+Render auto-redeploys the claim relayer (`bot-verifier-claim-relayer`) on every merge to `main`. The required auto-deploy setting is **After CI Checks Pass** (`autoDeployTrigger`: `checksPass`), so the service deploys only after the merge-commit CI on `main` goes green.
+
+As of 2026-10-13 the service is still on **On Commit** (`autoDeployTrigger`: `commit`). The switch is waiting on Spencer in the Render dashboard.
+
+Until it is switched, the relayer goes live as soon as the merge lands, before merge-commit CI finishes. The post-merge `GET /health` check is mandatory after every merge. Require HTTP 200, `ok` true, `chainId` 84532, `killSwitch` false, and `build.commit` equal to the full 40-character merge SHA. Render sets that field from `RENDER_GIT_COMMIT`. If any of those fail, roll the relayer back as follows.
+
+### Relayer rollback
+
+1. Open the Render service `bot-verifier-claim-relayer`.
+2. Open **Deploys**.
+3. Pick the last good deploy ID recorded in the deploy record (the relayer rollback target).
+4. Choose **Rollback**.
+
+A dashboard rollback turns auto-deploy off. After the incident, turn auto-deploy back on with the trigger set to **After CI Checks Pass** (`checksPass`), not **On Commit**.
+
+After the rollback, `GET /health` must return HTTP 200 with `build.commit` equal to the full 40-character SHA of the previous good merge, `chainId` 84532, and `killSwitch` false.
+
+The bad commit is still on `main`. The next auto-deploy will ship it again unless that commit is reverted through a gated revert PR first. Turn auto-deploy back on only after that revert.
+
+Once the setting is **After CI Checks Pass**, finding it back on **On Commit** is a gate gap. Report it.
+
+The per-PR-head GO is still the gate before merge, so nothing reaches `main` without every gate.
 
 ## Warning
 
 > **Warning:** Any `VITE_` variable is embedded in the public JavaScript bundle. `VITE_CLAIM_API_SECRET` is retired and must not be set. A value of that name in the bundle is not confidential and is not relayer authentication. Relayer authentication is EIP-712 signed intents (PR #46). Signed-intent auth is live in production only after cutover.
 
-Do not put `PRIVATE_KEY`, `RELAYER_PRIVATE_KEY`, `SPENCER_RUN_AUTH`, `LIVE_SUBMIT`, or `ADMIN_SECRET` on this workflow or on the Pages project. Those belong to Foundry or the Render claim relayer, not this static app. Dashboard environment variables would not be applied at build time anyway.
+Do not put `PRIVATE_KEY`, `RELAYER_PRIVATE_KEY`, `SPENCER_RUN_AUTH`, `LIVE_SUBMIT`, or `ADMIN_SECRET` on this deploy or on the Pages project. Those belong to Foundry or the Render claim relayer, not this static app. Dashboard environment variables would not be applied at build time anyway.
 
 `BASE_SEPOLIA_RPC_URL` at the repo root is for Foundry and the claim relayer. This app does not read it.
 
 `x-claim-secret` is retired with the claim API secret. When `VITE_CLAIM_RELAYER_URL` is set, the Render service must allow https://agent-bv.pages.dev in `CORS_ORIGINS`. Relayer defaults now allow only that origin. `https://agent-a-wallet-ux.pages.dev` is refused unless the relayer env adds it. Live claims are Base Sepolia (chain id 84532) only. Ethereum mainnet and Base mainnet are refused before the request is sent. The page does not embed a claim secret.
 
-## Local command
-
-From `apps/wallet-ux`, with `VITE_CLAIM_RELAYER_URL` set if you want the relayer URL in the build. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired.
-
-```bash
-npm ci && npm run build && npx wrangler pages deploy dist --project-name=agent-bv --branch=main
-```
-
-`dist/` is gitignored. The workflow's own upload is two steps, preview branch then `main`, because direct upload has no promote. A local upload with `--branch=main` publishes production directly and skips the preview checks.
-
-Do not set `VITE_CLAIM_API_SECRET` for a local build. Spencer: delete any existing copy. Do not set a claim secret on Pages. The connected wallet signs the claim.
-
-A build check that does not upload:
-
-```bash
-cd apps/wallet-ux
-npm ci
-npm test
-npm run build
-```
-
 ## Bundle guard
 
-The workflow fails the deploy unless `dist/assets` contains the live BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` (case-insensitive) and both of these phrases from `src/`:
+`node scripts/guard-claim-secret.mjs dist` fails the deploy if `dist` contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
+
+The `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the same `node scripts/guard-claim-secret.mjs dist` from `apps/wallet-ux` after `npm run build`. A leak fails the pull request. A clean scan logs `Claim leak scan passed`.
+
+[`scripts/guard-escrow-addresses.mjs`](scripts/guard-escrow-addresses.mjs) requires the built JavaScript to contain the live BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` (case-insensitive) and both of these phrases from `src/`:
 
 - `Submitting the refund request` (`src/relayer.ts`)
 - `Submit the refund request through the refund service, or send it from your wallet.` (`src/relayer.ts`, shown in `src/FlowPreview.tsx`)
 
-The job also fails if `dist` or a served bundle contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
+The script imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` in [`src/book.ts`](src/book.ts) is the blocked-address list. It requires `ADDRESSES.botAttestationEscrow` and `FALLBACK_PIN.botAttestationEscrow` to be the live escrow, `SUPERSEDED.botAttestationEscrow` to be the pre-ESC-M-1 retired escrow, and `SUPERSEDED.botAttestationEscrowEscM1` to be the retired ESC-M-1 escrow. It fails if any live `ADDRESSES` slot is either retired escrow.
 
-That scan fails on bundles that contain the `x-claim-secret` header or the `VITE_CLAIM_API_SECRET` name. Deploy only from a `main` commit that contains both #46 and this workflow (#41).
+Both retired addresses also appear in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json). Those sentences are not the `SUPERSEDED` literals. The script allowlists `SUPERSEDED`, `retired.*`, `superseded.*`, and the top-level notes. Any other client occurrence fails the check. The built `dist` must contain each retired address exactly as many times as those allowlisted sources. At this commit `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is 3 (SUPERSEDED, `retired.BotAttestationEscrow.address`, and notes). `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is 8 (SUPERSEDED plus seven allowlisted JSON fields, including `retired.BotAttestationEscrow.supersededBy`).
 
-The `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs `node scripts/guard-claim-secret.mjs dist` from `apps/wallet-ux` after `npm run build`. A leak fails the pull request. A clean scan logs `Claim leak scan passed`.
-
-[`scripts/guard-escrow-addresses.mjs`](scripts/guard-escrow-addresses.mjs) imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` in [`src/book.ts`](src/book.ts) is the blocked-address list. The script requires `ADDRESSES.botAttestationEscrow` and `FALLBACK_PIN.botAttestationEscrow` to be the live escrow, `SUPERSEDED.botAttestationEscrow` to be the pre-ESC-M-1 retired escrow, and `SUPERSEDED.botAttestationEscrowEscM1` to be the retired ESC-M-1 escrow. It fails if any live `ADDRESSES` slot is either retired escrow.
-
-Both retired addresses also appear in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json). Those sentences are not the `SUPERSEDED` literals. The script allowlists `SUPERSEDED`, `retired.*`, `superseded.*`, and the top-level notes. Any other client occurrence fails the job. The built `dist` and each served bundle must contain each retired address exactly as many times as those allowlisted sources. At this commit `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is 3 (SUPERSEDED, `retired.BotAttestationEscrow.address`, and notes). `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is 8 (SUPERSEDED plus seven allowlisted JSON fields, including `retired.BotAttestationEscrow.supersededBy`).
-
-After each upload, the job reads the `deployment-url` output and fetches `/`. Served `index.html` must reference the same `/assets/*` hashes as the built `dist/index.html`. The check then downloads those `/assets/*.js` files and any same-directory `./chunk.js` imports, including lazy chunks. Each `.js` asset must use a JavaScript content-type (`text/javascript`, `application/javascript`, or `application/x-javascript`; parameters such as `charset` are allowed). A `.js` body that is empty, only whitespace, or only a UTF-8 BOM fails the check. After that BOM is stripped, leading whitespace is ignored and the body must not start with `<`. A response that is `200` with `text/html`, including a Pages fallback that serves `index.html` for a missing chunk, fails the check. If the host is unreachable or DNS lookup fails, the script prints one `Verify failed:` line and exits 1. The retired-address count and the claim-secret scan run on `index.html` together with that JavaScript, so an address or secret that appears only in the HTML still fails the job. A failed preview check stops the job before the production upload. If **Verify the production bundle** fails, follow Rollback below.
+`npm test` runs these guards. Deploy the merge SHA only after every gate on the PR head is green and Grok Bot has given a GO for that head SHA.
 
 ## Rollback
 
-**FIRST-DEPLOY:** Production still serves the pre-#46 bundle `index-CkV_YTRw.js`. If the first post-merge deploy fails verify, fix forward (redeploy a corrected build). Do not roll back to the old bundle.
+Before `wrangler pages deploy ... --branch=main`, note the current production deployment ID. That ID is the rollback target. If any live check fails after the production upload, roll back to that ID, then investigate the failed check. A failed preview check never reaches this upload.
 
-If **Verify the production bundle** goes red on a later deploy, the production upload has already replaced the live deployment. Roll back to the previous production deployment, then investigate the failed check.
+In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. Do not roll back or delete `agent-a-wallet-ux` from this step. That project stays live until a live refund passes on https://agent-bv.pages.dev. In **All deployments**, open the actions menu on the noted production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including `preview-<PR#>`. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
 
-In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. Do not roll back or delete `agent-a-wallet-ux` from this step. That project stays live until a live refund passes on https://agent-bv.pages.dev. In **All deployments**, open the actions menu on the previous production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including this workflow's `preview-<run id>` deployment. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
-
-The same rollback is the Pages API call documented at [Rollback deployment](https://developers.cloudflare.com/api/resources/pages/subresources/projects/subresources/deployments/methods/rollback/). It accepts only a successful production deployment. `{deployment_id}` is the previous production deployment, not a preview deployment:
+The same rollback is the Pages API call documented at [Rollback deployment](https://developers.cloudflare.com/api/resources/pages/subresources/projects/subresources/deployments/methods/rollback/). It accepts only a successful production deployment. `$DEPLOYMENT_ID` is the production deployment noted before the `main` upload, not a preview deployment:
 
 ```bash
 curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/agent-bv/deployments/$DEPLOYMENT_ID/rollback" \
@@ -127,12 +185,13 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 | Production URL | `https://agent-bv.pages.dev` |
 | Previous project | `agent-a-wallet-ux` at `https://agent-a-wallet-ux.pages.dev`, live until a live refund passes on the new site |
 | Git connection | None. Direct Upload. |
-| Who builds | GitHub Actions, or the local command above. Cloudflare does not build. |
+| Who builds | The operator, at the merge SHA, on Node 22. Cloudflare does not build. |
 | Dashboard env vars at build time | Unused. |
-| Build output directory | `dist` |
+| Build output directory | `dist` (landing at the root, wallet app in `dist/app`) |
 | Node.js | `22` |
+| Deploy workflow | [`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete it. |
 
-`pages_build_output_dir = "./dist"` matches the Vite `dist` output.
+`pages_build_output_dir = "./dist"` is the assembled site. Vite writes the app to `dist/app`. `scripts/assemble-site.mjs` then copies `landing/` to `dist/`.
 
 ### Routing
 
@@ -143,13 +202,14 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 - `/app` and `/app/index.html` are **301** to `/app/`. A request for `/app/` serves `dist/app/index.html` with status 200 and does not redirect again, so the `/app/index.html` rule does not loop.
 - `/index.html` is **301** to `/`.
 - `/points`, `/claim`, and `/release` are **301** to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
-- `/app/assets/*`, `/app/manifest.webmanifest`, and the two icons are listed before `/app/*`. A matching 200 rewrite replaces a real file, so those paths are named first. `/app/* /app/ 200` is the app fallback. Pages ignores a rewrite whose destination is `/app/index.html`.
+- A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash.
+- `/app/assets/*`, `/app/manifest.webmanifest`, and the two icons are listed before `/app/*`. A matching 200 rewrite replaces a real file, so those paths are named first. `/app/* /app/ 200` is the app fallback. Pages ignores a rewrite whose destination is `/app/index.html`. A refresh of a guided route still loads the app and leaves the browser URL unchanged. Those routes are `/app/fund`, `/app/release`, `/app/refund`, `/app/dispute`, `/app/vote`, and `/app/withdraw`. The client reads the path and does not prepare or submit from the address bar.
 
 There is no top-level `404.html`. Without one, Pages serves the landing page with status 200 for an unknown path outside `/app/` (for example `/foo/bar`). `/app/nope` still matches `/app/*` and serves the app.
 
 Missing files under `/assets/` and `/app/assets/` return **404**. [`landing/assets/404.html`](landing/assets/404.html) is copied to `dist/assets/404.html` and to `dist/app/assets/404.html`. Pages serves the nearest `404.html` for a path that is not a real file and is not rewritten to a page. `wrangler pages dev` returns 404 for `/assets/nope.png` and `/app/assets/nope.js`, and still returns the real image and the built JavaScript with status 200.
 
-[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. There is no `Content-Security-Policy`. `scripts/guard-pages-headers.mjs` fails when that file's bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
+[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
 
 ## Address book
 
