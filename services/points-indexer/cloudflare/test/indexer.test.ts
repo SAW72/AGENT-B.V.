@@ -1,6 +1,7 @@
 import { env, reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
+import { ESCROW } from "../../src/constants.mjs";
 import { isRangeError } from "../src/scan";
 import { ESCROW_START_BLOCK, chainHandler, escrowLog, installRpc } from "./helpers";
 
@@ -553,7 +554,7 @@ describe("points alarm", () => {
     }));
     restore = rpc.restore;
     expect(await runDurableObjectAlarm(stub())).toBe(true);
-    expect(rpc.calls.length).toBeLessThanOrEqual(45);
+    expect(rpc.liveSignals.length).toBeLessThanOrEqual(45);
     expect(Number(await meta("last_scanned_block"))).toBeLessThan(head);
     expect(await meta("early_reason")).toBe("subrequest_budget");
     expect(await meta("stale")).toBe("0");
@@ -584,7 +585,7 @@ describe("points alarm", () => {
     });
     expect(Number(await meta("last_scanned_block"))).toBeLessThan(head);
     expect(await meta("early_reason")).toBe("wall_time");
-    expect(rpc.calls.length).toBeLessThanOrEqual(45);
+    expect(rpc.liveSignals.length).toBeLessThanOrEqual(45);
   });
 
   it("schedules the full Retry-After when it is longer than 30s", async () => {
@@ -1017,5 +1018,89 @@ describe("points alarm", () => {
     const scheduled = await alarmAt() as number;
     expect(scheduled).toBeGreaterThanOrEqual(before + 1_000);
     expect(scheduled).toBeLessThanOrEqual(after + 1_000);
+  });
+
+  it("does not advance the cursor when eth_getLogs is not an array", async () => {
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [],
+      nonArrayLogs: true,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("unverifiable_log");
+  });
+
+  it("holds the window when receipts have a log the scan omitted", async () => {
+    const kept = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const omitted = await escrowLog(ESCROW_START_BLOCK, 1, 1_700_000_000);
+    omitted.blockHash = kept.blockHash;
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [kept, omitted],
+      scanFilter: (log) => log.logIndex !== omitted.logIndex,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("logs_incomplete");
+  });
+
+  it("advances a bloom-positive block when receipts have no watched logs", async () => {
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [],
+      bloomAddresses: [ESCROW],
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(Number(await meta("last_scanned_block"))).toBe(ESCROW_START_BLOCK);
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("");
+  });
+
+  it("holds the window when the header hash disagrees with the scanned log", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [log],
+      headerHashFor: () => `0x${"11".repeat(32)}`,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("logs_unverified");
+  });
+
+  it("holds the window when a bloom-positive block has no receipts", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [log],
+      omitReceipts: true,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(await meta("last_scanned_block")).toBeNull();
+    expect(await count("raw_logs")).toBe(0);
+    expect(await meta("last_error")).toBe("logs_unverified");
+  });
+
+  it("uses per-transaction receipts when eth_getBlockReceipts is missing", async () => {
+    const log = await escrowLog(ESCROW_START_BLOCK, 0, 1_700_000_000);
+    const rpc = installRpc(chainHandler({
+      head: ESCROW_START_BLOCK,
+      logs: [log],
+      receiptMethodMissing: true,
+    }));
+    restore = rpc.restore;
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(Number(await meta("last_scanned_block"))).toBe(ESCROW_START_BLOCK);
+    expect(await count("raw_logs")).toBe(1);
+    expect(methods(rpc.calls)).toContain("eth_getTransactionReceipt");
   });
 });
