@@ -18,7 +18,7 @@ export type LedgerPoints = {
 
 export type DisclaimerLinks = {
   master_disclaimer: string | null
-  bvt_securities_disclaimer: string | null
+  legal_notice_url: string | null
   as_is: string | null
   not_investment: string | null
   eligibility_notice: string | null

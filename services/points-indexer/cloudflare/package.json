@@ -1,0 +1,22 @@
+{
+  "name": "agent-bv-points-worker",
+  "private": true,
+  "type": "module",
+  "description": "Agent-B.V. points indexer on a SQLite Durable Object. Chain 84532 only.",
+  "scripts": {
+    "test": "node --test test/disclaimer.test.mjs && node check-chain.mjs && vitest run --config vitest.config.ts && vitest run --config vitest.budget.config.ts && vitest run --config vitest.disabled.config.ts",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.1",
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.23.0",
+    "@vitest/runner": "4.1.4",
+    "@vitest/snapshot": "4.1.4",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.4",
+    "wrangler": "4.124.0"
+  }
+}

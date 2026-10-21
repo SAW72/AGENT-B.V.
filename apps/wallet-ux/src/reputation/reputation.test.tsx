@@ -235,7 +235,7 @@ describe("reputation panels", () => {
     const withLinks = structuredClone(exampleSnapshot) as ReputationSnapshot
     withLinks.balance.disclaimer.links = {
       master_disclaimer: "https://example.com/disclaimer",
-      bvt_securities_disclaimer: "https://example.com/securities",
+      legal_notice_url: "https://example.com/legal-notice",
       as_is: "https://example.com/as-is",
       not_investment: "https://example.com/not-investment",
       eligibility_notice: "https://example.com/eligibility",
@@ -249,6 +249,34 @@ describe("reputation panels", () => {
     expect(screen.queryByTestId("placeholder-9")).toBeNull()
     expect(screen.queryByTestId("placeholder-11")).toBeNull()
     expect(screen.getByTestId("example-data-banner").textContent).toMatch(/EXAMPLE DATA/)
+    cleanup()
+    const httpOnly = structuredClone(exampleSnapshot) as ReputationSnapshot
+    httpOnly.balance.disclaimer.links = {
+      ...withLinks.balance.disclaimer.links,
+      legal_notice_url: "http://example.com/legal-notice",
+    }
+    renderView({ example: httpOnly, relayerUrl: null })
+    expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
+    expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
+    cleanup()
+    const missing = structuredClone(exampleSnapshot) as ReputationSnapshot
+    missing.balance.disclaimer.links = {
+      ...withLinks.balance.disclaimer.links,
+      legal_notice_url: null,
+    }
+    renderView({ example: missing, relayerUrl: null })
+    expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
+    expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
+    expect(screen.getByTestId("reputation-view").textContent ?? "").not.toContain("null")
+    cleanup()
+    const userinfo = structuredClone(exampleSnapshot) as ReputationSnapshot
+    userinfo.balance.disclaimer.links = {
+      ...withLinks.balance.disclaimer.links,
+      legal_notice_url: "https://user:pass@example.com/legal",
+    }
+    renderView({ example: userinfo, relayerUrl: null })
+    expect(screen.queryByRole("link", { name: "Legal notice" })).toBeNull()
+    expect(screen.getByRole("link", { name: "AS IS" }).getAttribute("href")).toBe("https://example.com/as-is")
   })
 })
 

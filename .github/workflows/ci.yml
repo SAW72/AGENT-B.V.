@@ -96,6 +96,33 @@ jobs:
           path: claim-relayer/coverage/
           if-no-files-found: error
 
+  points-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            services/points-indexer/package-lock.json
+            services/points-indexer/cloudflare/package-lock.json
+      - name: Install points indexer deps
+        working-directory: services/points-indexer
+        run: npm ci
+      - name: Install points Worker deps
+        working-directory: services/points-indexer/cloudflare
+        run: npm ci
+      - name: Points Worker typecheck
+        working-directory: services/points-indexer/cloudflare
+        run: npx wrangler types && npx tsc --noEmit --pretty false
+      - name: Points Worker tests (offline fake RPC, no network, no deploy)
+        working-directory: services/points-indexer/cloudflare
+        run: npm test
+
   points-indexer:
     runs-on: ubuntu-latest
     timeout-minutes: 10

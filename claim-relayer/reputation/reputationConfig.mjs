@@ -31,6 +31,21 @@ function guessWei(node, label) {
   return BigInt(value);
 }
 
+/** Keep an https URL with a host and no userinfo. Anything else becomes null. */
+export function httpsLink(value) {
+  const text = String(value ?? "").trim();
+  if (!text || !/^https:\/\//i.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:") return null;
+    if (url.username !== "" || url.password !== "") return null;
+    if (!url.hostname) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeVersion(raw) {
   if (!raw || raw.chain?.chain_id !== BASE_SEPOLIA_CHAIN_ID) {
     throw httpError(500, "wrong_chain", { chainId: raw?.chain?.chain_id });
@@ -101,12 +116,12 @@ export function normalizeVersion(raw) {
     season: normalizeSeason(raw),
     disclaimer: String(raw.display?.disclaimer || ""),
     disclaimer_links: {
-      master_disclaimer: String(raw.disclaimer_links?.master_disclaimer || ""),
-      bvt_securities_disclaimer: String(raw.disclaimer_links?.bvt_securities_disclaimer || ""),
-      as_is: String(raw.disclaimer_links?.as_is || ""),
-      not_investment: String(raw.disclaimer_links?.not_investment || ""),
-      eligibility_notice: String(raw.disclaimer_links?.eligibility_notice || ""),
-      abuse_policy: String(raw.disclaimer_links?.abuse_policy || ""),
+      master_disclaimer: httpsLink(raw.disclaimer_links?.master_disclaimer),
+      legal_notice_url: httpsLink(raw.disclaimer_links?.legal_notice_url),
+      as_is: httpsLink(raw.disclaimer_links?.as_is),
+      not_investment: httpsLink(raw.disclaimer_links?.not_investment),
+      eligibility_notice: httpsLink(raw.disclaimer_links?.eligibility_notice),
+      abuse_policy: httpsLink(raw.disclaimer_links?.abuse_policy),
     },
     caps_label: String(raw.display?.caps_label || "DRAFT/GUESS"),
     read_api: {
