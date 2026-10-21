@@ -7,6 +7,24 @@ import { attributeLogs, normalizeLog } from "./attribute.mjs";
 import { canonicalJson, compareRows } from "./canonical.mjs";
 import { ACTION, CHAIN_ID, DAY_SECONDS, isAcceptedChain } from "./constants.mjs";
 import { PointsError, hexInt, isUniqueError, lowerHex } from "./hex.mjs";
+import {
+  SANCTIONS_INSERT_CHECK,
+  SANCTIONS_INSERT_WALLET,
+  SANCTIONS_MATCH,
+  SANCTIONS_READ_CACHE,
+  SANCTIONS_READ_WALLETS,
+  SANCTIONS_REFRESH_MS,
+  SANCTIONS_SCHEMA_SQL,
+  SANCTIONS_WRITE_CACHE,
+  SDN_ADVANCED_URL,
+  applySanctionsDecision,
+  forgetNotedDecision,
+  noteDecision,
+  refreshParsedList,
+  sanctionsCheckLog,
+  sanctionsCheckParams,
+  screenFromStored,
+} from "./sanctions.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "./signature.mjs";
 
 const RPC_NOT_BEFORE_KEY = "rpc_not_before";
@@ -104,6 +122,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ledger_first_activity
 CREATE UNIQUE INDEX IF NOT EXISTS ledger_return_day
   ON ledger_rows (wallet, utc_day)
   WHERE action = 'return_day';
+${SANCTIONS_SCHEMA_SQL.join(";\n")};
 `;
 
 function readConfig(name) {
@@ -642,6 +661,73 @@ export class Indexer {
     });
   }
 
+  #ensureSanctionsTables() {
+    for (const statement of SANCTIONS_SCHEMA_SQL) this.db.exec(statement);
+  }
+
+  #loadSanctionsScreen(now = Date.now()) {
+    try {
+      this.#ensureSanctionsTables();
+      const cache = this.db.prepare(SANCTIONS_READ_CACHE).get() ?? null;
+      const wallets = this.db.prepare(SANCTIONS_READ_WALLETS).all();
+      return screenFromStored(cache, wallets, now);
+    } catch {
+      return screenFromStored(null, [], now);
+    }
+  }
+
+  #writeSanctionsCheck(screen, wallet, decision) {
+    const params = sanctionsCheckParams(screen, wallet, decision);
+    this.db.prepare(SANCTIONS_INSERT_CHECK).run(
+      params.wallet,
+      params.result,
+      params.reason,
+      params.checkedAt,
+      params.listVersion,
+      params.source,
+      params.persisted,
+    );
+    if (params.storeWallet) {
+      this.db.prepare(SANCTIONS_INSERT_WALLET).run(
+        params.wallet,
+        SANCTIONS_MATCH,
+        params.checkedAt,
+        params.listVersion,
+      );
+    }
+    console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision)));
+  }
+
+  async refreshSanctions(options = {}) {
+    const fetchImpl = options.fetch;
+    if (typeof fetchImpl !== "function") return { refreshed: false, failed: true, listVersion: null };
+    const now = options.now ?? Date.now();
+    const refreshMs = options.refreshMs ?? SANCTIONS_REFRESH_MS;
+    const source = options.source ?? SDN_ADVANCED_URL;
+    let cache = null;
+    try {
+      this.#ensureSanctionsTables();
+      cache = this.db.prepare(SANCTIONS_READ_CACHE).get() ?? null;
+    } catch {
+      console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      return { refreshed: false, failed: true, listVersion: null };
+    }
+    const outcome = await refreshParsedList(fetchImpl, source, now, refreshMs, cache);
+    if (outcome.failed) {
+      console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      return { refreshed: false, failed: true, listVersion: outcome.listVersion };
+    }
+    if (outcome.addressesJson != null) {
+      this.db.prepare(SANCTIONS_WRITE_CACHE).run(outcome.fetchedAt, source, outcome.listVersion, outcome.addressesJson);
+    }
+    return {
+      refreshed: outcome.refreshed,
+      failed: false,
+      listVersion: outcome.listVersion,
+      count: outcome.count,
+    };
+  }
+
   rebuild() {
     const logs = this.#rawObjects();
     const attribution = attributeLogs(logs, {
@@ -681,6 +767,7 @@ export class Indexer {
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const screen = this.#loadSanctionsScreen();
       this.db.exec("DELETE FROM ledger_rows");
       const insert = this.db.prepare(
         `INSERT INTO ledger_rows(
@@ -702,6 +789,8 @@ export class Indexer {
         }
         if (row.action === ACTION.firstActivity && firstDay.has(row.wallet)) return false;
         if (row.action === ACTION.returnDay && returnDays.has(`${row.wallet}|${row.utc_day}`)) return false;
+        const noted = noteDecision(screen, row.wallet);
+        applySanctionsDecision(row, noted.decision);
         try {
           this.db.exec("SAVEPOINT row");
           seq += 1;
@@ -730,6 +819,7 @@ export class Indexer {
             row.source_tx_hash,
             row.source_log_index,
           );
+          if (noted.first) this.#writeSanctionsCheck(screen, row.wallet, noted.decision);
           this.db.exec("RELEASE row");
           daySlot.add(dayKey);
           if (row.action === ACTION.fund || row.action === ACTION.releaseOrRefund || row.action === ACTION.disputeOpenOrVote) {
@@ -740,6 +830,7 @@ export class Indexer {
           this.db.exec("ROLLBACK TO row");
           this.db.exec("RELEASE row");
           seq -= 1;
+          if (noted.first) forgetNotedDecision(screen, row.wallet, noted.decision);
           if (!isUniqueError(error)) throw error;
           return false;
         }

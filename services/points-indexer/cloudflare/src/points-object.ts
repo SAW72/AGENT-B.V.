@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { CHAIN_ID } from "../../src/constants.mjs";
+import { SANCTIONS_MATCH } from "../../src/sanctions.mjs";
 import {
   ensureSchema,
   finalizedBlock,
@@ -49,6 +50,7 @@ export class PointsObject extends DurableObject<Env> {
         POINTS_MAX_WINDOWS_PER_RUN: env.POINTS_MAX_WINDOWS_PER_RUN,
         POINTS_FAST_PACE: env.POINTS_FAST_PACE,
       },
+      sanctionsFetch: (input, init) => fetch(input, init as RequestInit | undefined),
     });
   }
 
@@ -111,9 +113,20 @@ export class PointsObject extends DurableObject<Env> {
             address,
             CHAIN_ID,
           ).toArray()[0];
+          let eligibilityReason: string | undefined;
+          try {
+            const hit = sql.exec(
+              "SELECT reason FROM sanctions_wallets WHERE wallet = ? LIMIT 1",
+              address,
+            ).toArray()[0];
+            if (hit && String(hit.reason) === SANCTIONS_MATCH) eligibilityReason = SANCTIONS_MATCH;
+          } catch {
+            eligibilityReason = undefined;
+          }
           return {
             rows_count: Number(totals?.rows_count ?? 0),
             first_activity_utc_day: first ? Number(first.utc_day) : null,
+            ...(eligibilityReason ? { eligibility_reason: eligibilityReason } : {}),
           };
         },
         listLedgerRows: (address, query) => {

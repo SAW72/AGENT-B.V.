@@ -7,6 +7,24 @@ import { compareRows } from "../../src/canonical.mjs";
 import { ACTION, CHAIN_ID, isAcceptedChain } from "../../src/constants.mjs";
 import { PointsError, isUniqueError, lowerHex } from "../../src/hex.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "../../src/signature.mjs";
+import {
+  SANCTIONS_INSERT_CHECK,
+  SANCTIONS_INSERT_WALLET,
+  SANCTIONS_MATCH,
+  SANCTIONS_READ_CACHE,
+  SANCTIONS_READ_WALLETS,
+  SANCTIONS_REFRESH_MS,
+  SANCTIONS_SCHEMA_SQL,
+  SANCTIONS_WRITE_CACHE,
+  SDN_ADVANCED_URL,
+  applySanctionsDecision,
+  noteDecision,
+  refreshParsedList,
+  sanctionsCheckLog,
+  sanctionsCheckParams,
+  screenFromStored,
+  type SanctionsFetch,
+} from "../../src/sanctions.mjs";
 
 type Sql = {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -110,6 +128,7 @@ const SCHEMA = [
   `CREATE UNIQUE INDEX IF NOT EXISTS ledger_return_day
     ON ledger_rows (wallet, utc_day)
     WHERE action = 'return_day'`,
+  ...SANCTIONS_SCHEMA_SQL,
 ];
 
 /** Above this many stored logs, rebuild stops so a flood cannot spend the CPU budget. */
@@ -588,6 +607,15 @@ function linkFor(
 }
 
 export function applyFailClosed<T extends Record<string, unknown>>(row: T) {
+  if (row.eligibility_reason === SANCTIONS_MATCH) {
+    return {
+      ...row,
+      points: 0,
+      eligibility_status: "ineligible",
+      eligibility_reason: SANCTIONS_MATCH,
+      points_withheld: 1,
+    };
+  }
   return {
     ...row,
     points: 0,
@@ -638,6 +666,69 @@ export function insertLedgerRow(sql: Sql, row: Record<string, unknown>) {
     if (isUniqueError(error)) return false;
     throw error;
   }
+}
+
+function loadSanctionsScreen(sql: Sql, now = Date.now()) {
+  try {
+    for (const statement of SANCTIONS_SCHEMA_SQL) sql.exec(statement);
+    const cache = one(sql, SANCTIONS_READ_CACHE);
+    const wallets = all(sql, SANCTIONS_READ_WALLETS);
+    return screenFromStored(cache, wallets, now);
+  } catch {
+    return screenFromStored(null, [], now);
+  }
+}
+
+function writeSanctionsCheck(sql: Sql, screen: ReturnType<typeof screenFromStored>, wallet: string, decision: { result: string; reason: string; persisted: boolean }) {
+  const params = sanctionsCheckParams(screen, wallet, decision);
+  run(
+    sql,
+    SANCTIONS_INSERT_CHECK,
+    params.wallet,
+    params.result,
+    params.reason,
+    params.checkedAt,
+    params.listVersion,
+    params.source,
+    params.persisted,
+  );
+  if (params.storeWallet) {
+    run(sql, SANCTIONS_INSERT_WALLET, params.wallet, SANCTIONS_MATCH, params.checkedAt, params.listVersion);
+  }
+  console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision)));
+}
+
+export async function refreshSanctionsCache(sql: Sql, options: {
+  fetch: SanctionsFetch;
+  now?: number;
+  refreshMs?: number;
+  source?: string;
+}) {
+  const now = options.now ?? Date.now();
+  const refreshMs = options.refreshMs ?? SANCTIONS_REFRESH_MS;
+  const source = options.source ?? SDN_ADVANCED_URL;
+  let cache: Record<string, unknown> | null = null;
+  try {
+    for (const statement of SANCTIONS_SCHEMA_SQL) sql.exec(statement);
+    cache = one(sql, SANCTIONS_READ_CACHE);
+  } catch {
+    console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+    return { refreshed: false, failed: true, listVersion: null as string | null };
+  }
+  const outcome = await refreshParsedList(options.fetch, source, now, refreshMs, cache);
+  if (outcome.failed) {
+    console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+    return { refreshed: false, failed: true, listVersion: outcome.listVersion as string | null };
+  }
+  if (outcome.addressesJson != null) {
+    run(sql, SANCTIONS_WRITE_CACHE, outcome.fetchedAt, source, outcome.listVersion, outcome.addressesJson);
+  }
+  return {
+    refreshed: outcome.refreshed === true,
+    failed: false,
+    listVersion: outcome.listVersion as string | null,
+    count: outcome.count as number,
+  };
 }
 
 function settleNonceStatuses(sql: Sql, nonces: Map<string, Record<string, unknown>>) {
@@ -698,6 +789,7 @@ export function rebuild(storage: Storage) {
     seq: Number(row.seq),
   }));
 
+  const screen = loadSanctionsScreen(sql);
   storage.transactionSync(() => {
     run(sql, "DELETE FROM ledger_rows");
     const firstDay = new Map<string, number>();
@@ -718,13 +810,11 @@ export function rebuild(storage: Storage) {
       }
       if (row.action === ACTION.firstActivity && firstDay.has(row.wallet)) return false;
       if (row.action === ACTION.returnDay && returnDays.has(`${row.wallet}|${row.utc_day}`)) return false;
+      const noted = noteDecision(screen, row.wallet);
+      applySanctionsDecision(row, noted.decision);
       seq += 1;
       pending.push({ ...row });
-      const stored = pending[pending.length - 1];
-      stored.points = 0;
-      stored.eligibility_status = "unverified";
-      stored.eligibility_reason = "ofac_unconfigured";
-      stored.points_withheld = 1;
+      if (noted.first) writeSanctionsCheck(sql, screen, row.wallet, noted.decision);
       daySlot.add(dayKey);
       if (row.action === ACTION.fund || row.action === ACTION.releaseOrRefund || row.action === ACTION.disputeOpenOrVote) {
         logSlot.add(logKey);
