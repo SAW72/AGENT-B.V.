@@ -254,13 +254,17 @@ export async function runAlarm(options: {
       const to = Math.min(scanHead, from + window - 1);
       let logs;
       try {
-        const scanned = await scan.run(() => rpc.getLogs(from as number, to));
+        const scanned = await scan.run(() => rpc.readWindow(from as number, to));
         if (!scanned.ok) {
           earlyReason = scanned.reason;
           deferMs = scanned.deferMs ?? 0;
           break;
         }
-        logs = scanned.value;
+        if (!scanned.value.ok) {
+          earlyReason = scanned.value.reason;
+          break;
+        }
+        logs = scanned.value.logs;
       } catch (error) {
         if (error instanceof BudgetExceeded) {
           stopReason = "subrequest_budget";

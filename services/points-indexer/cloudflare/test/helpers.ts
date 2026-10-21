@@ -1,4 +1,8 @@
 import { ESCROW, ESCROW_START_BLOCK } from "../../src/constants.mjs";
+import { bloomForAddresses } from "../src/logWindow";
+
+const EMPTY_BLOOM = `0x${"00".repeat(256)}`;
+const DUMMY_TX = `0x${"ab".repeat(32)}`;
 
 export type FakeLog = {
   address: string;
@@ -45,10 +49,36 @@ export function installRpc(handler: (request: RpcRequest) => HandlerResult) {
     const parsed = JSON.parse(String(init?.body ?? "null")) as RpcRequest | RpcRequest[];
     if (Array.isArray(parsed)) {
       calls.push(...parsed);
-      const rows = parsed.map((request) => {
-        const result = handler(request);
-        if (result.status !== 200) {
-          return { jsonrpc: "2.0", id: request.id, error: { code: result.status, message: "batch failed" } };
+      const results = parsed.map((request) => handler(request));
+      const thrown = results.find((result) => result.throwName);
+      if (thrown?.throwName) {
+        const error = new Error(thrown.throwName);
+        error.name = thrown.throwName;
+        throw error;
+      }
+      const httpFail = results.find((result) => (
+        result.status === 413
+        || result.status === 429
+        || (result.status >= 500 && result.status <= 599)
+      ));
+      if (httpFail) {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: parsed[0]?.id ?? 1,
+          error: httpFail.rpcError ?? { code: httpFail.status, message: "rpc failed" },
+        }), {
+          status: httpFail.status,
+          headers: { "content-type": "application/json", ...(httpFail.headers ?? {}) },
+        });
+      }
+      const rows = parsed.map((request, index) => {
+        const result = results[index];
+        if (result.rpcError || result.status !== 200) {
+          return {
+            jsonrpc: "2.0",
+            id: request.id,
+            error: result.rpcError ?? { code: result.status, message: "batch failed" },
+          };
         }
         return { jsonrpc: "2.0", id: request.id, result: result.body };
       });
@@ -125,6 +155,69 @@ export function toRpcLog(log: FakeLog) {
   };
 }
 
+function logsOnBlock(logs: FakeLog[] | undefined, blockNumber: number) {
+  return (logs ?? []).filter((log) => log.blockNumber === blockNumber);
+}
+
+function blockBody(
+  options: {
+    logs?: FakeLog[];
+    headerHashFor?: (blockNumber: number) => string;
+    bloomAddresses?: string[];
+  },
+  blockNumber: number,
+  tag: string,
+  timestamp: number,
+) {
+  const inBlock = logsOnBlock(options.logs, blockNumber);
+  const hash = options.headerHashFor?.(blockNumber)
+    ?? inBlock[0]?.blockHash
+    ?? `0x${blockNumber.toString(16).padStart(64, "0")}`;
+  const bloom = options.bloomAddresses && inBlock.length === 0
+    ? bloomForAddresses(options.bloomAddresses)
+    : inBlock.length > 0
+      ? bloomForAddresses([...new Set(inBlock.map((log) => log.address))])
+      : EMPTY_BLOOM;
+  const transactions = options.bloomAddresses && inBlock.length === 0
+    ? [DUMMY_TX]
+    : [...new Set(inBlock.map((log) => log.transactionHash))];
+  return {
+    number: tag,
+    timestamp: hex(timestamp),
+    hash,
+    logsBloom: bloom,
+    transactions: transactions.map((txHash) => ({ hash: txHash })),
+  };
+}
+
+function receiptsForBlock(
+  options: {
+    logs?: FakeLog[];
+    headerHashFor?: (blockNumber: number) => string;
+    bloomAddresses?: string[];
+  },
+  blockNumber: number,
+) {
+  const inBlock = logsOnBlock(options.logs, blockNumber);
+  const hash = options.headerHashFor?.(blockNumber)
+    ?? inBlock[0]?.blockHash
+    ?? `0x${blockNumber.toString(16).padStart(64, "0")}`;
+  if (options.bloomAddresses && inBlock.length === 0) {
+    return [{ transactionHash: DUMMY_TX, blockHash: hash, logs: [] }];
+  }
+  const byTx = new Map<string, FakeLog[]>();
+  for (const log of inBlock) {
+    const list = byTx.get(log.transactionHash) ?? [];
+    list.push(log);
+    byTx.set(log.transactionHash, list);
+  }
+  return [...byTx.entries()].map(([transactionHash, txLogs]) => ({
+    transactionHash,
+    blockHash: txLogs[0]?.blockHash ?? hash,
+    logs: txLogs.map(toRpcLog),
+  }));
+}
+
 export function chainHandler(options: {
   head: number | (() => number);
   latest?: number | (() => number);
@@ -138,6 +231,12 @@ export function chainHandler(options: {
     seen: number,
   ) => { status: number; retryAfter?: string; rpcError?: { code: number; message: string }; throwName?: string } | null;
   timestamps?: Record<number, number>;
+  nonArrayLogs?: boolean;
+  scanFilter?: (log: FakeLog) => boolean;
+  headerHashFor?: (blockNumber: number) => string;
+  bloomAddresses?: string[];
+  omitReceipts?: boolean;
+  receiptMethodMissing?: boolean;
 }) {
   let getLogsSeen = 0;
   const headNow = () => (typeof options.head === "function" ? options.head() : options.head);
@@ -160,7 +259,27 @@ export function chainHandler(options: {
       if (options.omitTimestamp) return { status: 200, body: null };
       const number = Number(tag);
       const timestamp = options.timestamps?.[number] ?? 1_700_000_000;
-      return { status: 200, body: { number: tag, timestamp: hex(timestamp) } };
+      return { status: 200, body: blockBody(options, number, tag, timestamp) };
+    }
+    if (request.method === "eth_getBlockReceipts") {
+      if (options.receiptMethodMissing) {
+        return { status: 200, body: null, rpcError: { code: -32601, message: "method not found" } };
+      }
+      if (options.omitReceipts) return { status: 200, body: null };
+      const number = Number(request.params[0]);
+      return { status: 200, body: receiptsForBlock(options, number) };
+    }
+    if (request.method === "eth_getTransactionReceipt") {
+      const hash = String(request.params[0]).toLowerCase();
+      const matches = (options.logs ?? []).filter((log) => log.transactionHash.toLowerCase() === hash);
+      return {
+        status: 200,
+        body: {
+          transactionHash: request.params[0],
+          blockHash: matches[0]?.blockHash ?? `0x${"00".repeat(32)}`,
+          logs: matches.map(toRpcLog),
+        },
+      };
     }
     if (request.method === "eth_getLogs") {
       getLogsSeen += 1;
@@ -177,8 +296,9 @@ export function chainHandler(options: {
           throwName: failure.throwName,
         };
       }
+      if (options.nonArrayLogs) return { status: 200, body: { unexpected: true } };
       if (fromBlock > headNow()) return { status: 200, body: [] };
-      const pool = options.logs ?? [];
+      const pool = (options.logs ?? []).filter((log) => options.scanFilter?.(log) ?? true);
       const rows = (options.keepOutside ? pool : pool.filter((log) => log.blockNumber >= fromBlock && log.blockNumber <= toBlock)).map(toRpcLog);
       return { status: 200, body: rows };
     }
