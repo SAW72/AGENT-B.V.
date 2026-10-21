@@ -1,5 +1,5 @@
 {
-  "_status": "DRAFT. Build and staging only. Design note v2.2 (Tokenomics, 2026-09-26) supersedes v2.1. Section 12 wins where it conflicts with sections 1 to 11. Every value under points, floors, caps and flags is a Tokenomics GUESS and must not be treated as final until Spencer locks checklist #12. Do not use against live data until Blockchain Verifier APPROVE and Spencer's GO via BOB.",
+  "_status": "DRAFT. Build and staging only. Design note v2.2 (Tokenomics, 2026-09-26) supersedes v2.1. Section 12 wins where it conflicts with sections 1 to 11. Every value under points, floors, caps and flags is a Tokenomics GUESS and must not be treated as final until Spencer locks checklist #12. points_ledger is a separate lock. Its label is locked. Those counts are not weights, and they are not live until Blockchain Verifier APPROVE and Spencer's GO via BOB. Do not use any of this against live data until that APPROVE and GO.",
   "config_version": "sepolia-draft-1",
   "rule_version": "design-v2.2",
   "effective_from_block": 0,
@@ -86,6 +86,25 @@
       "value": null,
       "note": "Addition beyond PR #28, which has season_start_block only. A 90-day season is measured in UTC seconds, so replay also needs this timestamp. Null until go-live. If either start is null, the season cap does not apply."
     }
+  },
+  "points_ledger": {
+    "_label": "locked",
+    "_note": "Spencer locked these counts on 2026-10-21. They are not the GUESS weights under points, floors, or caps. Not used on live data until Blockchain Verifier APPROVE and Spencer's GO. Season start stays empty until that go.",
+    "gates": {
+      "same_pair_cap_per_utc_day": { "value": 3, "status": "locked" },
+      "same_pair_cap_lifetime": { "value": 30, "status": "locked" },
+      "min_escrow_amount_wei": { "value": "1000000000000000", "human": "0.001 test ETH", "status": "locked" },
+      "min_escrow_duration_seconds": { "value": 3600, "human": "1 hour", "status": "locked" }
+    },
+    "caps": {
+      "fund": { "daily": 5, "season": 60, "status": "locked" },
+      "release_or_refund": { "daily": 5, "season": 60, "status": "locked" },
+      "dispute": { "daily": 2, "season": 15, "status": "locked" },
+      "first_activity": { "lifetime": 1, "status": "locked", "note": "One row per wallet. Left as the existing unique key." },
+      "return_day": { "per_utc_day": 1, "season": 90, "status": "locked" }
+    },
+    "season_start_block": null,
+    "season_start_timestamp": null
   },
   "gates": {
     "o1_tier_gate": {
