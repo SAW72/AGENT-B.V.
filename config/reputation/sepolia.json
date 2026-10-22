@@ -150,6 +150,11 @@
     "o5_standalone_disputes_threshold": { "value": 3, "status": "GUESS" },
     "o5_window_days": { "value": 7, "status": "GUESS" }
   },
+  "enforcer": {
+    "owner": "0x41a023Ce2bd5Aee1e1aDF183b448bFF8F3D1EDd1",
+    "public_contact": "@thecryptostewrd on X",
+    "_note": "Named owner for checklist #9. The hook stays pending until a written abuse policy exists. Flags do not auto-cancel."
+  },
   "hooks": {
     "ofac_screening_7": "pending",
     "sybil_enforcer_9": "pending",
