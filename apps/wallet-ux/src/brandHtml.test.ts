@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build } from "vite"
@@ -79,22 +80,28 @@ describe("brand html", () => {
     expect(brandManifestSource().includes(retired)).toBe(false)
     expect(readFileSync(join(appRoot, "src", "App.tsx"), "utf8")).toContain("DISPLAY_NAME")
 
-    await build({
-      configFile: join(appRoot, "vite.config.ts"),
-      root: appRoot,
-      logLevel: "error",
-      mode: "production",
-    })
+    const outDir = mkdtempSync(join(tmpdir(), "wallet-ux-brand-"))
+    try {
+      await build({
+        configFile: join(appRoot, "vite.config.ts"),
+        root: appRoot,
+        logLevel: "error",
+        mode: "production",
+        build: { outDir, emptyOutDir: true },
+      })
 
-    const distHits = hitsIn(filesUnder(join(appRoot, "dist")))
-    expect(distHits).toEqual([])
-    const built = readFileSync(join(appRoot, "dist", "app", "index.html"), "utf8")
-    expect(built).toContain("<title>Agent-BV (Agent Bot Verifier) — Base Sepolia</title>")
-    expect(built).toContain(`<title>${PAGE_TITLE}</title>`)
-    expect(built).toContain(`property="og:title" content="${PAGE_TITLE}"`)
-    expect(built).toContain('rel="manifest"')
-    const manifest = readFileSync(join(appRoot, "dist", "app", "manifest.webmanifest"), "utf8")
-    expect(manifest).toContain(PRODUCT_TITLE)
-    expect(manifest.includes(retired)).toBe(false)
+      const distHits = hitsIn(filesUnder(outDir))
+      expect(distHits).toEqual([])
+      const built = readFileSync(join(outDir, "index.html"), "utf8")
+      expect(built).toContain("<title>Agent-BV (Agent Bot Verifier) — Base Sepolia</title>")
+      expect(built).toContain(`<title>${PAGE_TITLE}</title>`)
+      expect(built).toContain(`property="og:title" content="${PAGE_TITLE}"`)
+      expect(built).toContain('rel="manifest"')
+      const manifest = readFileSync(join(outDir, "manifest.webmanifest"), "utf8")
+      expect(manifest).toContain(PRODUCT_TITLE)
+      expect(manifest.includes(retired)).toBe(false)
+    } finally {
+      rmSync(outDir, { recursive: true, force: true })
+    }
   })
 })
