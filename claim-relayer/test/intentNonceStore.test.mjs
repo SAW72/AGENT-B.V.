@@ -34,4 +34,18 @@ describe("intent nonce store", () => {
     assert.equal(replay.result.status, 200);
     assert.equal(replay.result.body.txHash, "0x" + "cd".repeat(32));
   });
+
+  it("reloads a pending nonce so a restart cannot broadcast it twice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "intent-nonce-pending-"));
+    const filePath = join(dir, "nonces.jsonl");
+    const first = createFileIntentNonceStore({ filePath, now: () => 5_000 });
+    await first.ready();
+    const claimed = await first.claim({ key: "0xdef:4", ttlMs: 300_000, atMs: 5_000 });
+    assert.equal(claimed.kind, "fresh");
+
+    const second = createFileIntentNonceStore({ filePath, now: () => 6_000 });
+    await second.ready();
+    const pending = await second.claim({ key: "0xdef:4", ttlMs: 300_000, atMs: 6_000 });
+    assert.equal(pending.kind, "pending");
+  });
 });
