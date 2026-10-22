@@ -47,6 +47,12 @@ describe("config gates", () => {
     assert.equal(config.abuse.globalLimit, 60);
     assert.equal(config.abuse.escrowCap, 8);
     assert.equal(config.abuse.dailyGasBudgetWei, "10000000000000000");
+    assert.equal(config.abuse.gasPriceWei, "1000000000");
+    assert.equal(config.abuse.gasPriceMultiplier, 5);
+    assert.equal(config.abuseStatePath, "./data/abuse-state.json");
+    assert.equal(config.intentNoncePath, "./data/intent-nonces.jsonl");
+    assert.equal(loadConfig({ CLAIM_GAS_PRICE_MULTIPLIER: "2" }).abuse.gasPriceMultiplier, 2);
+    assert.equal(loadConfig({ ABUSE_STATE_PATH: "/var/data/claim-relayer/abuse-state.json" }).abuseStatePath, "/var/data/claim-relayer/abuse-state.json");
     assert.equal(config.abuse.maxGas, 500_000);
     assert.equal(config.abuse.maxFeePerGasWei, "5000000000");
     assert.equal(config.abuse.maxPriorityFeePerGasWei, "2000000000");
