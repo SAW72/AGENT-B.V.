@@ -4,9 +4,12 @@ import {
   SANCTIONS_MATCH,
   SANCTIONS_MAX_BYTES,
   SANCTIONS_REFRESH_MS,
+  SANCTIONS_RETAINED_MAX_BYTES,
+  SDN_ADVANCED_URL,
   cacheIsFresh,
   decideSanctions,
   eligibilityFromDecision,
+  fetchSdnAdvancedXml,
   parseSdnAdvancedXml,
 } from "../src/sanctions.mjs";
 import { ACTION } from "../src/constants.mjs";
@@ -35,6 +38,41 @@ function sdnXml(eth = []) {
   </ReferenceValueSets>
   <DistinctParties>${features}</DistinctParties>
 </Sanctions>`;
+}
+
+function chunksOf(xml, size) {
+  const parts = [];
+  for (let i = 0; i < xml.length; i += size) parts.push(xml.slice(i, i + size));
+  return parts;
+}
+
+function streamResponse(xml, headers = {}, chunkSize = xml.length) {
+  const parts = chunksOf(xml, chunkSize);
+  let index = 0;
+  const lower = {};
+  for (const [key, value] of Object.entries(headers)) lower[key.toLowerCase()] = value;
+  return {
+    ok: true,
+    headers: { get(name) { return lower[String(name).toLowerCase()] ?? null; } },
+    async text() {
+      throw new Error("text() must not buffer the SDN publication");
+    },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (index >= parts.length) return { done: true, value: undefined };
+            const value = new TextEncoder().encode(parts[index]);
+            index += 1;
+            return { done: false, value };
+          },
+          async cancel() {
+            index = parts.length;
+          },
+        };
+      },
+    },
+  };
 }
 
 function xmlResponse(xml, status = 200, headers = {}) {
@@ -85,6 +123,43 @@ describe("OFAC SDN parser", () => {
     const withoutTypes = sdnXml().replace(/Digital Currency Address - /g, "Other ");
     assert.throws(() => parseSdnAdvancedXml(withoutTypes), /sanctions_xml_invalid/);
     assert.throws(() => parseSdnAdvancedXml(sdnXml().replace("</Sanctions>", "")), /sanctions_xml_invalid/);
+  });
+
+  it("streams the publication and does not retain other features", async () => {
+    assert.ok(SANCTIONS_RETAINED_MAX_BYTES < 128 * 1024 * 1024);
+    assert.equal(SANCTIONS_RETAINED_MAX_BYTES, 8_000_000);
+    const noise = "N".repeat(2_000_000);
+    const xml = sdnXml(["0x00000000000000000000000000000000000000A1"]).replace(
+      "<VersionDetail>not-an-address</VersionDetail>",
+      `<VersionDetail>${noise}</VersionDetail>`,
+    );
+    const sliced = await fetchSdnAdvancedXml(async () => streamResponse(xml, {}, 1024));
+    assert.ok(sliced.length < 20_000);
+    assert.equal(sliced.includes(noise.slice(0, 32)), false);
+    assert.deepEqual(parseSdnAdvancedXml(sliced), parseSdnAdvancedXml(xml));
+    const split = await fetchSdnAdvancedXml(async () => streamResponse(sdnXml(["0x00000000000000000000000000000000000000A1"]), {}, 5));
+    assert.deepEqual(parseSdnAdvancedXml(split), parseSdnAdvancedXml(sdnXml(["0x00000000000000000000000000000000000000A1"])));
+  });
+
+  it("fails closed on a truncated stream, an undeclared feature type, and a read past the cap", async () => {
+    const listed = sdnXml(["0x00000000000000000000000000000000000000A1"]);
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(listed.replace("</Sanctions>", ""), {}, 64)),
+      /sanctions_xml_invalid/,
+    );
+    const undeclared = `<Sanctions><Feature FeatureTypeID="345"><FeatureVersion><VersionDetail>0x00000000000000000000000000000000000000a1</VersionDetail></FeatureVersion></Feature><FeatureType ID="345">Digital Currency Address - ETH</FeatureType></Sanctions>`;
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(undeclared, {}, 32)),
+      /sanctions_xml_invalid/,
+    );
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(listed, {}, 64), SDN_ADVANCED_URL, 128),
+      /sanctions_too_large/,
+    );
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse("", {}, 1)),
+      /sanctions_xml_empty/,
+    );
   });
 });
 

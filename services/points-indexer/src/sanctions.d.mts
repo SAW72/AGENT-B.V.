@@ -2,6 +2,7 @@ export const SDN_ADVANCED_URL: string;
 export const SANCTIONS_REFRESH_MS: number;
 export const SANCTIONS_MATCH: string;
 export const SANCTIONS_MAX_BYTES: number;
+export const SANCTIONS_RETAINED_MAX_BYTES: number;
 export const SANCTIONS_SCHEMA_SQL: string[];
 export const SANCTIONS_READ_CACHE: string;
 export const SANCTIONS_WRITE_CACHE: string;
@@ -85,7 +86,7 @@ export function sanctionsCheckLog(screen: SanctionsScreen, wallet: string, decis
   persisted: boolean;
   listVersion: string | null;
 };
-export function fetchSdnAdvancedXml(fetchImpl: SanctionsFetch, url?: string): Promise<string>;
+export function fetchSdnAdvancedXml(fetchImpl: SanctionsFetch, url?: string, byteCap?: number): Promise<string>;
 export function refreshParsedList(
   fetchImpl: SanctionsFetch,
   url: string,

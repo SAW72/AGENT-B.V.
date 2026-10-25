@@ -1,10 +1,14 @@
 // Checklist #7 screen. A match is ineligible and is kept. A clear wallet stays unverified.
 // This module has no Node builtins so the worker can import it.
+// The publication is streamed. Only the issue date and digital-currency addresses are kept.
+// A Workers isolate has 128 MB. SANCTIONS_MAX_BYTES is how much may be read, not buffered.
 
 export const SDN_ADVANCED_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML";
 export const SANCTIONS_REFRESH_MS = 24 * 60 * 60 * 1000;
 export const SANCTIONS_MATCH = "sanctions_match";
 export const SANCTIONS_MAX_BYTES = 160_000_000;
+/** Extracted issue date plus digital-currency features. Far under the 128 MB isolate limit. */
+export const SANCTIONS_RETAINED_MAX_BYTES = 8_000_000;
 
 export const SANCTIONS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS sanctions_cache (
@@ -292,42 +296,253 @@ function headerValue(headers, name) {
   return value == null ? null : String(value);
 }
 
-async function readCappedText(response, cap) {
+const ELEMENT_CAP = 256 * 1024;
+
+function tagBoundary(text, token) {
+  const next = text[token.length];
+  if (next === undefined) return false;
+  return next === ">" || next === " " || next === "/" || next === "\n" || next === "\r" || next === "\t";
+}
+
+function isOpenFeature(text) {
+  return text.startsWith("<Feature") && tagBoundary(text, "<Feature");
+}
+
+function needsMore(text) {
+  if (!text.startsWith("<") || text.length > 64) return false;
+  if (text === "<Feature" || text === "<FeatureType" || text === "<DateOfIssue" || text === "</Feature") return true;
+  return ["</Sanctions>", "<FeatureType", "<DateOfIssue", "<Feature", "</Feature>"].some(
+    (token) => token.startsWith(text) && text.length < token.length,
+  );
+}
+
+/**
+ * Stream the SDN advanced publication and return a small document that contains
+ * the issue date, digital-currency feature types, and those features only.
+ * A feature whose type id has not been declared yet is an invalid list.
+ * Callers still run parseSdnAdvancedXml, so a partial extract cannot look like a clear list.
+ * @param {number} byteCap
+ */
+function createSdnSlicer(byteCap) {
+  let pending = "";
+  let readBytes = 0;
+  let retained = 0;
+  const parts = [];
+  const digitalIds = new Set();
+  const seenTypeIds = new Set();
+  let sawClose = false;
+  let mode = "scan";
+  let depth = 0;
+  let kept = "";
+
+  function add(text) {
+    retained += text.length;
+    if (retained > SANCTIONS_RETAINED_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    parts.push(text);
+  }
+
+  function rememberType(element) {
+    const match = /<FeatureType\b([^>]*)>([^<]*)<\/FeatureType>/.exec(element);
+    if (!match) throw sanctionsError("sanctions_xml_invalid");
+    const id = /\bID="(\d+)"/.exec(match[1]);
+    if (!id) throw sanctionsError("sanctions_xml_invalid");
+    seenTypeIds.add(id[1]);
+    if (decodeXml(match[2]).trim().startsWith("Digital Currency Address")) {
+      digitalIds.add(id[1]);
+      add(element);
+    }
+  }
+
+  function appendKept(text) {
+    if (mode !== "keep" || text.length === 0) return;
+    if (kept.length + text.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+    kept += text;
+  }
+
+  function addBytes(size) {
+    readBytes += size;
+    if (readBytes > byteCap) throw sanctionsError("sanctions_too_large");
+  }
+
+  function feed(text) {
+    if (text) pending += text;
+    let progressed = true;
+    while (pending.length > 0 && progressed) {
+      progressed = mode === "scan" ? scan() : walkElement();
+    }
+  }
+
+  function scan() {
+    let from = 0;
+    while (from < pending.length) {
+      const start = pending.indexOf("<", from);
+      if (start === -1) {
+        pending = "";
+        return false;
+      }
+      const rest = pending.slice(start);
+      if (rest.startsWith("</Sanctions>")) {
+        sawClose = true;
+        pending = rest.slice("</Sanctions>".length);
+        return true;
+      }
+      if (rest.startsWith("<FeatureType") && tagBoundary(rest, "<FeatureType")) {
+        pending = rest;
+        return takeSimple("FeatureType");
+      }
+      if (rest.startsWith("<DateOfIssue") && tagBoundary(rest, "<DateOfIssue")) {
+        pending = rest;
+        return takeSimple("DateOfIssue");
+      }
+      if (isOpenFeature(rest)) {
+        pending = rest;
+        return beginFeature();
+      }
+      if (needsMore(rest)) {
+        pending = rest;
+        return false;
+      }
+      from = start + 1;
+    }
+    pending = "";
+    return false;
+  }
+
+  function takeSimple(name) {
+    const close = `</${name}>`;
+    const end = pending.indexOf(close);
+    if (end === -1) {
+      if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+      return false;
+    }
+    const element = pending.slice(0, end + close.length);
+    pending = pending.slice(element.length);
+    if (name === "FeatureType") rememberType(element);
+    else add(element);
+    return true;
+  }
+
+  function beginFeature() {
+    const openEnd = pending.indexOf(">");
+    if (openEnd === -1) {
+      if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+      return false;
+    }
+    const openTag = pending.slice(0, openEnd + 1);
+    const typeId = /\bFeatureTypeID="(\d+)"/.exec(openTag);
+    if (!typeId || !seenTypeIds.has(typeId[1])) throw sanctionsError("sanctions_xml_invalid");
+    const digital = digitalIds.has(typeId[1]);
+    pending = pending.slice(openTag.length);
+    if (openTag.endsWith("/>")) {
+      if (digital) add(openTag);
+      return true;
+    }
+    mode = digital ? "keep" : "drop";
+    depth = 1;
+    kept = digital ? openTag : "";
+    return true;
+  }
+
+  function keepBefore(start, extra = "") {
+    if (mode !== "keep") return;
+    appendKept(extra ? pending.slice(0, start) + extra : pending.slice(0, start));
+  }
+
+  function walkElement() {
+    let from = 0;
+    while (from < pending.length) {
+      const start = pending.indexOf("<", from);
+      if (start === -1) {
+        keepBefore(pending.length);
+        pending = "";
+        return false;
+      }
+      const rest = pending.slice(start);
+      if (isOpenFeature(rest)) {
+        const openEnd = rest.indexOf(">");
+        if (openEnd === -1) {
+          keepBefore(start);
+          pending = rest;
+          if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+          return false;
+        }
+        const openTag = rest.slice(0, openEnd + 1);
+        keepBefore(start, openTag);
+        pending = rest.slice(openTag.length);
+        if (!openTag.endsWith("/>")) depth += 1;
+        return true;
+      }
+      if (rest.startsWith("</Feature>")) {
+        keepBefore(start, "</Feature>");
+        pending = rest.slice("</Feature>".length);
+        depth -= 1;
+        if (depth === 0) {
+          if (mode === "keep") add(kept);
+          kept = "";
+          mode = "scan";
+        }
+        return true;
+      }
+      if (needsMore(rest)) {
+        keepBefore(start);
+        pending = rest;
+        return false;
+      }
+      from = start + 1;
+    }
+    keepBefore(pending.length);
+    pending = "";
+    return false;
+  }
+
+  function finish() {
+    feed("");
+    if (mode !== "scan") throw sanctionsError("sanctions_xml_invalid");
+    if (!sawClose) {
+      if (parts.length === 0 && pending.trim() === "") throw sanctionsError("sanctions_xml_empty");
+      throw sanctionsError("sanctions_xml_invalid");
+    }
+    return `<Sanctions>${parts.join("")}</Sanctions>`;
+  }
+
+  return { addBytes, feed, finish };
+}
+
+async function readSdnSlice(response, byteCap) {
+  const slicer = createSdnSlicer(byteCap);
   const body = response.body;
   if (body && typeof body.getReader === "function") {
     const reader = body.getReader();
-    const chunks = [];
-    let total = 0;
-    while (true) {
-      const step = await reader.read();
-      if (step.done) break;
-      const value = step.value;
-      const size = value?.byteLength ?? value?.length ?? 0;
-      total += size;
-      if (total > cap) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The cap already failed the read.
-        }
-        throw sanctionsError("sanctions_too_large");
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const step = await reader.read();
+        if (step.done) break;
+        const value = step.value;
+        const size = value?.byteLength ?? value?.length ?? 0;
+        if (size > 0) slicer.addBytes(size);
+        if (value && size > 0) slicer.feed(decoder.decode(value, { stream: true }));
       }
-      if (value) chunks.push(value);
+      slicer.feed(decoder.decode());
+      return slicer.finish();
+    } catch (error) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The read already failed closed.
+      }
+      throw error;
     }
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength ?? chunk.length ?? 0;
-    }
-    return new TextDecoder().decode(merged);
   }
+  if (typeof response.text !== "function") throw sanctionsError("sanctions_xml_invalid");
   const text = await response.text();
-  if (text.length > cap) throw sanctionsError("sanctions_too_large");
-  return text;
+  const size = new TextEncoder().encode(text).byteLength;
+  slicer.addBytes(size);
+  slicer.feed(text);
+  return slicer.finish();
 }
 
-export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL) {
+export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL, byteCap = SANCTIONS_MAX_BYTES) {
   const response = await fetchImpl(url, {
     redirect: "follow",
     headers: {
@@ -336,9 +551,10 @@ export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL) {
     },
   });
   if (!response || response.ok !== true) throw sanctionsError("sanctions_http");
+  const cap = byteCap > 0 ? byteCap : SANCTIONS_MAX_BYTES;
   const declared = Number(headerValue(response.headers, "content-length"));
-  if (Number.isFinite(declared) && declared > SANCTIONS_MAX_BYTES) throw sanctionsError("sanctions_too_large");
-  return readCappedText(response, SANCTIONS_MAX_BYTES);
+  if (Number.isFinite(declared) && declared > cap) throw sanctionsError("sanctions_too_large");
+  return readSdnSlice(response, cap);
 }
 
 export async function refreshParsedList(fetchImpl, url, now, refreshMs, cacheRow) {
