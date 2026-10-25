@@ -1,13 +1,55 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BASE_SEPOLIA_CHAIN_ID, httpError } from "../config.mjs";
+import { getAddress } from "viem";
+import { BASE_SEPOLIA_CHAIN_ID, ZERO_ADDRESS, httpError } from "../config.mjs";
 
 export const USAGE_LEDGER = "agent-bv-sepolia-reputation";
 export const ARBITRATOR_LEDGER = "agent-bv-sepolia-arbitrator-rep";
 export const CONFIG_DIR = fileURLToPath(new URL("../../config/reputation/", import.meta.url));
 
 const REFUSED = new Set([1, 8453]);
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function enforcerOwnerError(detail) {
+  const err = httpError(500, "reputation_config_invalid", { field: "enforcer.owner", detail });
+  err.message = detail;
+  return err;
+}
+
+/** Present owner only: already checksummed, and not the zero address. */
+export function validateEnforcerOwner(value) {
+  if (typeof value !== "string" || !ADDRESS_RE.test(value)) {
+    throw enforcerOwnerError("enforcer.owner must be a 0x address");
+  }
+  let checksummed;
+  try {
+    checksummed = getAddress(value);
+  } catch {
+    throw enforcerOwnerError("enforcer.owner must be checksummed");
+  }
+  if (checksummed !== value) {
+    throw enforcerOwnerError("enforcer.owner must be checksummed");
+  }
+  if (checksummed === ZERO_ADDRESS) {
+    throw enforcerOwnerError("enforcer.owner must be non-zero");
+  }
+  return checksummed;
+}
+
+/** Absent enforcer block, or a block with no owner key, stays allowed. */
+function readEnforcerOwner(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !Object.hasOwn(raw, "enforcer")) {
+    return null;
+  }
+  const block = raw.enforcer;
+  if (block == null) return null;
+  if (typeof block !== "object" || Array.isArray(block)) {
+    throw enforcerOwnerError("enforcer block must be an object");
+  }
+  if (!Object.hasOwn(block, "owner")) return null;
+  return validateEnforcerOwner(block.owner);
+}
 
 function readJson(filePath) {
   try {
@@ -131,6 +173,7 @@ export function normalizeVersion(raw) {
       history_page_max: guessInt({ value: raw.read_api?.history_page_max ?? 100 }, "page_max"),
     },
     scan_max_block_range: guessInt({ value: raw.scan?.max_block_range ?? 625 }, "scan"),
+    enforcer: { owner: readEnforcerOwner(raw) },
   };
 }
 
