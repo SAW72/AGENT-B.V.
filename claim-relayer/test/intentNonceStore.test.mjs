@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -47,5 +47,16 @@ describe("intent nonce store", () => {
     await second.ready();
     const pending = await second.claim({ key: "0xdef:4", ttlMs: 300_000, atMs: 6_000 });
     assert.equal(pending.kind, "pending");
+  });
+
+  it("fails closed when the nonce file cannot be written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "intent-nonce-blocked-"));
+    const blocker = join(dir, "not-a-directory");
+    await writeFile(blocker, "x");
+    const store = createFileIntentNonceStore({
+      filePath: join(blocker, "nonces.jsonl"),
+      now: () => 1_000,
+    });
+    await assert.rejects(store.claim({ key: "0xabc:1", ttlMs: 300_000, atMs: 1_000 }));
   });
 });

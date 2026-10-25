@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -194,6 +194,27 @@ describe("abuse state file", () => {
     const broken = join(dir, "broken.json");
     await writeFile(broken, "{", "utf8");
     assert.throws(() => createAbuseGuard(limits, { filePath: broken }), (err) => err.error === "abuse_state_corrupt");
+  });
+
+  it("fails closed when the abuse state path cannot be written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "abuse-state-blocked-"));
+    const filePath = join(dir, "abuse-state.json");
+    await chmod(dir, 0o500);
+    try {
+      const guard = createAbuseGuard(limits, { filePath, now: () => 1_000 });
+      const input = {
+        sender: "0xabc",
+        ip: "203.0.113.1",
+        escrowId: "0x01",
+        gasWei: 1n,
+        atMs: 1_000,
+      };
+      await assert.rejects(guard.consume(input));
+      await assert.rejects(guard.takeIp("203.0.113.1", 1_000));
+      await assert.rejects(access(filePath));
+    } finally {
+      await chmod(dir, 0o700);
+    }
   });
 });
 
