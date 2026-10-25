@@ -1,12 +1,14 @@
 /**
  * Read-only chain calls for live claim auth.
- * eth_call and eth_estimateGas only. Broadcast stays in broadcast.mjs.
+ * eth_call and eth_estimateGas, plus the fee reads used to price the gas budget.
+ * Broadcast stays in broadcast.mjs.
  * Block tag is always "latest".
  */
 
 import { decodeFunctionResult, encodeFunctionData, hashTypedData, hexToBytes } from "viem";
 import { httpError } from "./config.mjs";
 import { BASE_SEPOLIA_CHAIN_ID } from "./config.mjs";
+import { eip1559MaxFeePerGas } from "./liveAuth.mjs";
 
 const ESCROW_ABI = [
   {
@@ -51,7 +53,13 @@ const ERC1271_ABI = [
 /** ERC-1271 magic value. */
 export const ERC1271_MAGIC = "0x1626ba7e";
 
-const ALLOWED_METHODS = new Set(["eth_chainId", "eth_call", "eth_estimateGas"]);
+const ALLOWED_METHODS = new Set([
+  "eth_chainId",
+  "eth_call",
+  "eth_estimateGas",
+  "eth_getBlockByNumber",
+  "eth_maxPriorityFeePerGas",
+]);
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 function selectorData(abi, functionName, args) {
@@ -70,6 +78,30 @@ function parseChainId(value) {
 async function rpcCall(request, method, params) {
   if (!ALLOWED_METHODS.has(method)) throw httpError(400, "rpc_method_refused", { method });
   return request({ method, params });
+}
+
+function hexQuantity(value) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+  const text = String(value ?? "").trim();
+  if (/^0x[0-9a-fA-F]+$/.test(text)) return BigInt(text);
+  if (/^[0-9]+$/.test(text)) return BigInt(text);
+  return null;
+}
+
+/** Latest base fee scaled by 1.2, plus the priority fee. Null when the RPC omits either. */
+async function quoteMaxFeePerGasWei(request) {
+  try {
+    const block = await rpcCall(request, "eth_getBlockByNumber", ["latest", false]);
+    const base = hexQuantity(block?.baseFeePerGas);
+    if (base == null) return null;
+    const priority = hexQuantity(await rpcCall(request, "eth_maxPriorityFeePerGas", []));
+    if (priority == null) return null;
+    const maxFee = eip1559MaxFeePerGas(base, priority);
+    return maxFee > 0n ? maxFee : null;
+  } catch {
+    return null;
+  }
 }
 
 /** JSON-RPC POST. The method allowlist is enforced in rpcCall before this runs. */
@@ -175,7 +207,10 @@ export function createRpcEscrowChain(opts) {
           },
         ]);
         const gasUsed = typeof gasHex === "bigint" ? gasHex : BigInt(gasHex);
-        return { ok: true, gasUsed: gasUsed > 0n ? gasUsed : fallbackGasUsed, revertData: null };
+        const maxFeePerGasWei = await quoteMaxFeePerGasWei(request);
+        const result = { ok: true, gasUsed: gasUsed > 0n ? gasUsed : fallbackGasUsed, revertData: null };
+        if (maxFeePerGasWei != null) result.maxFeePerGasWei = maxFeePerGasWei;
+        return result;
       } catch (err) {
         return { ok: false, gasUsed: 0n, revertData: revertHex(err) };
       }
