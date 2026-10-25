@@ -321,6 +321,37 @@ describe("resolve required build env", () => {
     ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
   })
 
+  it("rejects an RPC URL with credentials", async () => {
+    await expect(
+      applyRequiredBuildEnv({
+        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+        VITE_BASE_SEPOLIA_RPC_URL: "https://user:pass@sepolia.base.org/rpc",
+      }),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL must not include credentials.")
+  })
+
+  it.each([
+    ["https://sepolia.base.org:8443", "a non-default port on the allowlisted host"],
+    ["https://rpc.example.test:8545", "an arbitrary port"],
+    ["https://localhost", "localhost"],
+    ["https://device.local", "a .local host"],
+    ["https://1.2.3.4", "an IPv4 literal"],
+    ["https://rpc", "a dotless host"],
+  ])("rejects %s (%s) before a chainId lookup", async (rpcUrl) => {
+    let lookedUp = false
+    await expect(
+      applyRequiredBuildEnv(
+        { VITE_CLAIM_RELAYER_URL: RELAYER_URL, VITE_BASE_SEPOLIA_RPC_URL: rpcUrl },
+        undefined,
+        async () => {
+          lookedUp = true
+          return 84532
+        },
+      ),
+    ).rejects.toThrow("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+    expect(lookedUp).toBe(false)
+  })
+
   it("names VITE_CLAIM_RELAYER_URL when it is empty or whitespace", async () => {
     await expect(applyRequiredBuildEnv({ VITE_CLAIM_RELAYER_URL: "", VITE_BASE_SEPOLIA_RPC_URL: RPC_URL })).rejects.toThrow(
       /VITE_CLAIM_RELAYER_URL is empty/,
@@ -396,6 +427,75 @@ describe("chainId lookup", () => {
       )
     } finally {
       globalThis.fetch = original
+    }
+  })
+
+  it("rejects HTTP 500 even when the body is a valid chain id", async () => {
+    const original = globalThis.fetch
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ result: "0x14a34" }),
+    })
+    try {
+      await expect(lookupChainId("https://rpc.example.test")).rejects.toThrow(
+        "VITE_BASE_SEPOLIA_RPC_URL chainId check failed.",
+      )
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it("rejects a decimal-string chain id", async () => {
+    const original = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ result: "84532" }) })
+    try {
+      await expect(lookupChainId("https://rpc.example.test")).rejects.toThrow(
+        "VITE_BASE_SEPOLIA_RPC_URL chainId check failed.",
+      )
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it("rejects a chainId lookup that times out", async () => {
+    const originalFetch = globalThis.fetch
+    const originalTimeout = AbortSignal.timeout
+    const requested = []
+    let pendingTimer
+    // AbortSignal.timeout uses an internal unref timer, so fake timers never
+    // fire it. Record the production 10s argument and abort on a short timer.
+    AbortSignal.timeout = (milliseconds) => {
+      requested.push(milliseconds)
+      return originalTimeout(50)
+    }
+    globalThis.fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal
+        if (!signal) return
+        const fail = () => reject(signal.reason ?? new Error("aborted"))
+        if (signal.aborted) fail()
+        else signal.addEventListener("abort", fail, { once: true })
+      })
+    try {
+      const pending = lookupChainId("https://rpc.example.test")
+      const outcome = await Promise.race([
+        pending.then(
+          (value) => ({ status: "resolved", value }),
+          (error) => ({ status: "rejected", error }),
+        ),
+        new Promise((resolve) => {
+          pendingTimer = setTimeout(() => resolve({ status: "pending" }), 1_000)
+        }),
+      ])
+      expect(requested).toEqual([10_000])
+      expect(outcome.status).toBe("rejected")
+      expect(outcome.error).toBeInstanceOf(Error)
+      expect(outcome.error.message).toBe("VITE_BASE_SEPOLIA_RPC_URL chainId check failed.")
+    } finally {
+      clearTimeout(pendingTimer)
+      globalThis.fetch = originalFetch
+      AbortSignal.timeout = originalTimeout
     }
   })
 })
