@@ -703,6 +703,217 @@ describe("OFAC fetch guard", () => {
     assert.equal(new URL(seen[1]).protocol, "https:");
     assert.deepEqual(parseSdnAdvancedXml(sliced), parseSdnAdvancedXml(xml));
   });
+
+  const PUBLISHED_HOST = "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com";
+  const PUBLISHED_PATH = "/Published/c855675f-4385-4bb5-b89a-59ccb73a83e6/2026-10-20/4166a9f5-d268-432a-a70b-65bd16bcd16a/SDN_ADVANCED.XML";
+  const SIGNED_QUERY = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Date=20261024T000000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=test-signature";
+
+  function publishedLocation({
+    protocol = "https:",
+    host = PUBLISHED_HOST,
+    port = "",
+    path = PUBLISHED_PATH,
+    search = SIGNED_QUERY,
+  } = {}) {
+    const url = new URL("https://placeholder.invalid/Published/file");
+    url.protocol = protocol;
+    url.hostname = host;
+    url.port = port;
+    url.pathname = path;
+    url.search = search;
+    return url.href;
+  }
+
+  function redirectTo(location, status = 302) {
+    return {
+      ok: false,
+      status,
+      headers: {
+        get(name) {
+          return String(name).toLowerCase() === "location" ? location : null;
+        },
+      },
+      body: null,
+      async text() {
+        return "";
+      },
+    };
+  }
+
+  async function assertFirstHopRejected(location) {
+    const calls = [];
+    const logged = [];
+    const names = ["log", "info", "warn", "error", "debug"];
+    const restore = names.map((name) => {
+      const original = console[name];
+      console[name] = (...args) => {
+        logged.push(args.map((part) => String(part)).join(" "));
+      };
+      return () => {
+        console[name] = original;
+      };
+    });
+    try {
+      await assert.rejects(
+        fetchSdnAdvancedXml(async (url) => {
+          calls.push(url);
+          return redirectTo(location);
+        }),
+        (error) => {
+          assert.equal(error.message, "sanctions_http");
+          assert.equal(error.message.includes("X-Amz-Signature"), false);
+          assert.equal(error.message.includes(SIGNED_QUERY), false);
+          return true;
+        },
+      );
+    } finally {
+      restore.forEach((undo) => undo());
+    }
+    assert.deepEqual(calls, [SDN_ADVANCED_URL]);
+    assert.equal(logged.join("\n").includes("X-Amz-Signature"), false);
+    assert.equal(logged.join("\n").includes(SIGNED_QUERY), false);
+  }
+
+  it("follows one OFAC redirect to the public S3 publication and parses the list", async () => {
+    const xml = sdnXml(["0x00000000000000000000000000000000000000A1"]);
+    const location = publishedLocation();
+    const seen = [];
+    const logged = [];
+    const names = ["log", "info", "warn", "error", "debug"];
+    const restore = names.map((name) => {
+      const original = console[name];
+      console[name] = (...args) => {
+        logged.push(args.map((part) => String(part)).join(" "));
+      };
+      return () => {
+        console[name] = original;
+      };
+    });
+    try {
+      const sliced = await fetchSdnAdvancedXml(async (url, init) => {
+        seen.push({ url, redirect: init.redirect, timed: init.signal instanceof AbortSignal });
+        if (seen.length === 1) return redirectTo(location);
+        return streamResponse(xml);
+      });
+      assert.equal(seen.length, 2);
+      assert.equal(seen[0].url, SDN_ADVANCED_URL);
+      assert.equal(seen[0].redirect, "manual");
+      assert.equal(seen[0].timed, true);
+      assert.equal(seen[1].redirect, "manual");
+      assert.equal(seen[1].timed, true);
+      const next = new URL(seen[1].url);
+      assert.equal(next.protocol, "https:");
+      assert.equal(next.hostname, PUBLISHED_HOST);
+      assert.equal(next.port, "");
+      assert.equal(next.pathname, PUBLISHED_PATH);
+      assert.equal(next.search, `?${SIGNED_QUERY}`);
+      assert.equal(next.username, "");
+      assert.equal(next.password, "");
+      assert.deepEqual(parseSdnAdvancedXml(sliced), parseSdnAdvancedXml(xml));
+      const explicitPort = `https://${PUBLISHED_HOST}:443${PUBLISHED_PATH}?${SIGNED_QUERY}`;
+      const portSeen = [];
+      const portSliced = await fetchSdnAdvancedXml(async (url) => {
+        portSeen.push(url);
+        if (portSeen.length === 1) return redirectTo(explicitPort);
+        return streamResponse(xml);
+      });
+      assert.equal(new URL(portSeen[1]).port, "");
+      assert.equal(new URL(portSeen[1]).hostname, PUBLISHED_HOST);
+      assert.deepEqual(parseSdnAdvancedXml(portSliced), parseSdnAdvancedXml(xml));
+    } finally {
+      restore.forEach((undo) => undo());
+    }
+    assert.equal(logged.join("\n").includes("X-Amz-Signature"), false);
+    assert.equal(logged.join("\n").includes(SIGNED_QUERY), false);
+  });
+
+  it("refuses a publication redirect to another host, scheme, port, or path", async () => {
+    await assertFirstHopRejected(publishedLocation({
+      host: "other-bucket.s3.us-gov-west-1.amazonaws.com",
+    }));
+    await assertFirstHopRejected(publishedLocation({
+      host: `${PUBLISHED_HOST}.evil.example`,
+    }));
+    await assertFirstHopRejected(publishedLocation({ protocol: "http:" }));
+    await assertFirstHopRejected(publishedLocation({ port: "8443" }));
+    await assertFirstHopRejected(publishedLocation({ path: "/exports/SDN_ADVANCED.XML" }));
+    await assertFirstHopRejected(publishedLocation({ path: "/published/SDN_ADVANCED.XML" }));
+    await assertFirstHopRejected(publishedLocation({ path: "/Published" }));
+    await assertFirstHopRejected(`https://${PUBLISHED_HOST}/Published/../SDN_ADVANCED.XML?${SIGNED_QUERY}`);
+  });
+
+  it("refuses a second hop and a redirect from the publication host to another host", async () => {
+    const xml = sdnXml(["0x00000000000000000000000000000000000000A1"]);
+    const first = publishedLocation();
+    const secondSameHost = publishedLocation({
+      path: "/Published/other/SDN_ADVANCED.XML",
+      search: "X-Amz-Signature=second-hop",
+    });
+    const calls = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        calls.push(url);
+        if (calls.length === 1) return redirectTo(first);
+        if (calls.length === 2) return redirectTo(secondSameHost);
+        return streamResponse(xml);
+      }),
+      (error) => {
+        assert.equal(error.message, "sanctions_http");
+        assert.equal(error.message.includes("X-Amz-Signature"), false);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[1]).hostname, PUBLISHED_HOST);
+    assert.equal(new URL(calls[1]).pathname, PUBLISHED_PATH);
+
+    const backToOfac = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        backToOfac.push(url);
+        if (backToOfac.length === 1) return redirectTo(first);
+        return redirectTo(SDN_ADVANCED_URL);
+      }),
+      /sanctions_http/,
+    );
+    assert.equal(backToOfac.length, 2);
+
+    const otherHost = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        otherHost.push(url);
+        if (otherHost.length === 1) return redirectTo(first);
+        return redirectTo("https://evil.example/Published/SDN_ADVANCED.XML");
+      }),
+      /sanctions_http/,
+    );
+    assert.equal(otherHost.length, 2);
+    assert.equal(new URL(otherHost[1]).hostname, PUBLISHED_HOST);
+  });
+
+  it("times out a hung publication download on the same clock as the OFAC hop", async () => {
+    const location = publishedLocation();
+    const calls = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url, init) => {
+        calls.push(url);
+        if (calls.length === 1) return redirectTo(location);
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => resolve(undefined), 1_000);
+          init.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            const error = new Error("The operation was aborted");
+            error.name = "TimeoutError";
+            reject(error);
+          });
+        });
+      }, SDN_ADVANCED_URL, SANCTIONS_MAX_BYTES, { timeoutMs: 40 }),
+      /sanctions_timeout/,
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[1]).hostname, PUBLISHED_HOST);
+    assert.equal(new URL(calls[1]).search.includes("X-Amz-Signature=test-signature"), true);
+  });
 });
 
 // Real SDN advanced documents put <Profile>, <Comment />, and <Country> on every

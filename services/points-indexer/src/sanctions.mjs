@@ -11,7 +11,7 @@ export const SANCTIONS_REFRESH_MS = 24 * 60 * 60 * 1000;
 export const SANCTIONS_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 /** Fewer parsed or cached addresses than this is unavailable. Default rejects an empty list. */
 export const SANCTIONS_MIN_ADDRESSES = 1;
-/** Covers the fetch and the streamed read. A hung download fails closed. */
+/** Covers every redirect hop and the streamed body. A hung download fails closed. */
 export const SANCTIONS_FETCH_TIMEOUT_MS = 60_000;
 export const SANCTIONS_MATCH = "sanctions_match";
 export const SANCTIONS_MAX_BYTES = 160_000_000;
@@ -27,6 +27,9 @@ export const SANCTIONS_ELEMENT_MAX_BYTES = 256 * 1024;
 export const SANCTIONS_WINDOW_MAX_BYTES = 64 * 1024;
 
 const SANCTIONS_MAX_REDIRECTS = 5;
+// The list host answers with one HTTPS redirect to this public publication bucket.
+// The signed query is required for the GET and is never logged.
+const SDN_PUBLISHED_HOST = "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com";
 
 export const SANCTIONS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS sanctions_cache (
@@ -723,7 +726,7 @@ function feedDecoded(slicer, decoder, value) {
   }
 }
 
-function ofacUrl(value, base) {
+function parseHttpsUrl(value, base) {
   let parsed;
   try {
     parsed = base ? new URL(value, base) : new URL(value);
@@ -731,10 +734,38 @@ function ofacUrl(value, base) {
     throw sanctionsError("sanctions_http");
   }
   if (parsed.protocol !== "https:") throw sanctionsError("sanctions_http");
-  if (parsed.hostname.toLowerCase() !== SDN_HOST) throw sanctionsError("sanctions_http");
   if (parsed.port !== "" && parsed.port !== "443") throw sanctionsError("sanctions_http");
   if (parsed.username !== "" || parsed.password !== "") throw sanctionsError("sanctions_http");
   return parsed;
+}
+
+function isOfacHost(hostname) {
+  return hostname.toLowerCase() === SDN_HOST;
+}
+
+function isPublishedHost(hostname) {
+  return hostname.toLowerCase() === SDN_PUBLISHED_HOST;
+}
+
+function ofacUrl(value, base) {
+  const parsed = parseHttpsUrl(value, base);
+  if (!isOfacHost(parsed.hostname)) throw sanctionsError("sanctions_http");
+  return parsed;
+}
+
+// One hop from the OFAC host to the publication bucket. Any later hop is refused.
+function allowedRedirect(value, current) {
+  const parsed = parseHttpsUrl(value, current);
+  if (isPublishedHost(current.hostname)) throw sanctionsError("sanctions_http");
+  if (isOfacHost(current.hostname) && isOfacHost(parsed.hostname)) return parsed;
+  if (
+    isOfacHost(current.hostname)
+    && isPublishedHost(parsed.hostname)
+    && parsed.pathname.startsWith("/Published/")
+  ) {
+    return parsed;
+  }
+  throw sanctionsError("sanctions_http");
 }
 
 function redirectTarget(response, current) {
@@ -745,7 +776,7 @@ function redirectTarget(response, current) {
   }
   const location = headerValue(response.headers, "location");
   if (location == null || location.trim() === "") throw sanctionsError("sanctions_http");
-  return ofacUrl(location.trim(), current);
+  return allowedRedirect(location.trim(), current);
 }
 
 function resolvedTimeout(value) {
