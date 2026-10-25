@@ -2,19 +2,25 @@ import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 import {
   SANCTIONS_ELEMENT_MAX_BYTES,
+  SANCTIONS_FETCH_TIMEOUT_MS,
   SANCTIONS_MATCH,
+  SANCTIONS_MAX_AGE_MS,
   SANCTIONS_MAX_BYTES,
   SANCTIONS_MAX_FEATURE_TYPES,
   SANCTIONS_MAX_TYPE_ID_CHARS,
+  SANCTIONS_MIN_ADDRESSES,
   SANCTIONS_REFRESH_MS,
   SANCTIONS_RETAINED_MAX_BYTES,
   SANCTIONS_WINDOW_MAX_BYTES,
   SDN_ADVANCED_URL,
+  SDN_HOST,
   cacheIsFresh,
   decideSanctions,
   eligibilityFromDecision,
   fetchSdnAdvancedXml,
+  listWithinMaxAge,
   parseSdnAdvancedXml,
+  screenFromStored,
 } from "../src/sanctions.mjs";
 import { ACTION } from "../src/constants.mjs";
 import { account, createdLog, creditCandidate, rows, tempIndexer } from "./support.mjs";
@@ -253,6 +259,29 @@ describe("OFAC SDN parser", () => {
     assert.equal(oneChunk, tinyChunks);
     assert.deepEqual(parseSdnAdvancedXml(oneChunk), parseSdnAdvancedXml(listed));
   });
+
+  it("rejects an empty or undersized address list as unavailable", () => {
+    assert.equal(SANCTIONS_MIN_ADDRESSES, 1);
+    const empty = sdnXml().replace(/<DistinctParties>[\s\S]*<\/DistinctParties>/, "<DistinctParties></DistinctParties>");
+    assert.throws(() => parseSdnAdvancedXml(empty), /sanctions_unavailable/);
+    assert.throws(() => parseSdnAdvancedXml(sdnXml(), { minAddresses: 2 }), /sanctions_unavailable/);
+    const parsed = parseSdnAdvancedXml(sdnXml(), { minAddresses: 1 });
+    assert.equal(parsed.addresses.length, 1);
+    assert.throws(() => parseSdnAdvancedXml(sdnXml(), { minAddresses: -1 }), /sanctions_unavailable/);
+  });
+
+  it("parses a Feature tag the same way the stream filter keeps it", async () => {
+    const address = "0x00000000000000000000000000000000000000A1";
+    const xml = sdnXml([address])
+      .replace("<Feature ID=\"96530\" FeatureTypeID=\"345\">", "<Feature\nID=\"96530\" FeatureTypeID=\"345\">")
+      .replace("<Feature FeatureTypeID=\"344\">", "<Feature\tFeatureTypeID=\"344\">");
+    const parsed = parseSdnAdvancedXml(xml);
+    assert.deepEqual(parsed.addresses, [address.toLowerCase(), BTC]);
+    const sliced = await fetchSdnAdvancedXml(async () => streamResponse(xml, {}, 7));
+    assert.deepEqual(parseSdnAdvancedXml(sliced), parsed);
+    const spaced = parseSdnAdvancedXml(sdnXml([address]));
+    assert.deepEqual(parsed.addresses, spaced.addresses);
+  });
 });
 
 function wrapSdn(body) {
@@ -299,6 +328,60 @@ describe("sanctions decision", () => {
     assert.equal(cacheIsFresh(1_000, 1_000 + SANCTIONS_REFRESH_MS - 1), true);
     assert.equal(cacheIsFresh(1_000, 1_000 + SANCTIONS_REFRESH_MS), false);
   });
+
+  it("treats a stale list as unavailable and does not grant points", () => {
+    assert.equal(SANCTIONS_MAX_AGE_MS, 48 * 60 * 60 * 1000);
+    const fetchedAt = 10_000;
+    const row = {
+      fetched_at: fetchedAt,
+      source: SDN_ADVANCED_URL,
+      list_version: "2026-10-21",
+      addresses_json: JSON.stringify([wallet, BTC]),
+    };
+    const ready = screenFromStored(row, [], fetchedAt + SANCTIONS_MAX_AGE_MS);
+    assert.equal(ready.listReady, true);
+    assert.equal(listWithinMaxAge(fetchedAt, fetchedAt + SANCTIONS_MAX_AGE_MS), true);
+    assert.equal(listWithinMaxAge(fetchedAt, fetchedAt + SANCTIONS_MAX_AGE_MS + 1), false);
+    const stale = screenFromStored(row, [], fetchedAt + SANCTIONS_MAX_AGE_MS + 1);
+    assert.equal(stale.listReady, false);
+    assert.equal(stale.addresses.size, 0);
+    const decision = decideSanctions(OTHER, stale);
+    assert.equal(decision.result, "unavailable");
+    assert.equal(decision.reason, "ofac_unconfigured");
+    assert.deepEqual(eligibilityFromDecision(decision), {
+      points: 0,
+      eligibility_status: "unverified",
+      eligibility_reason: "ofac_unconfigured",
+      points_withheld: 1,
+    });
+    const kept = decideSanctions(wallet, { addresses: stale.addresses, persisted, listReady: stale.listReady });
+    assert.deepEqual(kept, { result: "match", reason: SANCTIONS_MATCH, persisted: true });
+    const custom = screenFromStored(row, [], fetchedAt + 1_000, { maxAgeMs: 500 });
+    assert.equal(custom.listReady, false);
+    const future = screenFromStored(row, [], fetchedAt - 1);
+    assert.equal(future.listReady, false);
+  });
+
+  it("treats an empty cached list as unavailable", () => {
+    const row = {
+      fetched_at: 10_000,
+      source: SDN_ADVANCED_URL,
+      list_version: "2026-10-21",
+      addresses_json: "[]",
+    };
+    const screen = screenFromStored(row, [], 10_000);
+    assert.equal(screen.listReady, false);
+    const decision = decideSanctions(OTHER, screen);
+    assert.equal(decision.result, "unavailable");
+    assert.equal(eligibilityFromDecision(decision).points, 0);
+    assert.equal(eligibilityFromDecision(decision).points_withheld, 1);
+    const raised = screenFromStored({
+      ...row,
+      addresses_json: JSON.stringify([wallet]),
+    }, [], 10_000, { minAddresses: 2 });
+    assert.equal(raised.listReady, false);
+    assert.equal(decideSanctions(wallet, raised).result, "unavailable");
+  });
 });
 
 describe("sanctions screen on the indexer", () => {
@@ -308,12 +391,13 @@ describe("sanctions screen on the indexer", () => {
     const ctx = tempIndexer();
     const calls = [];
     try {
+      const started = Date.now();
       const refreshed = await ctx.indexer.refreshSanctions({
         fetch: (url) => {
           calls.push(url);
           return xmlResponse(sdnXml([payer.address]));
         },
-        now: 1_000,
+        now: started,
       });
       assert.equal(refreshed.refreshed, true);
       assert.equal(refreshed.listVersion, "2026-10-21");
@@ -335,7 +419,7 @@ describe("sanctions screen on the indexer", () => {
           calls.push(url);
           return xmlResponse(sdnXml([OTHER]));
         },
-        now: 1_000 + SANCTIONS_REFRESH_MS,
+        now: started + SANCTIONS_REFRESH_MS,
       });
       assert.equal(dropped.refreshed, true);
       ctx.indexer.rebuild();
@@ -361,7 +445,7 @@ describe("sanctions screen on the indexer", () => {
     try {
       await ctx.indexer.refreshSanctions({
         fetch: () => xmlResponse(sdnXml([OTHER])),
-        now: 5_000,
+        now: Date.now(),
       });
       const ledger = await fund(ctx.indexer, payer, payee);
       assert.ok(ledger.some((row) => row.action === ACTION.fund));
@@ -453,6 +537,171 @@ describe("sanctions screen on the indexer", () => {
       logged.mock.restore();
       ctx.close();
     }
+  });
+
+  it("does not replace a good cache with an empty list", async () => {
+    const ctx = tempIndexer();
+    try {
+      const now = Date.now();
+      const first = await ctx.indexer.refreshSanctions({
+        fetch: () => xmlResponse(sdnXml([OTHER])),
+        now,
+      });
+      assert.equal(first.refreshed, true);
+      const empty = sdnXml().replace(/<DistinctParties>[\s\S]*<\/DistinctParties>/, "<DistinctParties></DistinctParties>");
+      const rejected = await ctx.indexer.refreshSanctions({
+        fetch: () => xmlResponse(empty),
+        now: now + SANCTIONS_REFRESH_MS,
+      });
+      assert.equal(rejected.failed, true);
+      assert.equal(rejected.refreshed, false);
+      const cache = ctx.indexer.db.prepare("SELECT addresses_json FROM sanctions_cache WHERE id = 1").get();
+      assert.equal(cache.addresses_json.includes(OTHER), true);
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it("screens a stale cache as unavailable and keeps points at zero", async () => {
+    const payer = account();
+    const payee = account();
+    const ctx = tempIndexer();
+    try {
+      const now = Date.now();
+      await ctx.indexer.refreshSanctions({
+        fetch: () => xmlResponse(sdnXml([payer.address])),
+        now,
+      });
+      ctx.indexer.db.prepare("UPDATE sanctions_cache SET fetched_at = ? WHERE id = 1").run(now - SANCTIONS_MAX_AGE_MS - 1);
+      const ledger = await fund(ctx.indexer, payer, payee);
+      assert.ok(ledger.every((row) => row.points === 0));
+      assert.ok(ledger.every((row) => row.points_withheld === 1));
+      assert.ok(ledger.every((row) => row.eligibility_status === "unverified"));
+      assert.ok(ledger.every((row) => row.eligibility_reason === "ofac_unconfigured"));
+      const wallet = payer.address.toLowerCase();
+      const checks = ctx.indexer.db.prepare("SELECT result, reason FROM sanctions_checks WHERE wallet = ?").all(wallet);
+      assert.ok(checks.length >= 1);
+      assert.ok(checks.every((row) => row.result === "unavailable"));
+      assert.ok(checks.every((row) => row.reason === "ofac_unconfigured"));
+    } finally {
+      ctx.close();
+    }
+  });
+});
+
+describe("OFAC fetch guard", () => {
+  it("times out a hung download", async () => {
+    assert.equal(SANCTIONS_FETCH_TIMEOUT_MS, 60_000);
+    const calls = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url, init) => {
+        calls.push({ url, redirect: init.redirect, timed: init.signal instanceof AbortSignal });
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => resolve(undefined), 1_000);
+          init.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            const error = new Error("The operation was aborted");
+            error.name = "TimeoutError";
+            reject(error);
+          });
+        });
+      }, SDN_ADVANCED_URL, SANCTIONS_MAX_BYTES, { timeoutMs: 30 }),
+      /sanctions_timeout/,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, SDN_ADVANCED_URL);
+    assert.equal(calls[0].redirect, "manual");
+    assert.equal(calls[0].timed, true);
+  });
+
+  it("refuses a redirect to any host other than the OFAC list host", async () => {
+    assert.equal(SDN_HOST, "sanctionslistservice.ofac.treas.gov");
+    const calls = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        calls.push(url);
+        return {
+          ok: false,
+          status: 302,
+          headers: {
+            get(name) {
+              return String(name).toLowerCase() === "location" ? "https://evil.example/sdn.xml" : null;
+            },
+          },
+          body: null,
+          async text() {
+            return "";
+          },
+        };
+      }),
+      /sanctions_http/,
+    );
+    assert.deepEqual(calls, [SDN_ADVANCED_URL]);
+
+    const downgrade = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        downgrade.push(url);
+        return {
+          ok: false,
+          status: 301,
+          headers: {
+            get(name) {
+              return String(name).toLowerCase() === "location"
+                ? "http://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML"
+                : null;
+            },
+          },
+          body: null,
+        };
+      }),
+      /sanctions_http/,
+    );
+    assert.deepEqual(downgrade, [SDN_ADVANCED_URL]);
+
+    const lookalike = [];
+    await assert.rejects(
+      fetchSdnAdvancedXml(async (url) => {
+        lookalike.push(url);
+        return {
+          ok: false,
+          status: 307,
+          headers: {
+            get(name) {
+              return String(name).toLowerCase() === "location" ? "https://sanctionslistservice.ofac.treas.gov.evil.example/sdn.xml" : null;
+            },
+          },
+          body: null,
+        };
+      }),
+      /sanctions_http/,
+    );
+    assert.deepEqual(lookalike, [SDN_ADVANCED_URL]);
+  });
+
+  it("follows a same-host HTTPS redirect and then parses the list", async () => {
+    const xml = sdnXml(["0x00000000000000000000000000000000000000A1"]);
+    const seen = [];
+    const sliced = await fetchSdnAdvancedXml(async (url) => {
+      seen.push(url);
+      if (seen.length === 1) {
+        return {
+          ok: false,
+          status: 302,
+          headers: {
+            get(name) {
+              return String(name).toLowerCase() === "location" ? "/api/PublicationPreview/exports/SDN_ADVANCED.XML?v=2" : null;
+            },
+          },
+          body: null,
+        };
+      }
+      return streamResponse(xml);
+    });
+    assert.equal(seen.length, 2);
+    assert.equal(new URL(seen[1]).hostname, SDN_HOST);
+    assert.equal(new URL(seen[1]).protocol, "https:");
+    assert.deepEqual(parseSdnAdvancedXml(sliced), parseSdnAdvancedXml(xml));
   });
 });
 

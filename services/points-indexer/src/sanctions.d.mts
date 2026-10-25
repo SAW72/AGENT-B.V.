@@ -1,5 +1,9 @@
 export const SDN_ADVANCED_URL: string;
+export const SDN_HOST: string;
 export const SANCTIONS_REFRESH_MS: number;
+export const SANCTIONS_MAX_AGE_MS: number;
+export const SANCTIONS_MIN_ADDRESSES: number;
+export const SANCTIONS_FETCH_TIMEOUT_MS: number;
 export const SANCTIONS_MATCH: string;
 export const SANCTIONS_MAX_BYTES: number;
 export const SANCTIONS_RETAINED_MAX_BYTES: number;
@@ -32,9 +36,11 @@ export type SanctionsScreen = {
 
 export type SanctionsFetch = (
   input: string,
-  init?: { redirect?: string; headers?: Record<string, string> },
+  init?: { redirect?: string; headers?: Record<string, string>; signal?: AbortSignal },
 ) => Promise<{
   ok: boolean;
+  status?: number;
+  type?: string;
   headers?: { get(name: string): string | null };
   text: () => Promise<string>;
   body?: {
@@ -56,8 +62,14 @@ export type SanctionsRefresh = {
 
 export function normalizeSanctionsAddress(value: unknown): string;
 export function cacheIsFresh(fetchedAt: number, now: number, refreshMs?: number): boolean;
-export function parseSdnAdvancedXml(xml: string): { listVersion: string; addresses: string[] };
-export function screenFromStored(cacheRow: any, walletRows: any, now?: number): SanctionsScreen;
+export function listWithinMaxAge(fetchedAt: number, now: number, maxAgeMs?: number): boolean;
+export function parseSdnAdvancedXml(xml: string, options?: { minAddresses?: number }): { listVersion: string; addresses: string[] };
+export function screenFromStored(
+  cacheRow: any,
+  walletRows: any,
+  now?: number,
+  options?: { minAddresses?: number; maxAgeMs?: number },
+): SanctionsScreen;
 export function decideSanctions(wallet: string, screen: {
   addresses?: Set<string>;
   persisted?: Set<string>;
@@ -90,11 +102,17 @@ export function sanctionsCheckLog(screen: SanctionsScreen, wallet: string, decis
   persisted: boolean;
   listVersion: string | null;
 };
-export function fetchSdnAdvancedXml(fetchImpl: SanctionsFetch, url?: string, byteCap?: number): Promise<string>;
+export function fetchSdnAdvancedXml(
+  fetchImpl: SanctionsFetch,
+  url?: string,
+  byteCap?: number,
+  options?: { timeoutMs?: number },
+): Promise<string>;
 export function refreshParsedList(
   fetchImpl: SanctionsFetch,
   url: string,
   now: number,
   refreshMs: number,
   cacheRow: any,
+  options?: { minAddresses?: number; timeoutMs?: number; byteCap?: number },
 ): Promise<SanctionsRefresh>;

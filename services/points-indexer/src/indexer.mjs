@@ -712,7 +712,11 @@ export class Indexer {
       console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
       return { refreshed: false, failed: true, listVersion: null };
     }
-    const outcome = await refreshParsedList(fetchImpl, source, now, refreshMs, cache);
+    const outcome = await refreshParsedList(fetchImpl, source, now, refreshMs, cache, {
+      minAddresses: options.minAddresses,
+      timeoutMs: options.timeoutMs,
+      byteCap: options.byteCap,
+    });
     if (outcome.failed) {
       console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
       return { refreshed: false, failed: true, listVersion: outcome.listVersion };
