@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url"
 // An RPC host is allowlisted or must answer eth_chainId with 84532. Anything
 // else fails closed. Secrets never belong in this list.
 export const REQUIRED_BUILD_ENV_FILE = "build-env.required.json"
+// A test sets this to a per-run file. Unset, the build reads the checked-in file.
+export const REQUIRED_BUILD_ENV_PATH_KEY = "WALLET_UX_REQUIRED_BUILD_ENV_FILE"
 export const REQUIRED_BUILD_ENV_KEYS = ["VITE_CLAIM_RELAYER_URL", "VITE_BASE_SEPOLIA_RPC_URL"]
 export const PINNED_RELAYER_HOST = "bot-verifier-claim-relayer.onrender.com"
 export const PINNED_RELAYER_ORIGIN = "https://bot-verifier-claim-relayer.onrender.com"
@@ -154,8 +156,17 @@ async function assertRpc(url, raw, lookup) {
   }
 }
 
-export function readRequiredBuildEnvFile(root = appRoot) {
-  const path = join(root, REQUIRED_BUILD_ENV_FILE)
+export function requiredBuildEnvPath(root = appRoot, env = process.env) {
+  const override =
+    typeof env?.[REQUIRED_BUILD_ENV_PATH_KEY] === "string" ? env[REQUIRED_BUILD_ENV_PATH_KEY].trim() : ""
+  // An explicit fixture root always wins. The override is only for the app root,
+  // which is what `npm run build` and the Vite plugin read.
+  if (override && resolve(root) === resolve(appRoot)) return resolve(appRoot, override)
+  return join(root, REQUIRED_BUILD_ENV_FILE)
+}
+
+export function readRequiredBuildEnvFile(root = appRoot, env = process.env) {
+  const path = requiredBuildEnvPath(root, env)
   let text
   try {
     text = readFileSync(path, "utf8")
@@ -218,7 +229,7 @@ export async function resolveRequiredBuildEnv(env, fileValues, lookup = lookupCh
 }
 
 export async function applyRequiredBuildEnv(env = process.env, root = appRoot, lookup = lookupChainId) {
-  const values = await resolveRequiredBuildEnv(env, readRequiredBuildEnvFile(root), lookup)
+  const values = await resolveRequiredBuildEnv(env, readRequiredBuildEnvFile(root, env), lookup)
   for (const [key, value] of Object.entries(values)) env[key] = value
   return values
 }

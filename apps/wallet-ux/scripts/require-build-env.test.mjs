@@ -10,6 +10,7 @@ import {
   lookupChainId,
   readRequiredBuildEnvFile,
   REQUIRED_BUILD_ENV_FILE,
+  REQUIRED_BUILD_ENV_PATH_KEY,
   requiredBuildEnvPlugin,
 } from "./require-build-env.mjs"
 
@@ -99,6 +100,33 @@ describe("required build env file", () => {
       }),
     )
     expect(() => readRequiredBuildEnvFile(root)).toThrow(/unexpected key VITE_OTHER/)
+  })
+
+  it("reads a per-run file for the app root and leaves the checked-in file unchanged", () => {
+    const checkedIn = join(appRoot, REQUIRED_BUILD_ENV_FILE)
+    const real = readFileSync(checkedIn, "utf8")
+    const root = tempRoot(real.replace(RELAYER_URL, `${RELAYER_URL}?token=per-run`))
+    const env = { [REQUIRED_BUILD_ENV_PATH_KEY]: join(root, REQUIRED_BUILD_ENV_FILE) }
+    expect(() => readRequiredBuildEnvFile(appRoot, env)).toThrow("build-env.required.json contains a secret.")
+    expect(readRequiredBuildEnvFile()).toEqual({
+      VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+      VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+    })
+    expect(readFileSync(checkedIn, "utf8")).toBe(real)
+  })
+
+  it("keeps an explicit fixture root when a per-run path is also set", () => {
+    const root = tempRoot(
+      JSON.stringify({
+        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      }),
+    )
+    const env = { [REQUIRED_BUILD_ENV_PATH_KEY]: join(root, "missing.json") }
+    expect(readRequiredBuildEnvFile(root, env)).toEqual({
+      VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+      VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+    })
   })
 })
 
@@ -518,21 +546,20 @@ describe("npm run build", () => {
   }, 60_000)
 
   it("scans the checked-in build-env.required.json during the build", () => {
-    const path = join(appRoot, REQUIRED_BUILD_ENV_FILE)
-    const real = readFileSync(path, "utf8")
-    writeFileSync(path, real.replace(RELAYER_URL, `${RELAYER_URL}?token=build-scan`))
-    try {
-      const result = runBuild({
-        VITE_CLAIM_RELAYER_URL: RELAYER_URL,
-        VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
-      })
-      const output = outputOf(result)
-      expect(result.status).not.toBe(0)
-      expect(output).toContain("build-env.required.json contains a secret.")
-      expect(output).not.toContain("assembled dist")
-    } finally {
-      writeFileSync(path, real)
-    }
+    const checkedIn = join(appRoot, REQUIRED_BUILD_ENV_FILE)
+    const real = readFileSync(checkedIn, "utf8")
+    // Poison a per-run copy. A parallel Vite build keeps reading the checked-in file.
+    const root = tempRoot(real.replace(RELAYER_URL, `${RELAYER_URL}?token=build-scan`))
+    const result = runBuild({
+      VITE_CLAIM_RELAYER_URL: RELAYER_URL,
+      VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
+      [REQUIRED_BUILD_ENV_PATH_KEY]: join(root, REQUIRED_BUILD_ENV_FILE),
+    })
+    const output = outputOf(result)
+    expect(result.status).not.toBe(0)
+    expect(output).toContain("build-env.required.json contains a secret.")
+    expect(output).not.toContain("assembled dist")
+    expect(readFileSync(checkedIn, "utf8")).toBe(real)
   }, 60_000)
 
   it("passes when VITE_CLAIM_RELAYER_URL is unset and inlines the checked-in URL", () => {
