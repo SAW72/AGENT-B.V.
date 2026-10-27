@@ -1,0 +1,124 @@
+export const SDN_ADVANCED_URL: string;
+export const SDN_HOST: string;
+export const SANCTIONS_REFRESH_MS: number;
+export const SANCTIONS_MAX_AGE_MS: number;
+export const SANCTIONS_MIN_ADDRESSES: number;
+export const SANCTIONS_MIN_KEEP_NUMERATOR: number;
+export const SANCTIONS_MIN_KEEP_DENOMINATOR: number;
+export const SANCTIONS_FETCH_TIMEOUT_MS: number;
+export const SANCTIONS_MATCH: string;
+export const SANCTIONS_MAX_BYTES: number;
+export const SANCTIONS_MEMORY_MAX_BYTES: number;
+export const SANCTIONS_RETAINED_MAX_BYTES: number;
+export const SANCTIONS_MAX_ADDRESS_CHARS: number;
+export const SANCTIONS_MAX_ADDRESSES: number;
+export const SANCTIONS_MAX_TYPE_LABEL_CHARS: number;
+export const SANCTIONS_MAX_FEATURE_TYPES: number;
+export const SANCTIONS_MAX_TYPE_ID_CHARS: number;
+export const SANCTIONS_ELEMENT_MAX_BYTES: number;
+export const SANCTIONS_WINDOW_MAX_BYTES: number;
+export const SANCTIONS_SCHEMA_SQL: string[];
+export const SANCTIONS_READ_CACHE: string;
+export const SANCTIONS_WRITE_CACHE: string;
+export const SANCTIONS_READ_WALLETS: string;
+export const SANCTIONS_INSERT_WALLET: string;
+export const SANCTIONS_INSERT_CHECK: string;
+
+export type SanctionsDecision = {
+  result: string;
+  reason: string;
+  persisted: boolean;
+};
+
+export type SanctionsScreen = {
+  addresses: Set<string>;
+  persisted: Set<string>;
+  listReady: boolean;
+  listVersion: string | null;
+  source: string | null;
+  memo: Map<string, SanctionsDecision>;
+  checkedAt: number;
+};
+
+export type SanctionsFetch = (
+  input: string,
+  init?: { redirect?: string; headers?: Record<string, string>; signal?: AbortSignal },
+) => Promise<{
+  ok: boolean;
+  status?: number;
+  type?: string;
+  headers?: { get(name: string): string | null };
+  text: () => Promise<string>;
+  body?: {
+    getReader?: () => {
+      read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+      cancel: () => Promise<void>;
+    };
+  } | null;
+}>;
+
+export type SanctionsRefresh = {
+  refreshed: boolean;
+  failed: boolean;
+  listVersion: string | null;
+  count: number | null;
+  addressesJson: string | null;
+  fetchedAt: number | null;
+};
+
+export function normalizeSanctionsAddress(value: unknown): string;
+export function cacheIsFresh(fetchedAt: number, now: number, refreshMs?: number): boolean;
+export function listWithinMaxAge(fetchedAt: number, now: number, maxAgeMs?: number): boolean;
+export function parseSdnAdvancedXml(xml: string, options?: { minAddresses?: number }): { listVersion: string; addresses: string[] };
+export function screenFromStored(
+  cacheRow: any,
+  walletRows: any,
+  now?: number,
+  options?: { minAddresses?: number; maxAgeMs?: number },
+): SanctionsScreen;
+export function decideSanctions(wallet: string, screen: {
+  addresses?: Set<string>;
+  persisted?: Set<string>;
+  listReady?: boolean;
+}): SanctionsDecision;
+export function eligibilityFromDecision(decision: { result?: string }): {
+  points: number;
+  eligibility_status: string;
+  eligibility_reason: string;
+  points_withheld: number;
+};
+export function applySanctionsDecision(row: any, decision: SanctionsDecision): any;
+export function noteDecision(screen: SanctionsScreen, wallet: string): { decision: SanctionsDecision; first: boolean };
+export function forgetNotedDecision(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): void;
+export function sanctionsCheckParams(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): {
+  wallet: string;
+  result: string;
+  reason: string;
+  checkedAt: number;
+  listVersion: string | null;
+  source: string | null;
+  persisted: number;
+  storeWallet: boolean;
+};
+export function sanctionsCheckLog(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): {
+  message: string;
+  wallet: string;
+  result: string;
+  reason: string;
+  persisted: boolean;
+  listVersion: string | null;
+};
+export function fetchSdnAdvancedXml(
+  fetchImpl: SanctionsFetch,
+  url?: string,
+  byteCap?: number,
+  options?: { timeoutMs?: number },
+): Promise<string>;
+export function refreshParsedList(
+  fetchImpl: SanctionsFetch,
+  url: string,
+  now: number,
+  refreshMs: number,
+  cacheRow: any,
+  options?: { minAddresses?: number; timeoutMs?: number; byteCap?: number },
+): Promise<SanctionsRefresh>;
