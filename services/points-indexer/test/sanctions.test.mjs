@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 import {
+  SANCTIONS_ELEMENT_MAX_BYTES,
   SANCTIONS_MATCH,
   SANCTIONS_MAX_BYTES,
+  SANCTIONS_MAX_FEATURE_TYPES,
+  SANCTIONS_MAX_TYPE_ID_CHARS,
   SANCTIONS_REFRESH_MS,
   SANCTIONS_RETAINED_MAX_BYTES,
+  SANCTIONS_WINDOW_MAX_BYTES,
   SDN_ADVANCED_URL,
   cacheIsFresh,
   decideSanctions,
@@ -161,7 +165,99 @@ describe("OFAC SDN parser", () => {
       /sanctions_xml_empty/,
     );
   });
+
+  it("fails closed when a retained extract, a feature type id, or one element exceeds its cap", async () => {
+    assert.equal(SANCTIONS_MAX_FEATURE_TYPES, 1024);
+    assert.equal(SANCTIONS_MAX_TYPE_ID_CHARS, 32);
+    assert.equal(SANCTIONS_ELEMENT_MAX_BYTES, 256 * 1024);
+    assert.equal(SANCTIONS_WINDOW_MAX_BYTES, 64 * 1024);
+    assert.ok(SANCTIONS_WINDOW_MAX_BYTES < SANCTIONS_ELEMENT_MAX_BYTES);
+    assert.ok(SANCTIONS_ELEMENT_MAX_BYTES < SANCTIONS_RETAINED_MAX_BYTES);
+
+    const address = "0x00000000000000000000000000000000000000a1";
+    const atCap = [];
+    for (let id = 1; id <= SANCTIONS_MAX_FEATURE_TYPES; id += 1) {
+      atCap.push(`<FeatureType ID="${id}">Digital Currency Address - ETH</FeatureType>`);
+    }
+    atCap.push(`<Feature FeatureTypeID="1"><FeatureVersion><VersionDetail>${address}</VersionDetail></FeatureVersion></Feature>`);
+    const accepted = await fetchSdnAdvancedXml(async () => streamResponse(wrapSdn(atCap.join("")), {}, 1024));
+    assert.equal(parseSdnAdvancedXml(accepted).addresses.includes(address), true);
+
+    const overTypes = atCap.slice();
+    overTypes.splice(1, 0, `<FeatureType ID="${SANCTIONS_MAX_FEATURE_TYPES + 1}">Passport</FeatureType>`);
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(wrapSdn(overTypes.join("")), {}, 512)),
+      /sanctions_too_large/,
+    );
+
+    const longId = "9".repeat(SANCTIONS_MAX_TYPE_ID_CHARS + 1);
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(
+        wrapSdn(`<FeatureType ID="${longId}">Digital Currency Address - ETH</FeatureType>`),
+        {},
+        64,
+      )),
+      /sanctions_too_large/,
+    );
+
+    const open = "<DateOfIssue>";
+    const close = "</DateOfIssue>";
+    const exact = "z".repeat(SANCTIONS_ELEMENT_MAX_BYTES - open.length - close.length);
+    const bounded = await fetchSdnAdvancedXml(async () => streamResponse(
+      `<Sanctions>${open}${exact}${close}${atCap.slice(0, 1).join("")}<Feature FeatureTypeID="1"><FeatureVersion><VersionDetail>${address}</VersionDetail></FeatureVersion></Feature></Sanctions>`,
+      {},
+      4096,
+    ));
+    assert.equal(parseSdnAdvancedXml(bounded).addresses.includes(address), true);
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(
+        `<Sanctions>${open}${exact}z${close}</Sanctions>`,
+        {},
+        SANCTIONS_WINDOW_MAX_BYTES,
+      )),
+      /sanctions_too_large/,
+    );
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(`<Sanctions><DateOfIssue>${"y".repeat(SANCTIONS_ELEMENT_MAX_BYTES + 1)}`, {}, 8192)),
+      /sanctions_too_large/,
+    );
+
+    const wideOpen = `<Feature ${"A".repeat(SANCTIONS_ELEMENT_MAX_BYTES)} FeatureTypeID="1"></Feature>`;
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(
+        wrapSdn(`${atCap[0]}${wideOpen}`),
+        {},
+        1024,
+      )),
+      /sanctions_too_large/,
+    );
+
+    let bulky = `<FeatureType ID="345">Digital Currency Address - ETH</FeatureType>`;
+    const filler = "a".repeat(200_000);
+    let count = 0;
+    while (bulky.length <= SANCTIONS_RETAINED_MAX_BYTES) {
+      bulky += `<Feature FeatureTypeID="345"><FeatureVersion><VersionDetail>${filler}${count}</VersionDetail></FeatureVersion></Feature>`;
+      count += 1;
+    }
+    await assert.rejects(
+      fetchSdnAdvancedXml(async () => streamResponse(wrapSdn(bulky), {}, SANCTIONS_WINDOW_MAX_BYTES)),
+      /sanctions_too_large/,
+    );
+
+    const noise = "Q".repeat(SANCTIONS_WINDOW_MAX_BYTES * 3);
+    const listed = sdnXml([address]).replace("<DistinctParties>", `<DistinctParties>${noise}`);
+    const oneChunk = await fetchSdnAdvancedXml(async () => streamResponse(listed, {}, listed.length));
+    const tinyChunks = await fetchSdnAdvancedXml(async () => streamResponse(listed, {}, 3));
+    assert.equal(oneChunk.includes(noise.slice(0, 32)), false);
+    assert.equal(oneChunk.length < SANCTIONS_WINDOW_MAX_BYTES, true);
+    assert.equal(oneChunk, tinyChunks);
+    assert.deepEqual(parseSdnAdvancedXml(oneChunk), parseSdnAdvancedXml(listed));
+  });
 });
+
+function wrapSdn(body) {
+  return `<Sanctions><DateOfIssue CalendarTypeID="1"><Year>2026</Year><Month>10</Month><Day>21</Day></DateOfIssue>${body}</Sanctions>`;
+}
 
 describe("sanctions decision", () => {
   const wallet = "0x00000000000000000000000000000000000000a1";

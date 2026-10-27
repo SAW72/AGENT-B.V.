@@ -2,6 +2,7 @@
 // This module has no Node builtins so the worker can import it.
 // The publication is streamed. Only the issue date and digital-currency addresses are kept.
 // A Workers isolate has 128 MB. SANCTIONS_MAX_BYTES is how much may be read, not buffered.
+// Retained text is copied. A slice of a read chunk must not keep that chunk alive.
 
 export const SDN_ADVANCED_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML";
 export const SANCTIONS_REFRESH_MS = 24 * 60 * 60 * 1000;
@@ -9,6 +10,14 @@ export const SANCTIONS_MATCH = "sanctions_match";
 export const SANCTIONS_MAX_BYTES = 160_000_000;
 /** Extracted issue date plus digital-currency features. Far under the 128 MB isolate limit. */
 export const SANCTIONS_RETAINED_MAX_BYTES = 8_000_000;
+/** FeatureType ids kept while streaming. The publication declares far fewer. */
+export const SANCTIONS_MAX_FEATURE_TYPES = 1024;
+/** One FeatureType id. Published ids are short integers. */
+export const SANCTIONS_MAX_TYPE_ID_CHARS = 32;
+/** One element. Applies when the end tag is already buffered and when it is not. */
+export const SANCTIONS_ELEMENT_MAX_BYTES = 256 * 1024;
+/** Decoded working window. A larger chunk is split so the window stays this size. */
+export const SANCTIONS_WINDOW_MAX_BYTES = 64 * 1024;
 
 export const SANCTIONS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS sanctions_cache (
@@ -61,6 +70,12 @@ function sanctionsError(code) {
   const error = new Error(code);
   error.code = code;
   return error;
+}
+
+// A sliced string keeps its parent buffer. Parsing the JSON form returns a new string.
+function copyString(value) {
+  if (typeof value !== "string" || value.length === 0) return "";
+  return JSON.parse(JSON.stringify(value));
 }
 
 function decodeXml(text) {
@@ -161,7 +176,7 @@ export function parseSdnAdvancedXml(xml) {
     const typeId = /\bFeatureTypeID="(\d+)"/.exec(openTag);
     if (typeId && typeIds.has(typeId[1])) {
       for (const detail of versionDetails(xml.slice(openEnd + 1, close))) {
-        const address = normalizeSanctionsAddress(detail);
+        const address = copyString(normalizeSanctionsAddress(detail));
         if (address) addresses.add(address);
       }
     }
@@ -296,8 +311,6 @@ function headerValue(headers, name) {
   return value == null ? null : String(value);
 }
 
-const ELEMENT_CAP = 256 * 1024;
-
 function tagBoundary(text, token) {
   const next = text[token.length];
   if (next === undefined) return false;
@@ -325,6 +338,7 @@ function needsMore(text) {
  */
 function createSdnSlicer(byteCap) {
   let pending = "";
+  let pendingStart = 0;
   let readBytes = 0;
   let retained = 0;
   const parts = [];
@@ -334,11 +348,87 @@ function createSdnSlicer(byteCap) {
   let mode = "scan";
   let depth = 0;
   let kept = "";
+  const utf8 = new TextEncoder();
+
+  function pendingLength() {
+    return pending.length - pendingStart;
+  }
+
+  function charAt(offset) {
+    return pending[pendingStart + offset];
+  }
+
+  function startsWithAt(offset, token) {
+    return pending.startsWith(token, pendingStart + offset);
+  }
+
+  function pendingIndexOf(token, from = 0) {
+    const found = pending.indexOf(token, pendingStart + from);
+    if (found < 0) return -1;
+    return found - pendingStart;
+  }
+
+  function boundaryAt(offset, token) {
+    const next = charAt(offset + token.length);
+    if (next === undefined) return false;
+    return tagBoundary(token + next, token);
+  }
+
+  function isFeatureAt(offset) {
+    const next = charAt(offset + "<Feature".length);
+    if (next === undefined) return false;
+    return isOpenFeature(`<Feature${next}`);
+  }
+
+  function needsMoreAt(offset) {
+    const available = pendingLength() - offset;
+    if (available <= 0 || charAt(offset) !== "<" || available > 64) return false;
+    const text = copyString(pending.slice(pendingStart + offset, pendingStart + offset + available));
+    return needsMore(text);
+  }
+
+  function copySpan(offset, length) {
+    if (length <= 0) return "";
+    return copyString(pending.slice(pendingStart + offset, pendingStart + offset + length));
+  }
+
+  function consume(count) {
+    if (count <= 0) return;
+    if (count >= pendingLength()) {
+      pending = "";
+      pendingStart = 0;
+      return;
+    }
+    pendingStart += count;
+    if (pendingStart >= SANCTIONS_WINDOW_MAX_BYTES && pendingStart * 2 >= pending.length) {
+      pending = copyString(pending.slice(pendingStart));
+      pendingStart = 0;
+    }
+  }
+
+  function appendPending(chunk) {
+    const copied = copyString(chunk);
+    if (copied.length === 0) return;
+    if (pendingStart > 0) {
+      pending = copyString(pending.slice(pendingStart)) + copied;
+      pendingStart = 0;
+    } else {
+      pending += copied;
+    }
+    if (pendingLength() > SANCTIONS_ELEMENT_MAX_BYTES + SANCTIONS_WINDOW_MAX_BYTES) {
+      throw sanctionsError("sanctions_too_large");
+    }
+  }
+
+  function charge(bytes) {
+    if (retained + bytes > SANCTIONS_RETAINED_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    retained += bytes;
+  }
 
   function add(text) {
-    retained += text.length;
-    if (retained > SANCTIONS_RETAINED_MAX_BYTES) throw sanctionsError("sanctions_too_large");
-    parts.push(text);
+    const copied = copyString(text);
+    charge(utf8.encode(copied).byteLength);
+    parts.push(copied);
   }
 
   function rememberType(element) {
@@ -346,17 +436,24 @@ function createSdnSlicer(byteCap) {
     if (!match) throw sanctionsError("sanctions_xml_invalid");
     const id = /\bID="(\d+)"/.exec(match[1]);
     if (!id) throw sanctionsError("sanctions_xml_invalid");
-    seenTypeIds.add(id[1]);
+    const idText = copyString(id[1]);
+    if (idText.length > SANCTIONS_MAX_TYPE_ID_CHARS) throw sanctionsError("sanctions_too_large");
+    if (!seenTypeIds.has(idText)) {
+      if (seenTypeIds.size >= SANCTIONS_MAX_FEATURE_TYPES) throw sanctionsError("sanctions_too_large");
+      charge(utf8.encode(idText).byteLength);
+      seenTypeIds.add(idText);
+    }
     if (decodeXml(match[2]).trim().startsWith("Digital Currency Address")) {
-      digitalIds.add(id[1]);
+      digitalIds.add(idText);
       add(element);
     }
   }
 
   function appendKept(text) {
     if (mode !== "keep" || text.length === 0) return;
-    if (kept.length + text.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
-    kept += text;
+    const copied = copyString(text);
+    if (kept.length + copied.length > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    kept += copied;
   }
 
   function addBytes(size) {
@@ -364,75 +461,96 @@ function createSdnSlicer(byteCap) {
     if (readBytes > byteCap) throw sanctionsError("sanctions_too_large");
   }
 
-  function feed(text) {
-    if (text) pending += text;
+  function pump() {
     let progressed = true;
-    while (pending.length > 0 && progressed) {
+    while (pendingLength() > 0 && progressed) {
       progressed = mode === "scan" ? scan() : walkElement();
     }
   }
 
+  function feed(text) {
+    if (typeof text === "string" && text.length > 0) {
+      let offset = 0;
+      while (offset < text.length) {
+        const end = Math.min(text.length, offset + SANCTIONS_WINDOW_MAX_BYTES);
+        appendPending(text.slice(offset, end));
+        offset = end;
+        pump();
+      }
+      return;
+    }
+    pump();
+  }
+
   function scan() {
     let from = 0;
-    while (from < pending.length) {
-      const start = pending.indexOf("<", from);
+    while (from < pendingLength()) {
+      const start = pendingIndexOf("<", from);
       if (start === -1) {
-        pending = "";
+        consume(pendingLength());
         return false;
       }
-      const rest = pending.slice(start);
-      if (rest.startsWith("</Sanctions>")) {
+      if (start > from) {
+        consume(start);
+        from = 0;
+        continue;
+      }
+      if (startsWithAt(start, "</Sanctions>")) {
         sawClose = true;
-        pending = rest.slice("</Sanctions>".length);
+        consume(start + "</Sanctions>".length);
         return true;
       }
-      if (rest.startsWith("<FeatureType") && tagBoundary(rest, "<FeatureType")) {
-        pending = rest;
+      if (startsWithAt(start, "<FeatureType") && boundaryAt(start, "<FeatureType")) {
+        consume(start);
         return takeSimple("FeatureType");
       }
-      if (rest.startsWith("<DateOfIssue") && tagBoundary(rest, "<DateOfIssue")) {
-        pending = rest;
+      if (startsWithAt(start, "<DateOfIssue") && boundaryAt(start, "<DateOfIssue")) {
+        consume(start);
         return takeSimple("DateOfIssue");
       }
-      if (isOpenFeature(rest)) {
-        pending = rest;
+      if (isFeatureAt(start)) {
+        consume(start);
         return beginFeature();
       }
-      if (needsMore(rest)) {
-        pending = rest;
+      if (needsMoreAt(start)) {
+        consume(start);
         return false;
       }
       from = start + 1;
     }
-    pending = "";
+    consume(pendingLength());
     return false;
   }
 
   function takeSimple(name) {
     const close = `</${name}>`;
-    const end = pending.indexOf(close);
+    const end = pendingIndexOf(close);
     if (end === -1) {
-      if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+      if (pendingLength() > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
       return false;
     }
-    const element = pending.slice(0, end + close.length);
-    pending = pending.slice(element.length);
+    const elementLength = end + close.length;
+    if (elementLength > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    const element = copySpan(0, elementLength);
+    consume(elementLength);
     if (name === "FeatureType") rememberType(element);
     else add(element);
     return true;
   }
 
   function beginFeature() {
-    const openEnd = pending.indexOf(">");
+    const openEnd = pendingIndexOf(">");
     if (openEnd === -1) {
-      if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+      if (pendingLength() > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
       return false;
     }
-    const openTag = pending.slice(0, openEnd + 1);
+    const openLength = openEnd + 1;
+    if (openLength > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    const openTag = copySpan(0, openLength);
     const typeId = /\bFeatureTypeID="(\d+)"/.exec(openTag);
     if (!typeId || !seenTypeIds.has(typeId[1])) throw sanctionsError("sanctions_xml_invalid");
     const digital = digitalIds.has(typeId[1]);
-    pending = pending.slice(openTag.length);
+    consume(openLength);
     if (openTag.endsWith("/>")) {
       if (digital) add(openTag);
       return true;
@@ -445,36 +563,37 @@ function createSdnSlicer(byteCap) {
 
   function keepBefore(start, extra = "") {
     if (mode !== "keep") return;
-    appendKept(extra ? pending.slice(0, start) + extra : pending.slice(0, start));
+    const head = start > 0 ? copySpan(0, start) : "";
+    appendKept(extra ? head + extra : head);
   }
 
   function walkElement() {
     let from = 0;
-    while (from < pending.length) {
-      const start = pending.indexOf("<", from);
+    while (from < pendingLength()) {
+      const start = pendingIndexOf("<", from);
       if (start === -1) {
-        keepBefore(pending.length);
-        pending = "";
+        keepBefore(pendingLength());
+        consume(pendingLength());
         return false;
       }
-      const rest = pending.slice(start);
-      if (isOpenFeature(rest)) {
-        const openEnd = rest.indexOf(">");
+      if (isFeatureAt(start)) {
+        const openEnd = pendingIndexOf(">", start);
         if (openEnd === -1) {
           keepBefore(start);
-          pending = rest;
-          if (pending.length > ELEMENT_CAP) throw sanctionsError("sanctions_too_large");
+          consume(start);
+          if (pendingLength() > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
           return false;
         }
-        const openTag = rest.slice(0, openEnd + 1);
+        const openTag = copySpan(start, openEnd + 1 - start);
+        if (openTag.length > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
         keepBefore(start, openTag);
-        pending = rest.slice(openTag.length);
+        consume(openEnd + 1);
         if (!openTag.endsWith("/>")) depth += 1;
         return true;
       }
-      if (rest.startsWith("</Feature>")) {
+      if (startsWithAt(start, "</Feature>")) {
         keepBefore(start, "</Feature>");
-        pending = rest.slice("</Feature>".length);
+        consume(start + "</Feature>".length);
         depth -= 1;
         if (depth === 0) {
           if (mode === "keep") add(kept);
@@ -483,23 +602,24 @@ function createSdnSlicer(byteCap) {
         }
         return true;
       }
-      if (needsMore(rest)) {
+      if (needsMoreAt(start)) {
         keepBefore(start);
-        pending = rest;
+        consume(start);
         return false;
       }
       from = start + 1;
     }
-    keepBefore(pending.length);
-    pending = "";
+    keepBefore(pendingLength());
+    consume(pendingLength());
     return false;
   }
 
   function finish() {
     feed("");
     if (mode !== "scan") throw sanctionsError("sanctions_xml_invalid");
+    const tail = pendingStart === 0 ? pending : pending.slice(pendingStart);
     if (!sawClose) {
-      if (parts.length === 0 && pending.trim() === "") throw sanctionsError("sanctions_xml_empty");
+      if (parts.length === 0 && tail.trim() === "") throw sanctionsError("sanctions_xml_empty");
       throw sanctionsError("sanctions_xml_invalid");
     }
     return `<Sanctions>${parts.join("")}</Sanctions>`;
@@ -521,7 +641,7 @@ async function readSdnSlice(response, byteCap) {
         const value = step.value;
         const size = value?.byteLength ?? value?.length ?? 0;
         if (size > 0) slicer.addBytes(size);
-        if (value && size > 0) slicer.feed(decoder.decode(value, { stream: true }));
+        if (value && size > 0) feedDecoded(slicer, decoder, value);
       }
       slicer.feed(decoder.decode());
       return slicer.finish();
@@ -540,6 +660,18 @@ async function readSdnSlice(response, byteCap) {
   slicer.addBytes(size);
   slicer.feed(text);
   return slicer.finish();
+}
+
+function feedDecoded(slicer, decoder, value) {
+  const size = value.byteLength ?? value.length ?? 0;
+  if (typeof value.subarray !== "function" || size <= SANCTIONS_WINDOW_MAX_BYTES) {
+    slicer.feed(decoder.decode(value, { stream: true }));
+    return;
+  }
+  for (let index = 0; index < size; index += SANCTIONS_WINDOW_MAX_BYTES) {
+    const piece = value.subarray(index, Math.min(size, index + SANCTIONS_WINDOW_MAX_BYTES));
+    slicer.feed(decoder.decode(piece, { stream: true }));
+  }
 }
 
 export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL, byteCap = SANCTIONS_MAX_BYTES) {
