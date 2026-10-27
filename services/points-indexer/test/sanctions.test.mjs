@@ -25,6 +25,7 @@ import {
   eligibilityFromDecision,
   fetchSdnAdvancedXml,
   listWithinMaxAge,
+  normalizeSanctionsAddress,
   parseSdnAdvancedXml,
   screenFromStored,
 } from "../src/sanctions.mjs";
@@ -505,7 +506,7 @@ describe("sanctions decision", () => {
     assert.equal(ready.listReady, true);
     assert.equal(listWithinMaxAge(fetchedAt, fetchedAt + SANCTIONS_MAX_AGE_MS), true);
     assert.equal(listWithinMaxAge(fetchedAt, fetchedAt + SANCTIONS_MAX_AGE_MS + 1), false);
-    const stale = screenFromStored(row, [], fetchedAt + SANCTIONS_MAX_AGE_MS + 1);
+    const stale = screenFromStored(row, [], fetchedAt + SANCTIONS_MAX_AGE_MS + 1, { minAddresses: 1 });
     assert.equal(stale.listReady, false);
     assert.equal(stale.addresses.size, 0);
     const decision = decideSanctions(OTHER, stale);
@@ -519,10 +520,20 @@ describe("sanctions decision", () => {
     });
     const kept = decideSanctions(wallet, { addresses: stale.addresses, persisted, listReady: stale.listReady });
     assert.deepEqual(kept, { result: "match", reason: SANCTIONS_MATCH, persisted: true });
-    const custom = screenFromStored(row, [], fetchedAt + 1_000, { maxAgeMs: 500 });
+    const custom = screenFromStored(row, [], fetchedAt + 1_000, { maxAgeMs: 500, minAddresses: 1 });
     assert.equal(custom.listReady, false);
-    const future = screenFromStored(row, [], fetchedAt - 1);
+    const now = fetchedAt;
+    const futureAt = now + 60_000;
+    assert.equal(listWithinMaxAge(futureAt, now), false);
+    const future = screenFromStored({ ...row, fetched_at: futureAt }, [], now, { minAddresses: 1 });
     assert.equal(future.listReady, false);
+    assert.equal(future.addresses.size, 0);
+    const futureDecision = decideSanctions(OTHER, future);
+    assert.equal(futureDecision.result, "unavailable");
+    assert.equal(eligibilityFromDecision(futureDecision).eligibility_status, "unverified");
+    const mixedCase = "0x00000000000000000000000000000000000000A1";
+    const lowercase = "0x00000000000000000000000000000000000000a1";
+    assert.equal(normalizeSanctionsAddress(" \n" + mixedCase + "\t"), lowercase);
   });
 
   it("treats an empty cached list as unavailable", () => {
