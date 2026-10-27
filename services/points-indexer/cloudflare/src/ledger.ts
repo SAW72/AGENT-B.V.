@@ -703,6 +703,9 @@ export async function refreshSanctionsCache(sql: Sql, options: {
   now?: number;
   refreshMs?: number;
   source?: string;
+  minAddresses?: number;
+  timeoutMs?: number;
+  byteCap?: number;
 }) {
   const now = options.now ?? Date.now();
   const refreshMs = options.refreshMs ?? SANCTIONS_REFRESH_MS;
@@ -715,7 +718,11 @@ export async function refreshSanctionsCache(sql: Sql, options: {
     console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
     return { refreshed: false, failed: true, listVersion: null as string | null };
   }
-  const outcome = await refreshParsedList(options.fetch, source, now, refreshMs, cache);
+  const outcome = await refreshParsedList(options.fetch, source, now, refreshMs, cache, {
+    minAddresses: options.minAddresses,
+    timeoutMs: options.timeoutMs,
+    byteCap: options.byteCap,
+  });
   if (outcome.failed) {
     console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
     return { refreshed: false, failed: true, listVersion: outcome.listVersion as string | null };

@@ -5,11 +5,36 @@
 // Retained text is copied. A slice of a read chunk must not keep that chunk alive.
 
 export const SDN_ADVANCED_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML";
+export const SDN_HOST = "sanctionslistservice.ofac.treas.gov";
 export const SANCTIONS_REFRESH_MS = 24 * 60 * 60 * 1000;
+/** A cached list older than this is unavailable. It must not clear a wallet. */
+export const SANCTIONS_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+/** Fewer parsed or cached addresses than this is unavailable. A one-row file must not replace the SDN list. */
+export const SANCTIONS_MIN_ADDRESSES = 100;
+/**
+ * A new list may replace a good cache when nextCount * DENOMINATOR >= previousCount * NUMERATOR.
+ * One over two means the new list must be at least half the last good list. Anything smaller fails closed.
+ */
+export const SANCTIONS_MIN_KEEP_NUMERATOR = 1;
+export const SANCTIONS_MIN_KEEP_DENOMINATOR = 2;
+/** Covers every redirect hop and the streamed body. A hung download fails closed. */
+export const SANCTIONS_FETCH_TIMEOUT_MS = 60_000;
 export const SANCTIONS_MATCH = "sanctions_match";
 export const SANCTIONS_MAX_BYTES = 160_000_000;
-/** Extracted issue date plus digital-currency features. Far under the 128 MB isolate limit. */
-export const SANCTIONS_RETAINED_MAX_BYTES = 8_000_000;
+/**
+ * Resident extract ceiling. Emitted records are a fixed shape, so this does not grow with
+ * comments, chunk size, or padding inside a feature. The working set (pending tail, the
+ * feature being walked, and the extract) is held to this same ceiling.
+ */
+export const SANCTIONS_MEMORY_MAX_BYTES = 8_000_000;
+/** Same ceiling as SANCTIONS_MEMORY_MAX_BYTES. Kept so existing callers still name the extract cap. */
+export const SANCTIONS_RETAINED_MAX_BYTES = SANCTIONS_MEMORY_MAX_BYTES;
+/** One digital-currency address. Longer text fails closed instead of being retained. */
+export const SANCTIONS_MAX_ADDRESS_CHARS = 256;
+/** Address records the extract may hold. Short addresses reach the byte ceiling first. */
+export const SANCTIONS_MAX_ADDRESSES = 100_000;
+/** FeatureType label kept in the extract. Published labels are short. */
+export const SANCTIONS_MAX_TYPE_LABEL_CHARS = 128;
 /** FeatureType ids kept while streaming. The publication declares far fewer. */
 export const SANCTIONS_MAX_FEATURE_TYPES = 1024;
 /** One FeatureType id. Published ids are short integers. */
@@ -18,6 +43,11 @@ export const SANCTIONS_MAX_TYPE_ID_CHARS = 32;
 export const SANCTIONS_ELEMENT_MAX_BYTES = 256 * 1024;
 /** Decoded working window. A larger chunk is split so the window stays this size. */
 export const SANCTIONS_WINDOW_MAX_BYTES = 64 * 1024;
+
+const SANCTIONS_MAX_REDIRECTS = 5;
+// The list host answers with one HTTPS redirect to this public publication bucket.
+// The signed query is required for the GET and is never logged.
+const SDN_PUBLISHED_HOST = "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com";
 
 export const SANCTIONS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS sanctions_cache (
@@ -101,6 +131,34 @@ export function cacheIsFresh(fetchedAt, now, refreshMs = SANCTIONS_REFRESH_MS) {
   return age >= 0 && age < refreshMs;
 }
 
+function resolvedMin(value) {
+  if (value == null) return SANCTIONS_MIN_ADDRESSES;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+function resolvedMaxAge(value) {
+  if (value == null) return SANCTIONS_MAX_AGE_MS;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+/** A list fetched in the future, or older than the max, is not usable. */
+export function listWithinMaxAge(fetchedAt, now, maxAgeMs = SANCTIONS_MAX_AGE_MS) {
+  const limit = resolvedMaxAge(maxAgeMs);
+  if (limit == null || !Number.isFinite(fetchedAt) || !Number.isFinite(now)) return false;
+  const age = now - fetchedAt;
+  return age >= 0 && age <= limit;
+}
+
+/**
+ * Characters that may follow `<Feature` in both the parser and the stream filter.
+ * XML whitespace plus the end of the tag name. `<FeatureType` does not match.
+ */
+function featureFollows(next) {
+  return next === ">" || next === " " || next === "/" || next === "\n" || next === "\r" || next === "\t";
+}
+
 function digitalCurrencyTypeIds(xml) {
   const ids = new Set();
   const re = /<FeatureType\b([^>]*)>([^<]*)<\/FeatureType>/g;
@@ -149,18 +207,46 @@ function versionDetails(body) {
   return found;
 }
 
-export function parseSdnAdvancedXml(xml) {
+function escapeXml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function minimalDateElement(element) {
+  const year = /<Year>(\d{4})<\/Year>/.exec(element);
+  const month = /<Month>(\d{1,2})<\/Month>/.exec(element);
+  const day = /<Day>(\d{1,2})<\/Day>/.exec(element);
+  if (!year || !month || !day) return "<DateOfIssue></DateOfIssue>";
+  const monthNumber = Number(month[1]);
+  const dayNumber = Number(day[1]);
+  if (monthNumber < 1 || monthNumber > 12 || dayNumber < 1 || dayNumber > 31) {
+    return "<DateOfIssue></DateOfIssue>";
+  }
+  return `<DateOfIssue><Year>${year[1]}</Year><Month>${monthNumber}</Month><Day>${dayNumber}</Day></DateOfIssue>`;
+}
+
+function replacedListTooSmall(previousCount, nextCount, floor) {
+  if (!Number.isInteger(previousCount) || !Number.isInteger(nextCount) || !Number.isInteger(floor)) return true;
+  if (previousCount < floor) return false;
+  return nextCount * SANCTIONS_MIN_KEEP_DENOMINATOR < previousCount * SANCTIONS_MIN_KEEP_NUMERATOR;
+}
+
+export function parseSdnAdvancedXml(xml, options = {}) {
   if (typeof xml !== "string" || xml.trim() === "") throw sanctionsError("sanctions_xml_empty");
   if (!xml.includes("</Sanctions>")) throw sanctionsError("sanctions_xml_invalid");
   const typeIds = digitalCurrencyTypeIds(xml);
   if (typeIds.size === 0) throw sanctionsError("sanctions_xml_invalid");
+  const minAddresses = resolvedMin(options.minAddresses);
   const addresses = new Set();
   let cursor = 0;
   while (cursor < xml.length) {
     const start = xml.indexOf("<Feature", cursor);
     if (start === -1) break;
     const next = xml[start + "<Feature".length];
-    if (next !== " " && next !== ">" && next !== "/") {
+    if (!featureFollows(next)) {
       cursor = start + "<Feature".length;
       continue;
     }
@@ -182,9 +268,12 @@ export function parseSdnAdvancedXml(xml) {
     }
     cursor = close + "</Feature>".length;
   }
+  const list = [...addresses].sort();
+  // An empty or implausibly small list must not clear every wallet.
+  if (minAddresses == null || list.length < minAddresses) throw sanctionsError("sanctions_unavailable");
   return {
     listVersion: listVersionFrom(xml),
-    addresses: [...addresses].sort(),
+    addresses: list,
   };
 }
 
@@ -199,7 +288,7 @@ function storedAddresses(cacheRow) {
   }
 }
 
-export function screenFromStored(cacheRow, walletRows, now = Date.now()) {
+export function screenFromStored(cacheRow, walletRows, now = Date.now(), options = {}) {
   const screen = {
     addresses: new Set(),
     persisted: new Set(),
@@ -210,14 +299,22 @@ export function screenFromStored(cacheRow, walletRows, now = Date.now()) {
     checkedAt: now,
   };
   const stored = storedAddresses(cacheRow);
-  if (stored) {
+  const minAddresses = resolvedMin(options.minAddresses);
+  const fetchedAt = cacheRow ? Number(cacheRow.fetched_at) : Number.NaN;
+  const ageOk = listWithinMaxAge(fetchedAt, now, options.maxAgeMs);
+  if (stored && minAddresses != null && ageOk) {
     for (const item of stored) {
       const address = normalizeSanctionsAddress(String(item));
       if (address) screen.addresses.add(address);
     }
-    screen.listReady = true;
-    screen.listVersion = cacheRow.list_version == null ? null : String(cacheRow.list_version);
-    screen.source = cacheRow.source == null ? null : String(cacheRow.source);
+    // Too few addresses is the same as no list: unavailable, not a clear.
+    if (screen.addresses.size >= minAddresses) {
+      screen.listReady = true;
+      screen.listVersion = cacheRow.list_version == null ? null : String(cacheRow.list_version);
+      screen.source = cacheRow.source == null ? null : String(cacheRow.source);
+    } else {
+      screen.addresses.clear();
+    }
   }
   for (const row of walletRows ?? []) {
     const wallet = normalizeSanctionsAddress(String(row?.wallet ?? ""));
@@ -314,7 +411,7 @@ function headerValue(headers, name) {
 function tagBoundary(text, token) {
   const next = text[token.length];
   if (next === undefined) return false;
-  return next === ">" || next === " " || next === "/" || next === "\n" || next === "\r" || next === "\t";
+  return featureFollows(next);
 }
 
 function isOpenFeature(text) {
@@ -348,6 +445,7 @@ function createSdnSlicer(byteCap) {
   let mode = "scan";
   let depth = 0;
   let kept = "";
+  let addressCount = 0;
   const utf8 = new TextEncoder();
 
   function pendingLength() {
@@ -418,11 +516,21 @@ function createSdnSlicer(byteCap) {
     if (pendingLength() > SANCTIONS_ELEMENT_MAX_BYTES + SANCTIONS_WINDOW_MAX_BYTES) {
       throw sanctionsError("sanctions_too_large");
     }
+    guardResident();
+  }
+
+  function guardResident() {
+    const slack = (pendingLength() + kept.length) * 3;
+    if (retained + slack <= SANCTIONS_MEMORY_MAX_BYTES) return;
+    const pendingText = pendingStart === 0 ? pending : pending.slice(pendingStart);
+    const bytes = retained + utf8.encode(pendingText).byteLength + utf8.encode(kept).byteLength;
+    if (bytes > SANCTIONS_MEMORY_MAX_BYTES) throw sanctionsError("sanctions_too_large");
   }
 
   function charge(bytes) {
-    if (retained + bytes > SANCTIONS_RETAINED_MAX_BYTES) throw sanctionsError("sanctions_too_large");
+    if (retained + bytes > SANCTIONS_MEMORY_MAX_BYTES) throw sanctionsError("sanctions_too_large");
     retained += bytes;
+    guardResident();
   }
 
   function add(text) {
@@ -443,10 +551,33 @@ function createSdnSlicer(byteCap) {
       charge(utf8.encode(idText).byteLength);
       seenTypeIds.add(idText);
     }
-    if (decodeXml(match[2]).trim().startsWith("Digital Currency Address")) {
-      digitalIds.add(idText);
-      add(element);
+    const label = decodeXml(match[2]).trim();
+    if (!label.startsWith("Digital Currency Address")) return;
+    if (label.length > SANCTIONS_MAX_TYPE_LABEL_CHARS) throw sanctionsError("sanctions_too_large");
+    digitalIds.add(idText);
+    add(`<FeatureType ID="${idText}">${escapeXml(label)}</FeatureType>`);
+  }
+
+  function minimalDigitalFeature(element) {
+    const openEnd = element.indexOf(">");
+    if (openEnd < 0) throw sanctionsError("sanctions_xml_invalid");
+    const typeId = /\bFeatureTypeID="(\d+)"/.exec(element.slice(0, openEnd + 1));
+    if (!typeId) throw sanctionsError("sanctions_xml_invalid");
+    const idText = typeId[1];
+    if (idText.length > SANCTIONS_MAX_TYPE_ID_CHARS) throw sanctionsError("sanctions_too_large");
+    const closeAt = element.lastIndexOf("</Feature>");
+    const body = closeAt > openEnd ? element.slice(openEnd + 1, closeAt) : "";
+    const pieces = [];
+    for (const detail of versionDetails(body)) {
+      const address = normalizeSanctionsAddress(detail);
+      if (!address) continue;
+      if (address.length > SANCTIONS_MAX_ADDRESS_CHARS) throw sanctionsError("sanctions_too_large");
+      addressCount += 1;
+      if (addressCount > SANCTIONS_MAX_ADDRESSES) throw sanctionsError("sanctions_too_large");
+      pieces.push(`<VersionDetail>${escapeXml(address)}</VersionDetail>`);
     }
+    if (pieces.length === 0) return "";
+    return `<Feature FeatureTypeID="${idText}">${pieces.join("")}</Feature>`;
   }
 
   function appendKept(text) {
@@ -454,6 +585,7 @@ function createSdnSlicer(byteCap) {
     const copied = copyString(text);
     if (kept.length + copied.length > SANCTIONS_ELEMENT_MAX_BYTES) throw sanctionsError("sanctions_too_large");
     kept += copied;
+    guardResident();
   }
 
   function addBytes(size) {
@@ -534,7 +666,7 @@ function createSdnSlicer(byteCap) {
     const element = copySpan(0, elementLength);
     consume(elementLength);
     if (name === "FeatureType") rememberType(element);
-    else add(element);
+    else add(minimalDateElement(element));
     return true;
   }
 
@@ -551,10 +683,7 @@ function createSdnSlicer(byteCap) {
     if (!typeId || !seenTypeIds.has(typeId[1])) throw sanctionsError("sanctions_xml_invalid");
     const digital = digitalIds.has(typeId[1]);
     consume(openLength);
-    if (openTag.endsWith("/>")) {
-      if (digital) add(openTag);
-      return true;
-    }
+    if (openTag.endsWith("/>")) return true;
     mode = digital ? "keep" : "drop";
     depth = 1;
     kept = digital ? openTag : "";
@@ -596,7 +725,10 @@ function createSdnSlicer(byteCap) {
         consume(start + "</Feature>".length);
         depth -= 1;
         if (depth === 0) {
-          if (mode === "keep") add(kept);
+          if (mode === "keep") {
+            const minimal = minimalDigitalFeature(kept);
+            if (minimal) add(minimal);
+          }
           kept = "";
           mode = "scan";
         }
@@ -674,22 +806,106 @@ function feedDecoded(slicer, decoder, value) {
   }
 }
 
-export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL, byteCap = SANCTIONS_MAX_BYTES) {
-  const response = await fetchImpl(url, {
-    redirect: "follow",
-    headers: {
-      accept: "application/xml,text/xml,*/*",
-      "user-agent": "Agent-B.V. points-indexer",
-    },
-  });
-  if (!response || response.ok !== true) throw sanctionsError("sanctions_http");
-  const cap = byteCap > 0 ? byteCap : SANCTIONS_MAX_BYTES;
-  const declared = Number(headerValue(response.headers, "content-length"));
-  if (Number.isFinite(declared) && declared > cap) throw sanctionsError("sanctions_too_large");
-  return readSdnSlice(response, cap);
+function parseHttpsUrl(value, base) {
+  let parsed;
+  try {
+    parsed = base ? new URL(value, base) : new URL(value);
+  } catch {
+    throw sanctionsError("sanctions_http");
+  }
+  if (parsed.protocol !== "https:") throw sanctionsError("sanctions_http");
+  if (parsed.port !== "" && parsed.port !== "443") throw sanctionsError("sanctions_http");
+  if (parsed.username !== "" || parsed.password !== "") throw sanctionsError("sanctions_http");
+  return parsed;
 }
 
-export async function refreshParsedList(fetchImpl, url, now, refreshMs, cacheRow) {
+function isOfacHost(hostname) {
+  return hostname.toLowerCase() === SDN_HOST;
+}
+
+function isPublishedHost(hostname) {
+  return hostname.toLowerCase() === SDN_PUBLISHED_HOST;
+}
+
+function ofacUrl(value, base) {
+  const parsed = parseHttpsUrl(value, base);
+  if (!isOfacHost(parsed.hostname)) throw sanctionsError("sanctions_http");
+  return parsed;
+}
+
+// One hop from the OFAC host to the publication bucket. Any later hop is refused.
+function allowedRedirect(value, current) {
+  const parsed = parseHttpsUrl(value, current);
+  if (isPublishedHost(current.hostname)) throw sanctionsError("sanctions_http");
+  if (isOfacHost(current.hostname) && isOfacHost(parsed.hostname)) return parsed;
+  if (
+    isOfacHost(current.hostname)
+    && isPublishedHost(parsed.hostname)
+    && parsed.pathname.startsWith("/Published/")
+  ) {
+    return parsed;
+  }
+  throw sanctionsError("sanctions_http");
+}
+
+function redirectTarget(response, current) {
+  const status = Number(response?.status);
+  if (status !== 301 && status !== 302 && status !== 303 && status !== 307 && status !== 308) {
+    if (response?.type === "opaqueredirect") throw sanctionsError("sanctions_http");
+    return null;
+  }
+  const location = headerValue(response.headers, "location");
+  if (location == null || location.trim() === "") throw sanctionsError("sanctions_http");
+  return allowedRedirect(location.trim(), current);
+}
+
+function resolvedTimeout(value) {
+  if (value == null) return SANCTIONS_FETCH_TIMEOUT_MS;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw sanctionsError("sanctions_timeout");
+  return value;
+}
+
+async function fetchOfac(fetchImpl, url, signal) {
+  let current = ofacUrl(url);
+  for (let hop = 0; hop <= SANCTIONS_MAX_REDIRECTS; hop += 1) {
+    const response = await fetchImpl(current.href, {
+      redirect: "manual",
+      headers: {
+        accept: "application/xml,text/xml,*/*",
+        "user-agent": "Agent-B.V. points-indexer",
+      },
+      signal,
+    });
+    const next = redirectTarget(response, current);
+    if (!next) return response;
+    if (hop === SANCTIONS_MAX_REDIRECTS) throw sanctionsError("sanctions_http");
+    current = next;
+  }
+  throw sanctionsError("sanctions_http");
+}
+
+export async function fetchSdnAdvancedXml(fetchImpl, url = SDN_ADVANCED_URL, byteCap = SANCTIONS_MAX_BYTES, options = {}) {
+  const timeoutMs = resolvedTimeout(options.timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (typeof timer.unref === "function") timer.unref();
+  try {
+    const response = await fetchOfac(fetchImpl, url, controller.signal);
+    if (controller.signal.aborted) throw sanctionsError("sanctions_timeout");
+    if (!response || response.ok !== true) throw sanctionsError("sanctions_http");
+    const cap = byteCap > 0 ? byteCap : SANCTIONS_MAX_BYTES;
+    const declared = Number(headerValue(response.headers, "content-length"));
+    if (Number.isFinite(declared) && declared > cap) throw sanctionsError("sanctions_too_large");
+    return await readSdnSlice(response, cap);
+  } catch (error) {
+    if (controller.signal.aborted || error?.code === "sanctions_timeout") throw sanctionsError("sanctions_timeout");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function refreshParsedList(fetchImpl, url, now, refreshMs, cacheRow, options = {}) {
   const addresses = storedAddresses(cacheRow);
   const fetchedAt = cacheRow ? Number(cacheRow.fetched_at) : Number.NaN;
   if (addresses && cacheIsFresh(fetchedAt, now, refreshMs)) {
@@ -703,8 +919,15 @@ export async function refreshParsedList(fetchImpl, url, now, refreshMs, cacheRow
     };
   }
   try {
-    const xml = await fetchSdnAdvancedXml(fetchImpl, url);
-    const parsed = parseSdnAdvancedXml(xml);
+    const xml = await fetchSdnAdvancedXml(fetchImpl, url, options.byteCap, {
+      timeoutMs: options.timeoutMs,
+    });
+    const parsed = parseSdnAdvancedXml(xml, { minAddresses: options.minAddresses });
+    const floor = resolvedMin(options.minAddresses);
+    const previousCount = Array.isArray(addresses) ? addresses.length : 0;
+    if (floor == null || replacedListTooSmall(previousCount, parsed.addresses.length, floor)) {
+      throw sanctionsError("sanctions_unavailable");
+    }
     return {
       refreshed: true,
       failed: false,
