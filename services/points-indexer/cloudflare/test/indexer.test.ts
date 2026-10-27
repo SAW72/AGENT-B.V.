@@ -1018,10 +1018,10 @@ describe("points alarm", () => {
         calls += 1;
         return new Response(xml, { status: 200 });
       };
-      const first = await refreshSanctionsCache(sql, { fetch: fetchList, now: 1_000 });
+      const first = await refreshSanctionsCache(sql, { fetch: fetchList, now: 1_000, minAddresses: 1 });
       expect(first.refreshed).toBe(true);
       expect(first.count).toBe(1);
-      const again = await refreshSanctionsCache(sql, { fetch: fetchList, now: 2_000 });
+      const again = await refreshSanctionsCache(sql, { fetch: fetchList, now: 2_000, minAddresses: 1 });
       expect(again.refreshed).toBe(false);
       expect(calls).toBe(1);
       sql.exec(
