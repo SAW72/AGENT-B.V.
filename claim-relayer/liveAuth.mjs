@@ -76,9 +76,42 @@ export function bindLiveCall(intent, body) {
   return built;
 }
 
+/**
+ * viem's default baseFeeMultiplier is 1.2. prepareTransactionRequest sets
+ * maxFeePerGas to that scaled base fee plus the priority fee.
+ * @param {bigint | string | number} baseFeePerGas
+ * @param {bigint | string | number} maxPriorityFeePerGas
+ */
+export function eip1559MaxFeePerGas(baseFeePerGas, maxPriorityFeePerGas) {
+  return (BigInt(baseFeePerGas) * 12n) / 10n + BigInt(maxPriorityFeePerGas);
+}
+
+/**
+ * Price one gas unit for the daily budget.
+ * A quoted max fee is the signer's rate for this claim.
+ * With no quote, CLAIM_GAS_PRICE_WEI is multiplied by CLAIM_GAS_PRICE_MULTIPLIER
+ * (default 5). The result is clamped to maxFeePerGasWei.
+ * @param {object} [abuse]
+ * @param {bigint | string | number | null} [quotedMaxFeePerGasWei]
+ */
+export function budgetGasPriceWei(abuse = {}, quotedMaxFeePerGasWei) {
+  const capText = abuse.maxFeePerGasWei;
+  const cap = capText == null || String(capText).trim() === "" ? null : BigInt(capText);
+  const base = BigInt(abuse.gasPriceWei ?? "1000000000");
+  const multiplier = BigInt(abuse.gasPriceMultiplier ?? 5);
+  let quoted = null;
+  if (quotedMaxFeePerGasWei != null && String(quotedMaxFeePerGasWei).trim() !== "") {
+    quoted = BigInt(quotedMaxFeePerGasWei);
+  }
+  let price = quoted != null && quoted > 0n ? quoted : base * multiplier;
+  if (cap != null && cap > 0n && price > cap) price = cap;
+  if (price < 1n) price = 1n;
+  return price;
+}
+
 function gasWeiFor(gasUsed, valueWei, gasPriceWei) {
   const gas = gasUsed > 0n ? gasUsed : 120_000n;
-  const price = gasPriceWei > 0n ? gasPriceWei : 1_000_000_000n;
+  const price = gasPriceWei > 0n ? gasPriceWei : 0n;
   const value = BigInt(valueWei || "0");
   return gas * price + value;
 }
@@ -192,7 +225,11 @@ export async function prepareLiveClaim(args) {
     );
   }
 
-  const gasWei = gasWeiFor(estimatedGas, valueWei, BigInt(config.abuse.gasPriceWei));
+  const gasWei = gasWeiFor(
+    estimatedGas,
+    valueWei,
+    budgetGasPriceWei(config.abuse, simulation.maxFeePerGasWei),
+  );
   try {
     await abuse.consume({
       sender: intent.sender,

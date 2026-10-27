@@ -47,6 +47,15 @@ describe("config gates", () => {
     assert.equal(config.abuse.globalLimit, 60);
     assert.equal(config.abuse.escrowCap, 8);
     assert.equal(config.abuse.dailyGasBudgetWei, "10000000000000000");
+    assert.equal(config.abuse.gasPriceWei, "1000000000");
+    assert.equal(config.abuse.gasPriceMultiplier, 5);
+    assert.equal(config.abuseStatePath, "./data/abuse-state.json");
+    assert.equal(config.intentNoncePath, "./data/intent-nonces.jsonl");
+    assert.equal(loadConfig({ CLAIM_GAS_PRICE_MULTIPLIER: "2" }).abuse.gasPriceMultiplier, 2);
+    assert.equal(
+      loadConfig({ ABUSE_STATE_PATH: "/tmp/claim-relayer/abuse-state.json" }).abuseStatePath,
+      "/tmp/claim-relayer/abuse-state.json",
+    );
     assert.equal(config.abuse.maxGas, 500_000);
     assert.equal(config.abuse.maxFeePerGasWei, "5000000000");
     assert.equal(config.abuse.maxPriorityFeePerGasWei, "2000000000");
@@ -68,6 +77,28 @@ describe("config gates", () => {
     assert.deepEqual(config.liveSubmit.blockers, ["spencer_run_auth_required", "live_submit_off"]);
     assert.equal(JSON.stringify(config).includes(SECRET), false);
     assert.equal(Object.hasOwn(config, "RELAYER_PRIVATE_KEY"), false);
+  });
+
+  it("keeps free-plan state files on /tmp, which is writable without a disk", async () => {
+    const render = await readFile(new URL("../render.yaml", import.meta.url), "utf8");
+    assert.match(render, /^    plan: free$/m);
+    assert.equal(/^\s+disk:/m.test(render), false);
+    function blueprintValue(key) {
+      const match = new RegExp(`- key: ${key}\\n        value: ([^\\n]+)`).exec(render);
+      assert.ok(match, key);
+      return match[1];
+    }
+    const abuse = blueprintValue("ABUSE_STATE_PATH");
+    const nonces = blueprintValue("INTENT_NONCE_PATH");
+    const log = blueprintValue("CLAIM_LOG_PATH");
+    assert.equal(abuse, "/tmp/claim-relayer/abuse-state.json");
+    assert.equal(nonces, "/tmp/claim-relayer/intent-nonces.jsonl");
+    assert.equal(log, "/tmp/claim-relayer/claims.jsonl");
+    for (const path of [abuse, nonces, log]) {
+      assert.equal(path.startsWith("/tmp/claim-relayer/"), true, path);
+      assert.equal(path.includes("/var/data"), false, path);
+    }
+    assert.equal(render.includes("numInstances: 1"), true);
   });
 
   it("defaults the previous domain name on and turns it off through parseEnvFlag", () => {

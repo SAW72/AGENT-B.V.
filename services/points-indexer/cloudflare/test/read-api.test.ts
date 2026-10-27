@@ -357,6 +357,49 @@ describe("points read API", () => {
     expect(pointsEnabled({ POINTS_ENABLED: "on" })).toBe(false);
   });
 
+  it("reports a persisted sanctions match and still withholds points", () => {
+    const address = "0x00000000000000000000000000000000000000a1";
+    const store = {
+      getCursor: () => ({
+        last_scanned_block: 1,
+        finalized_block: 1,
+        pass_completed: true,
+        stale: false,
+      }),
+      listLedgerRows: () => [],
+      getConfig: () => ({ weights: {}, gates: {}, rule_version: null }),
+    };
+    const matched = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        ...store,
+        getLedgerSummary: () => ({
+          rows_count: 2,
+          first_activity_utc_day: 1,
+          eligibility_reason: "sanctions_match",
+        }),
+      },
+    }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(matched.status).toBe(200);
+    expect(matched.body).toMatchObject({
+      points_total: 0,
+      points_withheld: true,
+      eligibility: { status: "ineligible", reason: "sanctions_match" },
+    });
+    const clear = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        ...store,
+        getLedgerSummary: () => ({ rows_count: 1, first_activity_utc_day: 1 }),
+      },
+    }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(clear.body).toMatchObject({
+      points_total: 0,
+      points_withheld: true,
+      eligibility: { status: "unverified", reason: "ofac_unconfigured" },
+    });
+  });
+
   it("reads stored weights so a tamper shows until the bundle is applied again", async () => {
     const tampered = {
       first_activity: 5,

@@ -1,5 +1,6 @@
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "../../src/constants.mjs";
+import { SANCTIONS_MATCH } from "../../src/sanctions.mjs";
 import { DISCLAIMER } from "./disclaimer.mjs";
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
@@ -226,7 +227,11 @@ type Store = {
     pass_completed: boolean;
     stale: boolean;
   };
-  getLedgerSummary(address: string): { rows_count: number; first_activity_utc_day: number | null };
+  getLedgerSummary(address: string): {
+    rows_count: number;
+    first_activity_utc_day: number | null;
+    eligibility_reason?: string;
+  };
   listLedgerRows(address: string, query: { limit: number; after: { block_number: number; log_index: number; action: string; utc_day: number } | null }): Array<Record<string, unknown>>;
   getConfig(): { weights: unknown; gates: unknown; rule_version: string | null };
 };
@@ -495,7 +500,9 @@ export function createReadApi(options: {
             chainId: CHAIN_ID,
             points_total: 0,
             points_withheld: true,
-            eligibility: { status: "unverified", reason: "ofac_unconfigured" },
+            eligibility: summary.eligibility_reason === SANCTIONS_MATCH
+              ? { status: "ineligible", reason: SANCTIONS_MATCH }
+              : { status: "unverified", reason: "ofac_unconfigured" },
             rows_count: Number(summary.rows_count),
             first_activity_utc_day: summary.first_activity_utc_day ?? null,
             ...sync,

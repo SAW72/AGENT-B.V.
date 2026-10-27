@@ -19,7 +19,7 @@ export function startServer(env = process.env) {
   const nonceStore = createNonceStore();
   const claimLog = createClaimLog({ filePath: config.claimLogPath });
   const intentNonces = createFileIntentNonceStore({ filePath: config.intentNoncePath });
-  const abuse = createAbuseGuard(config.abuse);
+  const abuse = createAbuseGuard(config.abuse, { filePath: config.abuseStatePath });
   const rpcUrl = env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
   const chain = createRpcEscrowChain({
     escrowAddress: config.escrowAddress,
