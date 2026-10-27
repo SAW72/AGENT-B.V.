@@ -375,9 +375,9 @@ function createSdnSlicer(byteCap) {
   }
 
   function isFeatureAt(offset) {
-    const next = charAt(offset + "<Feature".length);
-    if (next === undefined) return false;
-    return isOpenFeature(`<Feature${next}`);
+    // <Comment, <Profile, and <Country are eight bytes and share a boundary character.
+    if (!startsWithAt(offset, "<Feature")) return false;
+    return boundaryAt(offset, "<Feature");
   }
 
   function needsMoreAt(offset) {

@@ -455,3 +455,72 @@ describe("sanctions screen on the indexer", () => {
     }
   });
 });
+
+// Real SDN advanced documents put <Profile>, <Comment />, and <Country> on every
+// party. Those names are eight characters, the same length as <Feature.
+function ofacShapedPublication(count = 150) {
+  const addresses = [];
+  for (let index = 1; index <= count; index += 1) {
+    addresses.push(`0x${index.toString(16).padStart(40, "0")}`);
+  }
+  const window = SANCTIONS_WINDOW_MAX_BYTES;
+  let xml = `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<Sanctions xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/ADVANCED_XML">
+<DateOfIssue CalendarTypeID="1"><Year>2026</Year><Month>10</Month><Day>20</Day></DateOfIssue>
+<ReferenceValueSets><FeatureTypeValues>
+<FeatureType ID="345" FeatureTypeGroupID="1">Digital Currency Address - ETH</FeatureType>
+<FeatureType ID="344" FeatureTypeGroupID="1">Digital Currency Address - XBT</FeatureType>
+<FeatureType ID="9" FeatureTypeGroupID="2">Passport</FeatureType>
+</FeatureTypeValues></ReferenceValueSets>
+`;
+  xml += "x".repeat(window - 4 - xml.length);
+  const commentAt = xml.length;
+  xml += "<Comment />";
+  const profile = `<Profile ID="900000" PartySubTypeID="4">`;
+  const profileAt = window + 64;
+  xml += "x".repeat(profileAt - xml.length);
+  xml += `${profile}</Profile><Country ID="900000" ISO2="US" CountryRoleID="1"/>`;
+  const partyHead = `<DistinctParties><DistinctParty FixedRef="1"><Comment /><Profile ID="1" PartySubTypeID="4">`;
+  const featureAt = window * 2 - 3;
+  xml += "x".repeat(featureAt - (xml.length + partyHead.length));
+  const parties = addresses.map((address, index) => {
+    const id = index + 1;
+    return `<DistinctParty FixedRef="${id}"><Comment /><Profile ID="${id}" PartySubTypeID="4"><Feature ID="${id}" FeatureTypeID="345"><FeatureVersion ID="${id}" ReliabilityID="91479"><Comment /><VersionDetail DetailTypeID="1432">${address}</VersionDetail></FeatureVersion></Feature><Feature FeatureTypeID="9"><FeatureVersion><Comment /><VersionDetail DetailTypeID="1432">not-an-address</VersionDetail></FeatureVersion></Feature></Profile><Country ID="${id}" ISO2="US" CountryRoleID="1"/></DistinctParty>`;
+  }).join("");
+  xml += `<DistinctParties>${parties}</DistinctParties></Sanctions>`;
+  return {
+    xml,
+    addresses: addresses.map((address) => address.toLowerCase()).sort(),
+    commentAt,
+    profileAt,
+    featureAt,
+  };
+}
+
+describe("OFAC-shaped publication", () => {
+  it("keeps every digital-currency address when profile, comment, and country tags straddle the window", async () => {
+    const fixture = ofacShapedPublication();
+    const window = SANCTIONS_WINDOW_MAX_BYTES;
+    assert.ok(fixture.xml.length > window * 2);
+    assert.ok(fixture.commentAt < window);
+    assert.ok(fixture.commentAt + "<Comment ".length > window);
+    assert.ok(fixture.profileAt > window);
+    assert.ok(fixture.profileAt + `<Profile ID="900000" PartySubTypeID="4">`.length < window * 2);
+    assert.equal(fixture.xml.indexOf("<Feature ", fixture.featureAt), fixture.featureAt);
+    assert.ok(fixture.featureAt < window * 2);
+    assert.ok(fixture.featureAt + "<Feature ".length > window * 2);
+    assert.equal(fixture.xml.includes("<DistinctParty "), true);
+    const direct = parseSdnAdvancedXml(fixture.xml);
+    assert.equal(direct.listVersion, "2026-10-20");
+    assert.deepEqual(direct.addresses, fixture.addresses);
+    const sizes = [fixture.xml.length, window * 2, window, 1024, 8, 3];
+    for (const size of sizes) {
+      const sliced = await fetchSdnAdvancedXml(async () => streamResponse(fixture.xml, {}, size));
+      assert.equal(sliced.includes("x".repeat(64)), false, `padding retained at chunk ${size}`);
+      assert.ok(sliced.length < window, `extract grew at chunk ${size}: ${sliced.length}`);
+      const parsed = parseSdnAdvancedXml(sliced);
+      assert.equal(parsed.listVersion, "2026-10-20", `chunk ${size}`);
+      assert.deepEqual(parsed.addresses, fixture.addresses, `chunk ${size}`);
+    }
+  });
+});
