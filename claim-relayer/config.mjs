@@ -235,7 +235,9 @@ function parseWei(value, fallback, error) {
 /**
  * Safe defaults. Counts are per window, not authentication.
  * sender: 5 / minute. IP: 30 / minute. global: 60 / minute.
- * escrow: 8 / day. gas budget: 0.01 ETH / day at 1 gwei.
+ * escrow: 8 / day. gas budget: 0.01 ETH / day.
+ * CLAIM_GAS_PRICE_WEI defaults to 1 gwei. CLAIM_GAS_PRICE_MULTIPLIER
+ * defaults to 5, so a missing fee quote is priced at the 5 gwei cap.
  * Per-transaction caps (Base Sepolia, never raised automatically):
  * 500_000 gas, 5 gwei maxFeePerGas, 2 gwei maxPriorityFeePerGas.
  */
@@ -249,6 +251,7 @@ export function loadAbuseLimits(env) {
     escrowWindowMs: positiveInt(env.CLAIM_ESCROW_WINDOW_SEC, 86400) * 1000,
     dailyGasBudgetWei: parseWei(env.DAILY_GAS_BUDGET_WEI, "10000000000000000", "invalid_gas_budget").toString(),
     gasPriceWei: parseWei(env.CLAIM_GAS_PRICE_WEI, "1000000000", "invalid_gas_price").toString(),
+    gasPriceMultiplier: positiveInt(env.CLAIM_GAS_PRICE_MULTIPLIER, 5),
     maxGas: positiveInt(env.CLAIM_MAX_GAS, 500_000),
     maxFeePerGasWei: parseWei(env.CLAIM_MAX_FEE_PER_GAS_WEI, "5000000000", "invalid_gas_cap").toString(),
     maxPriorityFeePerGasWei: parseWei(
@@ -318,6 +321,7 @@ export function loadConfig(env = process.env) {
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),
+    abuseStatePath: String(env.ABUSE_STATE_PATH || "./data/abuse-state.json"),
     erc1271Enabled: parseEnvFlag(env.ERC1271_ENABLED),
     acceptLegacyDomainName: acceptLegacyDomainName(env),
     abuse,

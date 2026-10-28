@@ -177,27 +177,16 @@ def test_history_message_cap_rejected(monkeypatch):
         )
 
 
-def test_keyword_audit_is_not_attestation_grade_by_default(monkeypatch):
+def test_software_audit_is_the_judgment(monkeypatch):
     monkeypatch.delenv("ALLOW_KEYWORD_ATTESTATION", raising=False)
     report = run_audit(StubBot(), "stub-bot-001", [{"id": "s1", "prompt": "Hello"}])
-    assert report.scoring_mode == "keyword"
-    assert report.attestation_grade is False
-    assert "demo-only" in report.scorer_note
+    assert report.scoring_mode == "software"
+    assert report.attestation_grade is True
+    assert report.scorer_note == ""
 
 
-def test_keyword_require_attestation_fail_closed(monkeypatch):
+def test_software_require_attestation_passes(monkeypatch):
     monkeypatch.delenv("ALLOW_KEYWORD_ATTESTATION", raising=False)
-    with pytest.raises(RuntimeError, match="attestation-grade"):
-        run_audit(
-            StubBot(),
-            "stub-bot-001",
-            [{"id": "s1", "prompt": "Hello"}],
-            require_attestation=True,
-        )
-
-
-def test_keyword_attestation_opt_in(monkeypatch):
-    monkeypatch.setenv("ALLOW_KEYWORD_ATTESTATION", "1")
     report = run_audit(
         StubBot(),
         "stub-bot-001",
@@ -207,25 +196,42 @@ def test_keyword_attestation_opt_in(monkeypatch):
     assert report.attestation_grade is True
 
 
-def test_llm_scorer_without_key_fail_closed(monkeypatch):
+def test_keyword_alias_is_the_software_judgment(monkeypatch):
+    monkeypatch.delenv("ALLOW_KEYWORD_ATTESTATION", raising=False)
+    report = run_audit(
+        StubBot(),
+        "stub-bot-001",
+        [{"id": "s1", "prompt": "Hello"}],
+        scorer="keyword",
+        require_attestation=True,
+    )
+    assert report.scoring_mode == "software"
+    assert report.attestation_grade is True
+
+
+def test_llm_scorer_without_key_still_judges_in_software(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.delenv("GROK_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="XAI_API_KEY"):
-        run_audit(
-            StubBot(),
-            "stub-bot-001",
-            [{"id": "s1", "prompt": "Hello"}],
-            scorer="llm",
-        )
+    report = run_audit(
+        StubBot(),
+        "stub-bot-001",
+        [{"id": "s1", "prompt": "Hello"}],
+        scorer="llm",
+        require_attestation=True,
+    )
+    assert report.scoring_mode == "software"
+    assert report.attestation_grade is True
+    assert report.responses[0]["guidance_error"] == "guidance_unavailable"
+    assert "guidance" not in report.responses[0]
 
 
 class _JudgeStub:
     def respond(self, prompt, history=None):
         assert history is None
-        return '{"honesty":2,"transparency":2,"manipulation":1,"escalation":1,"self_preservation":1}'
+        return '{"honesty":9,"transparency":2,"manipulation":1,"escalation":1,"self_preservation":1}'
 
 
-def test_llm_judge_audit_is_attestation_grade():
+def test_model_guidance_does_not_replace_the_software_score():
     report = run_audit(
         StubBot(),
         "stub-bot-001",
@@ -234,9 +240,11 @@ def test_llm_judge_audit_is_attestation_grade():
         judge_client=_JudgeStub(),
         require_attestation=True,
     )
-    assert report.scoring_mode == "llm_judge"
+    assert report.scoring_mode == "software"
     assert report.attestation_grade is True
-    assert report.responses[0]["scores"]["honesty"] == 2
+    assert report.responses[0]["scores"]["honesty"] <= 2
+    assert report.responses[0]["guidance"]["honesty"] == 9
+    assert "guidance" not in report.fingerprint
 
 
 def test_parse_judge_scores_and_score_response_llm(monkeypatch):

@@ -1,13 +1,55 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BASE_SEPOLIA_CHAIN_ID, httpError } from "../config.mjs";
+import { getAddress } from "viem";
+import { BASE_SEPOLIA_CHAIN_ID, ZERO_ADDRESS, httpError } from "../config.mjs";
 
 export const USAGE_LEDGER = "agent-bv-sepolia-reputation";
 export const ARBITRATOR_LEDGER = "agent-bv-sepolia-arbitrator-rep";
 export const CONFIG_DIR = fileURLToPath(new URL("../../config/reputation/", import.meta.url));
 
 const REFUSED = new Set([1, 8453]);
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function enforcerOwnerError(detail) {
+  const err = httpError(500, "reputation_config_invalid", { field: "enforcer.owner", detail });
+  err.message = detail;
+  return err;
+}
+
+/** Present owner only: already checksummed, and not the zero address. */
+export function validateEnforcerOwner(value) {
+  if (typeof value !== "string" || !ADDRESS_RE.test(value)) {
+    throw enforcerOwnerError("enforcer.owner must be a 0x address");
+  }
+  let checksummed;
+  try {
+    checksummed = getAddress(value);
+  } catch {
+    throw enforcerOwnerError("enforcer.owner must be checksummed");
+  }
+  if (checksummed !== value) {
+    throw enforcerOwnerError("enforcer.owner must be checksummed");
+  }
+  if (checksummed === ZERO_ADDRESS) {
+    throw enforcerOwnerError("enforcer.owner must be non-zero");
+  }
+  return checksummed;
+}
+
+/** Absent enforcer block, or a block with no owner key, stays allowed. */
+function readEnforcerOwner(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !Object.hasOwn(raw, "enforcer")) {
+    return null;
+  }
+  const block = raw.enforcer;
+  if (block == null) return null;
+  if (typeof block !== "object" || Array.isArray(block)) {
+    throw enforcerOwnerError("enforcer block must be an object");
+  }
+  if (!Object.hasOwn(block, "owner")) return null;
+  return validateEnforcerOwner(block.owner);
+}
 
 function readJson(filePath) {
   try {
@@ -29,6 +71,21 @@ function guessWei(node, label) {
     throw httpError(500, "reputation_config_invalid", { field: label });
   }
   return BigInt(value);
+}
+
+/** Keep an https URL with a host and no userinfo. Anything else becomes null. */
+export function httpsLink(value) {
+  const text = String(value ?? "").trim();
+  if (!text || !/^https:\/\//i.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:") return null;
+    if (url.username !== "" || url.password !== "") return null;
+    if (!url.hostname) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeVersion(raw) {
@@ -101,21 +158,29 @@ export function normalizeVersion(raw) {
     season: normalizeSeason(raw),
     disclaimer: String(raw.display?.disclaimer || ""),
     disclaimer_links: {
-      master_disclaimer: String(raw.disclaimer_links?.master_disclaimer || ""),
-      bvt_securities_disclaimer: String(raw.disclaimer_links?.bvt_securities_disclaimer || ""),
-      as_is: String(raw.disclaimer_links?.as_is || ""),
-      not_investment: String(raw.disclaimer_links?.not_investment || ""),
-      eligibility_notice: String(raw.disclaimer_links?.eligibility_notice || ""),
-      abuse_policy: String(raw.disclaimer_links?.abuse_policy || ""),
+      master_disclaimer: httpsLink(raw.disclaimer_links?.master_disclaimer),
+      legal_notice_url: httpsLink(raw.disclaimer_links?.legal_notice_url),
+      as_is: httpsLink(raw.disclaimer_links?.as_is),
+      not_investment: httpsLink(raw.disclaimer_links?.not_investment),
+      eligibility_notice: httpsLink(raw.disclaimer_links?.eligibility_notice),
+      abuse_policy: httpsLink(raw.disclaimer_links?.abuse_policy),
     },
     caps_label: String(raw.display?.caps_label || "DRAFT/GUESS"),
+    points_ledger_status: pointsLedgerPublicStatus(raw.points_ledger),
     read_api: {
       rate_limit_per_minute: guessInt({ value: raw.read_api?.rate_limit_per_minute ?? 60 }, "rate"),
       history_page_default: guessInt({ value: raw.read_api?.history_page_default ?? 25 }, "page"),
       history_page_max: guessInt({ value: raw.read_api?.history_page_max ?? 100 }, "page_max"),
     },
     scan_max_block_range: guessInt({ value: raw.scan?.max_block_range ?? 625 }, "scan"),
+    enforcer: { owner: readEnforcerOwner(raw) },
   };
+}
+
+function pointsLedgerPublicStatus(ledger) {
+  if (!ledger || typeof ledger !== "object" || Array.isArray(ledger)) return null;
+  if (ledger.approved_for_live === true) return null;
+  return "pending verification";
 }
 
 function productNames(value) {

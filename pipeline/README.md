@@ -21,7 +21,7 @@ python pipeline/end_to_end_runner.py --target stub --scenarios-dir scenarios --o
 
 `GrokBot.respond` POSTs to `{XAI_API_BASE}/chat/completions` with default `XAI_API_BASE=https://api.x.ai/v1`. The key is read from the environment only (`XAI_API_KEY`, or `GROK_API_KEY` alias). Base URL is also env-only (HTTPS, no credentials). Client/constructor-supplied bases are rejected. Missing key → clear error. Stub still runs without a key.
 
-**Keyword scorer is demo-only** and not attestation-grade. `--scorer llm` runs LLM-as-judge when `XAI_API_KEY` is set. `--require-attestation` fail-closes unless the run is `llm_judge` or `ALLOW_KEYWORD_ATTESTATION=1`.
+The software scorer is the judgment. `--scorer llm` or `--scorer auto` asks the model for guidance and does not put those numbers in the fingerprint. `--require-attestation` accepts a software score. A model-only mode is refused.
 
 History: pass a list of `{role, content}` dicts (`user` / `assistant` only) for multi-turn. `system` messages are operator-isolated (`AUDIT_SYSTEM_PROMPT`). Length is capped (`HISTORY_MAX_MESSAGES`, `HISTORY_MAX_CONTENT_CHARS`); overflow is rejected, not truncated.
 

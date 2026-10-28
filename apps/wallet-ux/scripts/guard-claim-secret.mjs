@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { readdirSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 // Retired claim-secret markers. The value is not read from the environment.
 // x-claim-secret is matched in any case. Both markers are also matched in the
@@ -15,6 +16,11 @@ if (targets.length === 0) {
   console.error("Claim leak scan needs at least one file or directory.")
   process.exit(1)
 }
+
+// build-env.required.json is the checked-in public build list from #95.
+// Every scan covers it, including a dist-only invocation.
+const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
+targets.push(join(appRoot, "build-env.required.json"))
 
 function encodings(value) {
   const standard = Buffer.from(value, "utf8").toString("base64")

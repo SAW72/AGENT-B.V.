@@ -34,7 +34,7 @@ Public / bank read surface (no operator key):
 
 Unauthenticated privileged calls are rejected (401). If `STAMP_API_KEY` is unset, privileged writes fail closed (503).
 
-Keyword-scored registrations emit demo stamps (`attestation_grade: false`). Attestation-grade stamps require `scoring_mode=llm_judge` or `ALLOW_KEYWORD_ATTESTATION=1`. `GET /v1/bots/{id}/stamp?attestation=true` and `require_attestation` on register fail closed otherwise.
+Software-scored registrations are the judgment (`scoring_mode=software`, `attestation_grade: true`). `keyword` is the same mode. `scoring_mode=llm_judge` is guidance only and `require_attestation` refuses it. The score can still be wrong or gamed.
 
 ## Rate Limits
 High for verification endpoints. Low for history endpoints.

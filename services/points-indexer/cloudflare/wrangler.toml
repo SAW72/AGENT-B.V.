@@ -1,0 +1,86 @@
+# Agent-B.V. points Worker. Placeholders only.
+# Spencer deploys this himself. Nothing in this file is an account id,
+# a secret, or an RPC URL.
+#
+# BASE_SEPOLIA_RPC_URL is intentionally absent. A plain var is wiped by
+# the next `wrangler deploy`. Spencer sets it only with
+# `npx wrangler secret put BASE_SEPOLIA_RPC_URL`. Never put the URL in
+# this file or the repo.
+# POINTS_ENABLED is intentionally absent. Leave it unset until the
+# Verifier gives GO. Only the exact string true turns the indexer on.
+# While it is unset, /v1/points/* returns 503 and /health does not
+# touch the Durable Object.
+
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "agent-bv-points"
+main = "src/index.ts"
+# Newest date this pinned Wrangler workerd binary accepts (4.124.0).
+compatibility_date = "2026-08-22"
+compatibility_flags = ["nodejs_compat"]
+upload_source_maps = true
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+# 1 keeps our error and lag lines. invocation_logs false drops Cloudflare's
+# per-request log. Traces stay off on their own, below.
+head_sampling_rate = 1
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+head_sampling_rate = 0
+
+[vars]
+CHAIN_ID = "84532"
+POINTS_LOG_RANGE = "200"
+POINTS_MAX_WINDOWS_PER_RUN = "40"
+POINTS_POLL_MS = "15000"
+POINTS_CORS_ORIGINS = ""
+# Empty here. Test runs set it to 1 so sleeps do not wait on the wall clock.
+POINTS_FAST_PACE = ""
+
+[[durable_objects.bindings]]
+name = "POINTS"
+class_name = "PointsObject"
+
+# namespace_id values are integers the operator chooses so this account's
+# counters stay separate. Deploy does not create them. They are not account
+# ids and not secrets. Two bindings that reuse one id share counters.
+# 1001 is the number in Cloudflare's docs; do not use it.
+# /v1/points is 20 per 60 seconds, one bucket per client address.
+# One client stays under the location's 50 per minute global wake cap.
+[[ratelimits]]
+name = "POINTS_RATE_LIMITER"
+namespace_id = "84532001"
+
+[ratelimits.simple]
+limit = 20
+period = 60
+
+# Enabled /health is 12 per 60 seconds, one bucket per client address.
+# The Worker also caches that route for 15 seconds.
+[[ratelimits]]
+name = "POINTS_HEALTH_LIMITER"
+namespace_id = "84532002"
+
+[ratelimits.simple]
+limit = 12
+period = 60
+
+# Shared cap on Durable Object wakes from this Worker, per location.
+# 50 per 60 seconds is 72,000 a day, leaving room for alarms under the
+# Free plan's 100,000 Durable Object requests a day. See SPENCER-SETUP.md.
+[[ratelimits]]
+name = "POINTS_GLOBAL_LIMITER"
+namespace_id = "84532003"
+
+[ratelimits.simple]
+limit = 50
+period = 60
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PointsObject"]

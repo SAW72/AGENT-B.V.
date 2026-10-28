@@ -7,6 +7,7 @@ import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
 import { openIndexer, readRpcNotBefore, writeRpcNotBefore } from "./indexer.mjs";
+import { bloomNeedsReceipts, reconcileWindow } from "./logWindow.mjs";
 import {
   GETLOGS_MIN_GAP_MS,
   MAX_CARRY_MS,
@@ -518,7 +519,37 @@ export function createDefaultRpc(rpcUrl, transportOptions) {
       fromBlock: BigInt(args.fromBlock),
       toBlock: BigInt(args.toBlock),
     }),
+    getBlock: async ({ blockNumber }) => {
+      const block = await client.getBlock({ blockNumber: BigInt(blockNumber) });
+      return {
+        hash: block.hash,
+        logsBloom: block.logsBloom,
+        transactions: (Array.isArray(block.transactions) ? block.transactions : []).map((tx) => (
+          typeof tx === "string" ? tx : tx.hash
+        )),
+      };
+    },
+    getBlockReceipts: ({ blockNumber }) => client.getBlockReceipts({ blockNumber: BigInt(blockNumber) }),
+    getTransactionReceipt: ({ hash }) => client.getTransactionReceipt({ hash }),
   };
+}
+
+function isMethodMissing(error) {
+  const queue = [error];
+  const seen = new Set();
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (!item || typeof item !== "object" || seen.has(item)) continue;
+    seen.add(item);
+    const code = numericCode(item.code);
+    if (code === -32601) return true;
+    const text = `${item.details ?? ""} ${item.shortMessage ?? ""} ${item.message ?? ""}`.toLowerCase();
+    if (text.includes("method") && (text.includes("not found") || text.includes("not available") || text.includes("does not exist"))) {
+      return true;
+    }
+    if (item.cause) queue.push(item.cause);
+  }
+  return false;
 }
 
 function listenHealth(port, status) {
@@ -582,7 +613,11 @@ function paceFailure(result) {
  * a Retry-After that was longer than the cap. `sleep` defaults to a real timer.
  * POINTS_MAX_WINDOWS_PER_RUN limits windows inside one pass. The next pass
  * continues. A reported finalized head behind the stored head scans nothing.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
+ * A non-array getLogs result does not move the cursor. When the client has
+ * getBlock, the window commits only after headers and receipt logs agree.
+ * `sanctionsFetch` refreshes the local OFAC cache before a rebuild. Leave it
+ * unset in tests so they do not dial the list.
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, sanctionsFetch?: typeof fetch, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
@@ -625,6 +660,7 @@ export async function start(options = {}) {
   let learnedWindow = cfg.logRange;
   let dirty = false;
   let chainReady = false;
+  let blockReceiptsMissing = false;
   let cancelCarry = null;
   let carryUntil = null;
   const storedNotBefore = readRpcNotBefore(cfg.dbPath);
@@ -731,6 +767,59 @@ export async function start(options = {}) {
     return null;
   }
 
+  async function loadReceipts(blockNumber, transactions) {
+    if (!blockReceiptsMissing && typeof rpc.getBlockReceipts === "function") {
+      try {
+        const read = await pacer.run(() => rpc.getBlockReceipts({ blockNumber }));
+        if (!read.ok) return read;
+        if (!Array.isArray(read.value)) return { ok: false, reason: "logs_unverified" };
+        return { ok: true, receipts: read.value };
+      } catch (error) {
+        if (!isMethodMissing(error)) throw error;
+        blockReceiptsMissing = true;
+      }
+    }
+    if (typeof rpc.getTransactionReceipt !== "function") return { ok: false, reason: "logs_unverified" };
+    const receipts = [];
+    for (const hash of transactions) {
+      const read = await pacer.run(() => rpc.getTransactionReceipt({ hash }));
+      if (!read.ok) return read;
+      receipts.push(read.value);
+    }
+    return { ok: true, receipts };
+  }
+
+  /**
+   * Hold the window unless headers and, when the bloom allows a match, receipts
+   * agree with the scanned logs. An injected client without getBlock skips this.
+   */
+  async function confirmWindow(from, to, logs) {
+    if (typeof rpc.getBlock !== "function") return { ok: true, skipped: true };
+    const addresses = [cfg.escrowAddress, PANEL];
+    const blocks = new Map();
+    for (let blockNumber = from; blockNumber <= to; blockNumber += 1) {
+      const read = await pacer.run(() => rpc.getBlock({ blockNumber }));
+      if (!read.ok) return read;
+      const block = read.value;
+      if (!block || typeof block !== "object") return { ok: false, reason: "logs_unverified" };
+      const transactions = Array.isArray(block.transactions) ? block.transactions : null;
+      let receipts = null;
+      if (bloomNeedsReceipts(block.logsBloom, addresses)) {
+        if (!transactions) return { ok: false, reason: "logs_unverified" };
+        const loaded = await loadReceipts(blockNumber, transactions);
+        if (!loaded.ok) return loaded;
+        receipts = loaded.receipts;
+      }
+      blocks.set(blockNumber, {
+        hash: block.hash,
+        logsBloom: block.logsBloom,
+        transactions,
+        receipts,
+      });
+    }
+    return reconcileWindow({ fromBlock: from, toBlock: to, logs, blocks, addresses });
+  }
+
   const runOnce = async () => {
     if (carryUntil != null) {
       const remain = carryUntil - wallNow();
@@ -821,9 +910,19 @@ export async function start(options = {}) {
         }
         throw error;
       }
+      if (!Array.isArray(logs)) {
+        earlyReason = "unverifiable_log";
+        break;
+      }
+      const confirmed = await confirmWindow(from, to, logs);
+      if (!confirmed.ok) {
+        if (confirmed.deferUntil != null) noteCarry(confirmed.deferUntil, confirmed.carryCapped);
+        earlyReason = confirmed.reason;
+        break;
+      }
       let committed;
       try {
-        committed = indexer.commitScanWindow(Array.isArray(logs) ? logs : [], to, { chainId: cfg.chainId });
+        committed = indexer.commitScanWindow(logs, to, { chainId: cfg.chainId });
       } catch (error) {
         if (dirty) {
           status.ledgerStale = true;
@@ -871,6 +970,17 @@ export async function start(options = {}) {
     // links, and derived rows, then renumbers seq. A partial replay is not wired.
     // This pass skips that replay when it inserted no raw log and the finalized
     // head did not move over a stored log. A failed replay stays due on the next pass.
+    if (indexer && typeof options.sanctionsFetch === "function") {
+      try {
+        const outcome = await indexer.refreshSanctions({
+          fetch: options.sanctionsFetch,
+          now: wallNow(),
+        });
+        if (outcome?.refreshed) dirty = true;
+      } catch {
+        console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      }
+    }
     let rebuilds = 0;
     if (dirty) {
       status.ledgerStale = true;
@@ -1006,7 +1116,7 @@ function invokedDirectly() {
 }
 
 if (invokedDirectly()) {
-  start({ serve: true }).catch((error) => {
+  start({ serve: true, sanctionsFetch: globalThis.fetch }).catch((error) => {
     const rpcUrl = blank(process.env.BASE_SEPOLIA_RPC_URL) ? DEFAULT_RPC_URL : String(process.env.BASE_SEPOLIA_RPC_URL).trim();
     logFailure(error, rpcUrl);
     process.exit(1);

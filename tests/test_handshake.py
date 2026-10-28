@@ -44,7 +44,7 @@ def _register(client: TestClient, bot_id="payee", **extra):
         "fingerprint": fp,
         "fingerprint_hash": extra.pop("fingerprint_hash", canonical_fingerprint_hash(fp)),
         "tier": extra.pop("tier", 3),
-        "scoring_mode": extra.pop("scoring_mode", "llm_judge"),
+        "scoring_mode": extra.pop("scoring_mode", "software"),
         "require_attestation": extra.pop("require_attestation", True),
     }
     body.update(extra)
@@ -60,9 +60,9 @@ def test_real_api_happy_path_attestation_grade():
     assert ok and reason == "ok"
 
 
-def test_real_api_keyword_bot_is_not_attestation_grade():
+def test_real_api_model_mode_is_not_attestation_grade():
     client = _client()
-    _register(client, scoring_mode="keyword", require_attestation=False)
+    _register(client, scoring_mode="llm_judge", require_attestation=False)
     ok, reason = verify_counterparty(_stamp(client), "payee")
     assert not ok
     assert reason == "not_attestation_grade"
@@ -260,12 +260,19 @@ def test_handshake_transact_opens_wired_escrow():
     assert out["escrow_id"] == "escrow-1"
 
 
-def test_handshake_client_blocks_keyword_counterparty():
+def test_handshake_client_blocks_model_guidance_counterparty():
     client = _client()
-    _register(client, scoring_mode="keyword", require_attestation=False)
+    _register(client, scoring_mode="llm_judge", require_attestation=False)
     out = HandshakeClient(_stamp(client)).transact("payee", 1_000_000)
     assert not out["ok"] and out["stage"] == "verify"
     assert out["reason"] == "not_attestation_grade"
+
+
+def test_handshake_client_accepts_keyword_alias():
+    client = _client()
+    _register(client, scoring_mode="keyword", require_attestation=False)
+    out = HandshakeClient(_stamp(client)).transact("payee", 1_000_000, payer_bot_id="payer")
+    assert out["ok"] and out["stage"] == "verified_only"
 
 
 def test_real_api_stamp_includes_active():

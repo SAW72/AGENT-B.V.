@@ -76,7 +76,7 @@ Default model: `grok-4-1-fast` (override with `XAI_MODEL` or `--model`, e.g. `gr
 
 xAI base URL is env-only: `XAI_API_BASE` (default `https://api.x.ai/v1`). Do not pass a client/CLI base — that is rejected (SSRF). HTTPS only; no credentials in the URL.
 
-The built-in **keyword scorer is demo-only** and not attestation-grade. `POST /v1/bots` and `--require-attestation` fail closed on keyword scores unless you set `ALLOW_KEYWORD_ATTESTATION=1`. Optional LLM-as-judge: `--scorer llm` (requires `XAI_API_KEY`).
+The software scorer is the judgment. `POST /v1/bots` and `--require-attestation` accept that score. `--scorer llm` adds model guidance and does not change the fingerprint. A model-only stamp is refused.
 
 ### Stamp API auth
 Privileged writes (`POST /v1/bots`, denylist writes, history append) require `STAMP_API_KEY`. Send `X-API-Key` or `Authorization: Bearer <key>`. Public reads (`GET` stamp/bot/denylist, `POST /v1/access/check`) stay open. Unset key → privileged writes return 503.
@@ -111,7 +111,7 @@ Core `Deploy.s.sol`, `DeployDenylist.s.sol`, `DeployBotAttestationEscrow.s.sol`,
 
 ### Wallet UI (Base Sepolia)
 
-`apps/wallet-ux` connects an injected wallet and reads Gate A, the seated dispute panel, and live escrow. It refuses every chain except Base Sepolia (84532), including Ethereum mainnet and Base mainnet. Escrow and dispute calldata can be submitted from a wallet that is on Base Sepolia. The current Pages site is https://agent-bv.pages.dev. https://agent-a-wallet-ux.pages.dev stays live until a live refund passes on the new site.
+`apps/wallet-ux` connects an injected wallet and reads Gate A, the seated dispute panel, and live escrow. It refuses every chain except Base Sepolia (84532), including Ethereum mainnet and Base mainnet. Escrow and dispute calldata can be submitted from a wallet that is on Base Sepolia. The only Pages site is https://agent-bv.pages.dev. The previous project `agent-a-wallet-ux` has been deleted, and https://agent-a-wallet-ux.pages.dev no longer serves the wallet. Do not recreate it.
 
 ```bash
 cd apps/wallet-ux

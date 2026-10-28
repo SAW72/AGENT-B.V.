@@ -992,7 +992,17 @@ describe("getLogs pace", () => {
       if (body.method === "eth_chainId") return send({ result: "0x14a34" });
       if (body.method === "eth_getCode") return send({ result: "0x60016000" });
       if (body.method === "eth_getBlockByNumber") {
-        return send({ result: { number: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` } });
+        const tag = body.params?.[0];
+        const number = tag === "finalized" ? `0x${(ESCROW_START_BLOCK + 4).toString(16)}` : tag;
+        if (tag === "finalized") return send({ result: { number } });
+        return send({
+          result: {
+            number,
+            hash: `0x${"22".repeat(32)}`,
+            logsBloom: `0x${"00".repeat(256)}`,
+            transactions: [],
+          },
+        });
       }
       if (body.method === "eth_getLogs") {
         if (mode === "429") {
@@ -1050,7 +1060,17 @@ describe("getLogs pace", () => {
         if (body.method === "eth_chainId") return send({ result: "0x14a34" });
         if (body.method === "eth_getCode") return send({ result: "0x60016000" });
         if (body.method === "eth_getBlockByNumber") {
-          return send({ result: { number: `0x${(ESCROW_START_BLOCK + 4).toString(16)}` } });
+          const tag = body.params?.[0];
+          const number = tag === "finalized" ? `0x${(ESCROW_START_BLOCK + 4).toString(16)}` : tag;
+          if (tag === "finalized") return send({ result: { number } });
+          return send({
+            result: {
+              number,
+              hash: `0x${"22".repeat(32)}`,
+              logsBloom: `0x${"00".repeat(256)}`,
+              transactions: [],
+            },
+          });
         }
         if (body.method === "eth_getLogs") {
           logs += 1;

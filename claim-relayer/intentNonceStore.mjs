@@ -10,7 +10,7 @@
  * interface: claim, commit, release.
  */
 
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 function httpError(status, error) {
@@ -142,7 +142,13 @@ export function createFileIntentNonceStore(opts = {}) {
 
   async function persist(record) {
     await ensureDir();
-    await appendFile(filePath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    const handle = await open(filePath, "a", 0o600);
+    try {
+      await handle.appendFile(`${JSON.stringify(record)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
   }
 
   const store = createLockedStore(opts, persist);
