@@ -25,7 +25,7 @@ From `docs/POINTS-AND-ACCOUNTABILITY.md`:
 
 - Points are recorded for activity that already happened. They are post-facto only.
 - There is no purchase, no referral bonus, and no holding requirement.
-- `deployments/base-sepolia.json` has `BVT.address` set to `null`. No dollar amount is attached to a point.
+- No dollar amount is attached to a point. Points are not linked to any token, now or later.
 - The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
 - The dashboard reads the connected wallet. Points are tied to that wallet. Signup will be open on this public testnet beta. This spec does not add a dashboard.
 
@@ -272,7 +272,7 @@ The payee's signing load on a release is intended. The payee signs the decision-
 
 ### EIP-712 link
 
-Issuer: the points server. It is the only writer of this ledger. It issues the nonce and stores it. A client-supplied nonce is not accepted. `docs/reputation/INDEXER_SPEC.md` calls this class of points Steward-operated. That is the operator, not a second issuer. `createEscrow`'s intent-hash comment and the claim-relayer `ClaimIntent` nonce are not this nonce.
+Issuer: the points server. It is the only writer of this ledger. It issues the nonce and stores it. A client-supplied nonce is not accepted. `docs/reputation/INDEXER_SPEC.md` calls this class of points operator-run. That is the operator, not a second issuer. `createEscrow`'s intent-hash comment and the claim-relayer `ClaimIntent` nonce are not this nonce.
 
 Encoding: EIP-712. Domain and struct:
 
@@ -448,7 +448,7 @@ CORS is an exact-origin allowlist on both runtimes. Unset `POINTS_CORS_ORIGINS` 
 
 `GET /v1/points/config` returns chain id `84532`, `status` `draft`, `rule_version`, and the weights and gates in `services/points-indexer/config/points.json`. Every weight and every gate in that file is null. This draft does not set them. The response also carries `disclaimer`, with `text` and `links`.
 
-`GET /v1/points/:address` is the scope S read for the connected wallet. `points_total` is 0. `points_withheld` is true. `eligibility.status` is `unverified`. `eligibility.reason` is `ofac_unconfigured`. Scoring stays 0 until OFAC screening is configured. `indexed_to_block` is the cursor `last_scanned_block` (`services/points-indexer/src/indexer.mjs:274`, written inside `commitScanWindow` at `services/points-indexer/src/indexer.mjs:386`). It is not `finalized_block`. `setFinalizedBlock` stores the finalized head and only moves that head forward (`services/points-indexer/src/indexer.mjs:263-269`). The pass computes that head at `services/points-indexer/src/main.mjs:742`, reads the cursor at `services/points-indexer/src/main.mjs:743`, and stores the head at `services/points-indexer/src/main.mjs:815` even when the cursor is still behind. The address and history responses also include `finalized_block`, `stale`, and `disclaimer`. `GET /v1/points/:address/history` returns committed `ledger_rows` only. A page is 25 rows by default and 100 at most (`config/reputation/sepolia.json:160-161`).
+`GET /v1/points/:address` is the scope S read for the connected wallet. `points_total` is 0. `points_withheld` is true. `eligibility.status` is `unverified`. `eligibility.reason` is `ofac_unconfigured`. Scoring stays 0 until OFAC screening is configured. Here, eligibility means only whether activity can be scored on this testnet ledger. It is not eligibility for any token, payment, distribution, or future benefit. `indexed_to_block` is the cursor `last_scanned_block` (`services/points-indexer/src/indexer.mjs:274`, written inside `commitScanWindow` at `services/points-indexer/src/indexer.mjs:386`). It is not `finalized_block`. `setFinalizedBlock` stores the finalized head and only moves that head forward (`services/points-indexer/src/indexer.mjs:263-269`). The pass computes that head at `services/points-indexer/src/main.mjs:742`, reads the cursor at `services/points-indexer/src/main.mjs:743`, and stores the head at `services/points-indexer/src/main.mjs:815` even when the cursor is still behind. The address and history responses also include `finalized_block`, `stale`, and `disclaimer`. `GET /v1/points/:address/history` returns committed `ledger_rows` only. A page is 25 rows by default and 100 at most (`config/reputation/sepolia.json:160-161`).
 
 Open decision, not made here. This spec defines committed rows. `attributeLogs` (`services/points-indexer/src/attribute.mjs:30`) can name candidates in `raw_logs` that were not committed. Whether the address route may also return a count of activity seen on chain, with no points attached, is open. Until that is decided, the contract is committed rows only.
 

@@ -54,7 +54,6 @@ Breadth over depth. Many small scores, not one big rescue. Not part of the CoinM
 |---|---|---|
 | Score generated | 5 | One score generation per wallet per day counts |
 | Score attested on-chain | 25 | ScoreAttestation hash on Base Sepolia |
-| Score shared on X | 15 | A public post of that score |
 | API integration built | 100 | Must be live and publicly documented |
 | Security report | No points | Security reports go through the security policy and carry no points. |
 
