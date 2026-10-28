@@ -1,5 +1,8 @@
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 
+// Chain guard only. This client does not decide sanctions or location.
+// The server returns the denial sentence. Show that sentence and nothing else.
+
 export const ETHEREUM_MAINNET_CHAIN_ID = 1
 export const BASE_MAINNET_CHAIN_ID = 8453
 

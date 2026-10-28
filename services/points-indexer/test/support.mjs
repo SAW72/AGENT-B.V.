@@ -54,6 +54,7 @@ export function tempIndexer(options = {}) {
     path: join(dir, "ledger.sqlite"),
     finalizedBlock: options.finalizedBlock ?? 100_000_000,
     ...options,
+    walletHashPepper: options.walletHashPepper ?? "test-wallet-hash-pepper",
   });
   return {
     indexer,

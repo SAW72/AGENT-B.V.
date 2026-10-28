@@ -250,6 +250,8 @@ export async function prepareLiveClaim(args) {
     encoded,
     claimId: boundEscrowId,
     sender: intent.sender,
+    payer: record.payer,
+    payee: record.payee,
     domainMatched: signer.domainMatched,
   };
 }

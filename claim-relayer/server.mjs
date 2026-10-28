@@ -8,6 +8,7 @@ import { createRpcEscrowChain, httpRpcRequest } from "./escrowChain.mjs";
 import { createFileIntentNonceStore } from "./intentNonceStore.mjs";
 import { createKillSwitch } from "./killSwitch.mjs";
 import { createNonceStore } from "./nonceStore.mjs";
+import { createSanctionsGate } from "./sanctionsGate.mjs";
 
 /**
  * Process entry. The relayer key is passed into the broadcaster only when live
@@ -42,6 +43,9 @@ export function startServer(env = process.env) {
     chain,
     claimLog,
     broadcaster,
+    sanctions: createSanctionsGate({
+      pepper: typeof env.WALLET_HASH_PEPPER === "string" ? env.WALLET_HASH_PEPPER : "",
+    }),
   });
   const mode = config.liveSubmit.allowed ? "live" : "fixture";
   if (config.escrowRetired) {

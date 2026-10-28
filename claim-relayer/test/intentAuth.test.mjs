@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import { privateKeyToAccount } from "viem/accounts";
 import { createAbuseGuard } from "../abuseLimits.mjs";
 import { createClaimRelayer } from "../app.mjs";
+import { clearSanctionsGate } from "./clearGate.mjs";
 import { RETIRED_ESCROW, nonceKey } from "../claimIntent.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
@@ -79,6 +80,7 @@ async function boot(env = {}, extra = {}) {
       },
     },
     now: () => NOW_MS,
+    sanctions: extra.sanctions || clearSanctionsGate(NOW_MS),
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -564,6 +566,7 @@ describe("signed claim intent auth", () => {
         },
       },
       now: () => NOW_MS,
+      sanctions: clearSanctionsGate(NOW_MS),
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

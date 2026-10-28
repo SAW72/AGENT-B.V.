@@ -19,6 +19,7 @@ export default defineConfig({
     }),
   ],
   test: {
+    setupFiles: ["./test/geo-setup.ts"],
     include: ["test/**/*.test.ts"],
     exclude: ["test/disabled.test.ts", "test/budget.test.ts"],
     fileParallelism: false,

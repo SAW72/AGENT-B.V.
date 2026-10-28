@@ -14,7 +14,11 @@ import {
 import { prepareLiveClaim } from "./liveAuth.mjs";
 import { createReputationCors } from "./reputation/cors.mjs";
 import { createRateLimiter } from "./reputation/rateLimit.mjs";
+import { createDefaultHooks } from "./reputation/hooks.mjs";
 import { createReputationRuntime, handleReputationRequest } from "./reputation/runtime.mjs";
+import { createSanctionsGate } from "./sanctionsGate.mjs";
+import { PUBLIC_DENIAL_MESSAGE } from "./sanctions.mjs";
+import { decideGeoblock, geoInputFromHeaders, geoLog } from "./geoblock.mjs";
 
 const MAX_BODY = 32 * 1024;
 
@@ -206,7 +210,12 @@ export function createClaimRelayer(deps) {
   const now = deps.now || Date.now;
   const corsHeaders = createCors(config.corsOrigins);
   const reputationCorsHeaders = createReputationCors(config.reputationCors);
-  const reputation = deps.reputation || createReputationRuntime();
+  const sanctions = deps.sanctions || createSanctionsGate({
+    pepper: typeof deps.walletHashPepper === "string" ? deps.walletHashPepper : "",
+  });
+  const reputation = deps.reputation || createReputationRuntime({
+    hooks: createDefaultHooks({ getScreen: () => sanctions.snapshot() }),
+  });
   const limitReputation =
     deps.reputationRateLimit ||
     createRateLimiter({ max: reputation.latest.read_api.rate_limit_per_minute });
@@ -215,6 +224,59 @@ export function createClaimRelayer(deps) {
     if (!killSwitch.isOn()) return false;
     sendJson(res, req, 503, { ok: false, error: KILL_SWITCH }, corsHeaders);
     return true;
+  }
+
+  function denyScreen(res, req) {
+    sendJson(res, req, 403, { ok: false, message: PUBLIC_DENIAL_MESSAGE }, corsHeaders);
+    return true;
+  }
+
+  function locationDenied(req) {
+    try {
+      const geo = decideGeoblock(geoInputFromHeaders(req.headers, null, false));
+      console.info(JSON.stringify(geoLog(geo)));
+      return geo.decision === "deny";
+    } catch {
+      return true;
+    }
+  }
+
+  function screenRoute(path) {
+    if (path === "/v1/screen/signup") return "signup";
+    if (path === "/v1/screen/link") return "link";
+    if (path === "/v1/screen/change") return "change";
+    if (path === "/v1/screen/unlink") return "unlink";
+    return "";
+  }
+
+  function claimWallets(body) {
+    const sources = [body, body?.intent];
+    const wallets = [];
+    for (const source of sources) {
+      if (!source || typeof source !== "object") continue;
+      for (const key of ["payer", "payee", "sender", "wallet"]) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim() !== "") wallets.push(value);
+      }
+    }
+    return wallets;
+  }
+
+  function walletsDenied(body) {
+    try {
+      const wallets = claimWallets(body);
+      // A fixture or a rejected live body may name no party. Those paths do not broadcast.
+      // A named party that is not clear denies before any signature or broadcast.
+      if (wallets.length === 0) return false;
+      for (const wallet of wallets) {
+        const decision = sanctions.screen(wallet, "claim");
+        if (!decision || decision.result !== "clear") return true;
+        if (sanctions.blocks(wallet)) return true;
+      }
+      return false;
+    } catch {
+      return true;
+    }
   }
 
   return http.createServer(async (req, res) => {
@@ -301,11 +363,34 @@ export function createClaimRelayer(deps) {
         return;
       }
 
+      if (req.method === "POST" && screenRoute(path)) {
+        const body = await readBody(req);
+        if (locationDenied(req)) {
+          denyScreen(res, req);
+          return;
+        }
+        const op = screenRoute(path);
+        const payload = op === "change" ? { ...body, wallet: body.nextWallet } : body;
+        const result = await sanctions[op](payload);
+        sendJson(
+          res,
+          req,
+          result.ok ? 200 : 403,
+          result.ok ? { ok: true, status: "unverified" } : { ok: false, message: PUBLIC_DENIAL_MESSAGE },
+          corsHeaders,
+        );
+        return;
+      }
+
       if (req.method === "POST" && path === "/v1/claims/quote") {
         if (refuseIfKilled(res, req)) return;
         const body = await readBody(req);
         assertBaseSepolia(body);
         if (config.escrowRetired && wantsLiveSubmit(body)) throw retiredEscrowError(config);
+        if (locationDenied(req) || walletsDenied(body)) {
+          denyScreen(res, req);
+          return;
+        }
         if (wantsLiveSubmit(body)) {
           if (!config.liveSubmit.allowed) rejectLive(config, body);
           rejectQuoteBroadcast(config, body);
@@ -324,6 +409,10 @@ export function createClaimRelayer(deps) {
         }
         const body = await readBody(req);
         assertBaseSepolia(body);
+        if (locationDenied(req) || walletsDenied(body)) {
+          denyScreen(res, req);
+          return;
+        }
         if (wantsLiveSubmit(body)) {
           if (!config.liveSubmit.allowed) rejectLive(config, body);
           const prepared = await prepareLiveClaim({
@@ -335,6 +424,18 @@ export function createClaimRelayer(deps) {
             nowMs: now(),
             ip: clientIp(req),
           });
+          if (walletsDenied({
+            sender: prepared.sender,
+            payer: prepared.payer,
+            payee: prepared.payee,
+          })) {
+            await storeClaimResult(intentNonces, prepared.nonceKey, 403, {
+              ok: false,
+              message: PUBLIC_DENIAL_MESSAGE,
+            });
+            denyScreen(res, req);
+            return;
+          }
           let result;
           try {
             result = {

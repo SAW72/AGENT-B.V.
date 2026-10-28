@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { RpcRequestError } from "viem";
 import { createAbuseGuard } from "../abuseLimits.mjs";
 import { createClaimRelayer } from "../app.mjs";
+import { clearSanctionsGate } from "./clearGate.mjs";
 import { startServer } from "../server.mjs";
 import { createSepoliaBroadcaster } from "../broadcast.mjs";
 import { createClaimLog } from "../claimLog.mjs";
@@ -1059,6 +1060,7 @@ async function boot(env = {}, extra = {}) {
     claimLog: createClaimLog({ filePath: logPath }),
     broadcaster: extra.broadcaster ?? null,
     now: () => nowMs,
+    sanctions: extra.sanctions || clearSanctionsGate(nowMs),
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

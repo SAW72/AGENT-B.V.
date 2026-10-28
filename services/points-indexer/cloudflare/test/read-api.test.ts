@@ -80,7 +80,7 @@ describe("points read API", () => {
     expect(body.address).toBe(address);
     expect(body.points_total).toBe(0);
     expect(body.points_withheld).toBe(true);
-    expect(body.eligibility).toEqual({ status: "unverified", reason: "ofac_unconfigured" });
+    expect(body.eligibility).toEqual({ status: "unverified", reason: "unverified" });
     expect(body.rows_count).toBe(0);
     expect(body.disclaimer.text).toBe(sepolia.display.disclaimer);
     expect(body.disclaimer.text).toBe(DISCLAIMER);
@@ -396,7 +396,7 @@ describe("points read API", () => {
     expect(clear.body).toMatchObject({
       points_total: 0,
       points_withheld: true,
-      eligibility: { status: "unverified", reason: "ofac_unconfigured" },
+      eligibility: { status: "unverified", reason: "unverified" },
     });
   });
 

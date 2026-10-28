@@ -282,7 +282,7 @@ describe("points alarm", () => {
         }
         return original(query, ...bindings);
       }) as typeof sql.exec;
-      await instance.alarm();
+      await instance.alarm!();
       sql.exec = original as typeof sql.exec;
     });
     expect(await count("raw_logs")).toBe(1);
@@ -882,7 +882,7 @@ describe("points alarm", () => {
       expect(Number(stored.points)).toBe(0);
       expect(Number(stored.points_withheld)).toBe(1);
       expect(String(stored.eligibility_status)).toBe("unverified");
-      expect(String(stored.eligibility_reason)).toBe("ofac_unconfigured");
+      expect(String(stored.eligibility_reason)).toBe("sanctions_unavailable");
       expect(insertLedgerRow(state.storage.sql, { ...row, seq: 2 })).toBe(false);
       const matched = insertLedgerRow(state.storage.sql, {
         ...row,
@@ -989,7 +989,7 @@ describe("points alarm", () => {
       };
       for (const wait of [1_000, 2_000, 4_000]) {
         const before = Date.now();
-        await instance.alarm();
+        await instance.alarm!();
         const after = Date.now();
         const scheduled = await state.storage.getAlarm() as number;
         expect(scheduled).toBeGreaterThanOrEqual(before + wait);

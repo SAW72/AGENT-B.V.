@@ -6,6 +6,7 @@ import { HttpRequestError, createPublicClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { CHAIN_ID, ESCROW, ESCROW_START_BLOCK, PANEL, isAcceptedChain } from "./constants.mjs";
 import { PointsError } from "./hex.mjs";
+import { nodeSql, purgeRetention } from "../../../claim-relayer/accountScreen.mjs";
 import { openIndexer, readRpcNotBefore, writeRpcNotBefore } from "./indexer.mjs";
 import { bloomNeedsReceipts, reconcileWindow } from "./logWindow.mjs";
 import {
@@ -853,7 +854,12 @@ export async function start(options = {}) {
     const reported = asChainId(headRead.value);
     if (!Number.isSafeInteger(reported) || reported < 0) throw new Error("RPC finalized block is not a safe integer");
     if (!indexer) {
-      indexer = openIndexer({ path: cfg.dbPath, finalizedBlock: reported, chainId: cfg.chainId });
+      indexer = openIndexer({
+        path: cfg.dbPath,
+        finalizedBlock: reported,
+        chainId: cfg.chainId,
+        walletHashPepper: typeof process.env.WALLET_HASH_PEPPER === "string" ? process.env.WALLET_HASH_PEPPER : "",
+      });
       if (typeof options.onIndexer === "function") options.onIndexer(indexer);
     }
     if (reported < indexer.finalizedBlock) {
@@ -977,6 +983,11 @@ export async function start(options = {}) {
           now: wallNow(),
         });
         if (outcome?.refreshed) dirty = true;
+      } catch {
+        console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      }
+      try {
+        purgeRetention(nodeSql(indexer.db), wallNow());
       } catch {
         console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
       }

@@ -1,5 +1,6 @@
 /**
  * Checklist #7 stays fail closed: nothing is silently credited.
+ * A clear screen stays unverified. It is not an approval.
  * Checklist #9 is still open. Design note v2.2 says O5_REPEAT and
  * DISPUTE_PREDATES_ESCROW go to the enforcer for review only and do not
  * auto-cancel or withhold points. An out-of-range Denylist bucket is the same:
@@ -9,13 +10,24 @@
  * See docs/reputation-ledger.md.
  */
 
-export function createDefaultEligibility() {
-  return function screen() {
+import { decideSanctions, eligibilityFromDecision } from "../sanctions.mjs";
+
+export function createDefaultEligibility(getScreen) {
+  return function screen(input) {
+    let snapshot = null;
+    try {
+      snapshot = typeof getScreen === "function" ? getScreen() : null;
+    } catch {
+      snapshot = null;
+    }
+    if (!snapshot) snapshot = { addresses: new Set(), persisted: new Set(), listReady: false };
+    const decision = decideSanctions(input?.wallet, snapshot);
+    const eligibility = eligibilityFromDecision(decision);
     return {
       eligible: false,
-      status: "unverified",
+      status: eligibility.eligibility_status,
       points_withheld: true,
-      reason: "ofac_unconfigured",
+      reason: eligibility.eligibility_reason,
       provider: null,
     };
   };
@@ -41,9 +53,9 @@ export function createDefaultEnforcer() {
   };
 }
 
-export function createDefaultHooks() {
+export function createDefaultHooks(options = {}) {
   return {
-    eligibility: createDefaultEligibility(),
+    eligibility: createDefaultEligibility(options.getScreen),
     enforcer: createDefaultEnforcer(),
   };
 }

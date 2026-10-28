@@ -38,7 +38,7 @@ export function createReputationRuntime(options = {}) {
     ? { versions: options.versions, adjustments: options.adjustments || [], latest: options.versions[options.versions.length - 1] }
     : loadReputationConfig();
   const latest = loaded.latest || loaded.versions[loaded.versions.length - 1];
-  const hooks = options.hooks || createDefaultHooks();
+  const hooks = options.hooks || createDefaultHooks(options);
   assertCopy(latest.disclaimer);
   return {
     latest,

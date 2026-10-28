@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { CHAIN_ID } from "../../src/constants.mjs";
-import { SANCTIONS_MATCH } from "../../src/sanctions.mjs";
+import { SANCTIONS_MATCH, normalizeSanctionsAddress, walletHashHex } from "../../src/sanctions.mjs";
 import {
   ensureSchema,
   finalizedBlock,
@@ -49,6 +49,7 @@ export class PointsObject extends DurableObject<Env> {
         POINTS_LOG_RANGE: env.POINTS_LOG_RANGE,
         POINTS_MAX_WINDOWS_PER_RUN: env.POINTS_MAX_WINDOWS_PER_RUN,
         POINTS_FAST_PACE: env.POINTS_FAST_PACE,
+        WALLET_HASH_PEPPER: env.WALLET_HASH_PEPPER,
       },
       sanctionsFetch: (input, init) => fetch(input, init as RequestInit | undefined),
     });
@@ -121,7 +122,39 @@ export class PointsObject extends DurableObject<Env> {
             ).toArray()[0];
             if (hit && String(hit.reason) === SANCTIONS_MATCH) eligibilityReason = SANCTIONS_MATCH;
           } catch {
-            eligibilityReason = undefined;
+            eligibilityReason = "unavailable";
+          }
+          if (!eligibilityReason) {
+            try {
+              const tables = sql.exec(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sanctions_account_wallets'",
+              ).toArray();
+              if (tables.length > 0) {
+                const pepper = this.env.WALLET_HASH_PEPPER;
+                if (!pepper) {
+                  const anyLink = sql.exec("SELECT 1 AS hit FROM sanctions_account_wallets LIMIT 1").toArray()[0];
+                  if (anyLink) eligibilityReason = "unavailable";
+                } else {
+                  const hash = walletHashHex(pepper, normalizeSanctionsAddress(address));
+                  if (!hash) {
+                    eligibilityReason = "unavailable";
+                  } else {
+                    const linked = sql.exec(
+                      `SELECT 1 AS hit
+                       FROM sanctions_account_wallets me
+                       JOIN sanctions_account_wallets sibling ON sibling.account_id = me.account_id
+                       JOIN sanctions_wallets match ON match.wallet_hash = sibling.wallet_hash
+                       WHERE me.wallet_hash = ?
+                       LIMIT 1`,
+                      hash,
+                    ).toArray()[0];
+                    if (linked) eligibilityReason = SANCTIONS_MATCH;
+                  }
+                }
+              }
+            } catch {
+              eligibilityReason = "unavailable";
+            }
           }
           return {
             rows_count: Number(totals?.rows_count ?? 0),

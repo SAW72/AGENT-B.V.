@@ -116,6 +116,8 @@ jobs:
       - name: Install points Worker deps
         working-directory: services/points-indexer/cloudflare
         run: npm ci
+      - name: Sanctions public copy
+        run: node scripts/check-sanctions-copy.mjs
       - name: Points Worker typecheck
         working-directory: services/points-indexer/cloudflare
         run: npx wrangler types && npx tsc --noEmit --pretty false

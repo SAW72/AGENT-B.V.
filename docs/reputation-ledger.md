@@ -168,7 +168,7 @@ These five are decided. They are not open questions. Checklist items 7, 9, 11, a
 
 ## Hooks (fail closed)
 
-Tokenomics confirmed that the #7 and #9 hooks fail closed. PR #28's stub returns `eligible: true` with reason `pending-#7` for staging. **This service does not.** The default eligibility hook returns `{ eligible: false, status: "unverified", reason: "ofac_unconfigured" }`. The row is still stored, `nominal_points` keeps the weight, and `points` is 0 so a raw sum does not credit it. Tests inject `allowAllEligibility` when they need to see weights land.
+Tokenomics confirmed that the #7 and #9 hooks fail closed. PR #28's stub returns `eligible: true` with reason `pending-#7` for staging. **This service does not.** The default eligibility hook returns `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }` until a fresh list is loaded. A wallet that is not on that list stays `unverified`. We screen addresses against U.S. sanctions lists. The row is still stored, `nominal_points` keeps the weight, and `points` is 0 so a raw sum does not credit it. Tests inject `allowAllEligibility` when they need to see weights land.
 
 The enforcer hook receives:
 
@@ -182,7 +182,7 @@ Disclaimer links (#11) are `disclaimer_links` in the config. Empty slots are ret
 
 > Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.
 
-The default eligibility hook reports API `eligibility.status` `"unverified"` and `points_withheld: true`. That is the same fail-closed mask (`eligible: false`, reason `ofac_unconfigured`): rows are stored and `points` is 0. `allowAllEligibility` is a test hook that reports `status: "eligible"` and `points_withheld: false`. If the enforcer has withheld that wallet, `points_withheld` is true even when the eligibility hook would otherwise allow the row.
+The default eligibility hook reports API `eligibility.status` `"unverified"` and `points_withheld: true`. That is the same fail-closed mask (`eligible: false`, reason `sanctions_unavailable` when the list is not ready): rows are stored and `points` is 0. `allowAllEligibility` is a test hook that reports `status: "eligible"` and `points_withheld: false`. If the enforcer has withheld that wallet, `points_withheld` is true even when the eligibility hook would otherwise allow the row.
 
 ## Read API
 
