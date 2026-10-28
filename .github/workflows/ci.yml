@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-  # Required on every pull request to main. The points-worker job name is the ruleset context.
+  # Required on every pull request, including a non-main base.
+  # The points-worker job name is the ruleset context.
   pull_request:
-    branches: [main]
 
 # Tests only read the repo. upload-artifact@v4 authenticates with the runner token.
 permissions:
