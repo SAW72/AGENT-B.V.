@@ -193,13 +193,21 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 
 `pages_build_output_dir = "./dist"` is the assembled site. Vite writes the app to `dist/app`. `scripts/assemble-site.mjs` then copies `landing/` to `dist/`.
 
-### SPA
+### Routing
 
-The site root is the landing page. [`landing/_redirects`](landing/_redirects) is copied to `dist/_redirects` by `scripts/assemble-site.mjs`. The wallet app is built to `dist/app/` with Vite `base` `/app/`.
+`npm run build` writes the wallet app to `dist/app` (`base` is `/app/`), then [`scripts/assemble-site.mjs`](scripts/assemble-site.mjs) copies [`landing/`](landing/) onto `dist/`. The site root is the landing page. The wallet app stays at `/app/`.
 
-`/app/*` rewrites to `/app/` with status 200, so a refresh of a guided route still loads the app and leaves the browser URL unchanged. Those routes are `/app/fund`, `/app/release`, `/app/refund`, `/app/dispute`, `/app/vote`, and `/app/withdraw`. The client reads the path and does not prepare or submit from the address bar.
+[`landing/_redirects`](landing/_redirects) is copied to `dist/_redirects`. Pages does not support a 404 status in `_redirects` (only 301, 302, 303, 307, 308, and a 200 proxy). The rules are:
 
-A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash. `/points`, `/claim`, and `/release` each 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
+- `/app` and `/app/index.html` are **301** to `/app/`. A request for `/app/` serves `dist/app/index.html` with status 200 and does not redirect again, so the `/app/index.html` rule does not loop.
+- `/index.html` is **301** to `/`.
+- `/points`, `/claim`, and `/release` are **301** to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
+- A root link with `?escrow=` or `?dispute=` is forwarded to `/app/` with the same search and hash.
+- `/app/assets/*`, `/app/manifest.webmanifest`, and the two icons are listed before `/app/*`. A matching 200 rewrite replaces a real file, so those paths are named first. `/app/* /app/ 200` is the app fallback. Pages ignores a rewrite whose destination is `/app/index.html`. A refresh of a guided route still loads the app and leaves the browser URL unchanged. Those routes are `/app/fund`, `/app/release`, `/app/refund`, `/app/dispute`, `/app/vote`, and `/app/withdraw`. The client reads the path and does not prepare or submit from the address bar.
+
+There is no top-level `404.html`. Without one, Pages serves the landing page with status 200 for an unknown path outside `/app/` (for example `/foo/bar`). `/app/nope` still matches `/app/*` and serves the app.
+
+Missing files under `/assets/` and `/app/assets/` return **404**. [`landing/assets/404.html`](landing/assets/404.html) is copied to `dist/assets/404.html` and to `dist/app/assets/404.html`. Pages serves the nearest `404.html` for a path that is not a real file and is not rewritten to a page. `wrangler pages dev` returns 404 for `/assets/nope.png` and `/app/assets/nope.js`, and still returns the real image and the built JavaScript with status 200.
 
 [`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers the live Pages host already sends. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not recreate `agent-a-wallet-ux`.
 

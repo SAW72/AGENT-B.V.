@@ -101,6 +101,7 @@ describe("landing _redirects", () => {
     expect(rules).toEqual([
       { from: "/app", to: "/app/", status: "301" },
       { from: "/index.html", to: "/", status: "301" },
+      { from: "/app/index.html", to: "/app/", status: "301" },
       { from: "/manifest.webmanifest", to: "/app/manifest.webmanifest", status: "301" },
       { from: "/icon-192.png", to: "/app/icon-192.png", status: "301" },
       { from: "/icon-512.png", to: "/app/icon-512.png", status: "301" },
@@ -120,6 +121,7 @@ describe("landing _redirects", () => {
     expect(rules[splatAt]).toEqual({ from: "/app/*", to: "/app/", status: "200" })
     expect(rules.slice(0, splatAt)).toEqual(
       expect.arrayContaining([
+        { from: "/app/index.html", to: "/app/", status: "301" },
         { from: "/app/assets/*", to: "/app/assets/:splat", status: "200" },
         { from: "/points", to: "/app/", status: "301" },
         { from: "/claim", to: "/app/", status: "301" },
