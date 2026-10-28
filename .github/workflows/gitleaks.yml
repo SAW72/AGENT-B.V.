@@ -1,7 +1,9 @@
 name: Secrets
 
 on:
+  # Required on every pull request to main. The gitleaks job name is the ruleset context.
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 

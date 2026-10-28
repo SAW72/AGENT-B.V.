@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Required on every pull request to main. The points-worker job name is the ruleset context.
   pull_request:
+    branches: [main]
 
 # Tests only read the repo. upload-artifact@v4 authenticates with the runner token.
 permissions:
@@ -97,6 +99,7 @@ jobs:
           if-no-files-found: error
 
   points-worker:
+    name: points-worker
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
