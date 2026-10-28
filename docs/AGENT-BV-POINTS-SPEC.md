@@ -2,7 +2,7 @@
 
 **Status:** Will be a public testnet beta with open signup. Base Sepolia only. Docs only. No contract change is proposed here.
 
-Points in this spec are an off-chain record of activity on Base Sepolia (testnet). Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope. The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
+Points in this spec are an off-chain record of activity on Base Sepolia (testnet). They have no value, no token, and no promise about anything later. Chain id is `84532`. Mainnet chain ids `1` and `8453` are out of scope. The disclaimer stays exactly: "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
 
 This file is the points spec for that testnet ledger. It does not deploy anything, or change a contract, a config file, or application code. Lawyer reviews the first announcement text and a screenshot before any public post. Later posts reuse that approved text. See `docs/POINTS-ANNOUNCEMENT-DRAFT.md`.
 
@@ -492,7 +492,7 @@ Scope M and scope L are not in that list. Each needs its own plan. They are not 
 ## Out of scope
 
 - Code, config, migrations, and deploys.
-- A new on-chain ledger, a sale, or a mainnet deployment.
+- A new on-chain ledger, a token, a claim, a sale, or a mainnet deployment.
 - Scoring `Credited`, `Withdrawn`, governance swap events, Denylist logs, or Vault logs as points. Denylist logs stay enforcer signals at 0 points where the indexer spec already says so.
 - The O1–O5 and A1–A2 reputation ledgers. They keep their own spec. This file does not sum with them.
 - Choosing the multi-human threshold. That question stays open in `docs/decision-chain-spec.md`.
