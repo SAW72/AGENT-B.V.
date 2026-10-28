@@ -16,6 +16,7 @@ import {
   DEFAULT_POLL_MS,
   DEFAULT_RPC_URL,
   createDefaultRpc,
+  HEALTH_CACHE_MS,
   isRangeError,
   loadConfig,
   redact,
@@ -628,6 +629,7 @@ describe("process entry", () => {
       serve: true,
       port: 0,
       now: () => clock,
+      healthCacheMs: 0,
       onListening(info) {
         health = info;
       },
@@ -1347,6 +1349,268 @@ describe("process entry", () => {
       assert.equal(body.error, "rpc_error");
       assert.equal(JSON.stringify(body).includes("boom"), false);
     } finally {
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves /health from one short cache for every address", async () => {
+    assert.equal(HEALTH_CACHE_MS, 15_000);
+    const dir = dbDir();
+    let clock = 0;
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        once: true,
+        port: 0,
+        now: () => clock,
+        healthCacheNow: () => clock,
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "1000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      for (let index = 0; index < 2000; index += 1) {
+        const response = await fetch(running.healthUrl, {
+          headers: {
+            "x-forwarded-for": `198.51.${(index >> 8) & 255}.${index & 255}`,
+            "cf-connecting-ip": `2001:db8:${index.toString(16)}::1`,
+            "true-client-ip": `203.0.113.${index % 250}`,
+          },
+        });
+        assert.equal(response.status, 200);
+        await response.text();
+      }
+      clock = HEALTH_CACHE_MS - 1;
+      const held = await fetch(running.healthUrl, {
+        headers: { "x-forwarded-for": "203.0.113.9" },
+      });
+      assert.equal(held.status, 200);
+      await held.text();
+      clock = HEALTH_CACHE_MS;
+      const refreshed = await fetch(running.healthUrl);
+      assert.equal(refreshed.status, 503);
+      const body = await refreshed.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.error, undefined);
+      const passed = await running.pass();
+      assert.equal(passed.ok, true);
+      const afterPass = await fetch(running.healthUrl);
+      assert.equal(afterPass.status, 200);
+    } finally {
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces the health cache when the error or the block gap changes", async () => {
+    const dir = dbDir();
+    let head = ESCROW_START_BLOCK;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        once: true,
+        port: 0,
+        now: () => 5_000_000,
+        healthCacheNow: () => 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "1000",
+          POINTS_LOG_RANGE: "10",
+          POINTS_MAX_WINDOWS_PER_PASS: "1",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return head;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      const first = await fetch(running.healthUrl);
+      const firstBody = await first.json();
+      assert.equal(first.status, 200);
+      assert.equal(firstBody.error, undefined);
+      assert.equal(firstBody.behind, undefined);
+      head = ESCROW_START_BLOCK + 40;
+      const moved = await running.pass();
+      assert.equal(moved.ok, true);
+      const gapped = await fetch(running.healthUrl);
+      const gappedBody = await gapped.json();
+      assert.equal(gapped.status, 200);
+      assert.ok(gappedBody.behind > 0);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces the health cache when the error code changes", async () => {
+    const dir = dbDir();
+    let kind = "ledger";
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        now: () => 5_000_000,
+        healthCacheNow: () => 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            if (kind === "ledger") throw new PointsError("bad_log");
+            throw new Error("POINTS_LOG_RANGE must be a positive integer");
+          },
+        }),
+      });
+      assert.equal(running.ingested.error, "ledger_error");
+      const first = await fetch(running.healthUrl);
+      const firstBody = await first.json();
+      assert.equal(first.status, 503);
+      assert.equal(firstBody.error, "ledger_error");
+      kind = "config";
+      await assert.rejects(() => running.pass(), /POINTS_LOG_RANGE/);
+      const second = await fetch(running.healthUrl);
+      const secondBody = await second.json();
+      assert.equal(second.status, 503);
+      assert.equal(secondBody.error, "config_error");
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies POINTS_HEALTH_FRESHNESS_POLLS when it is not the default of 3", async () => {
+    const dir = dbDir();
+    let clock = 5_000_000;
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        once: true,
+        port: 0,
+        now: () => clock,
+        healthCacheMs: 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "1000",
+          POINTS_LOG_RANGE: "10",
+          POINTS_HEALTH_FRESHNESS_POLLS: "1",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            return [];
+          },
+        }),
+      });
+      const fresh = await fetch(running.healthUrl);
+      assert.equal(fresh.status, 200);
+      await fresh.text();
+      clock += 1_000;
+      const edge = await fetch(running.healthUrl);
+      assert.equal(edge.status, 200);
+      await edge.text();
+      clock += 1;
+      const stale = await fetch(running.healthUrl);
+      const body = await stale.json();
+      assert.equal(stale.status, 503);
+      assert.equal(body.ok, false);
+    } finally {
+      console.error = original;
+      if (running) await running.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the error label on a 503 while the next pass is still running", async () => {
+    const dir = dbDir();
+    let phase = "fail";
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markEntered;
+    const entered = new Promise((resolve) => { markEntered = resolve; });
+    const original = console.error;
+    console.error = () => {};
+    let running;
+    try {
+      running = await start({
+        serve: true,
+        port: 0,
+        healthCacheMs: 0,
+        paceNow: () => 0,
+        sleep: async () => {},
+        env: {
+          CHAIN_ID: "84532",
+          POINTS_DB_PATH: join(dir, "ledger.sqlite"),
+          POINTS_POLL_MS: "60000",
+          POINTS_LOG_RANGE: "10",
+        },
+        rpc: withCode({
+          async finalizedBlockNumber() {
+            return ESCROW_START_BLOCK;
+          },
+          async getLogs() {
+            if (phase === "fail") throw new Error("boom");
+            markEntered();
+            await gate;
+            return [];
+          },
+        }),
+      });
+      assert.equal(running.ingested.error, "rpc_error");
+      phase = "block";
+      const pending = running.pass();
+      await entered;
+      const mid = await fetch(running.healthUrl);
+      const body = await mid.json();
+      assert.equal(mid.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.error, "rpc_error");
+      release();
+      await pending;
+    } finally {
+      console.error = original;
+      if (release) release();
       if (running) await running.stop();
       rmSync(dir, { recursive: true, force: true });
     }
