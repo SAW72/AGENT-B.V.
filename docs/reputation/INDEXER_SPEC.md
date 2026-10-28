@@ -12,7 +12,7 @@ Gate: do not merge or run against live data until Blockchain Verifier APPROVE an
 | `agent-bv-sepolia-reputation` | Usage outcomes O1 to O5 and ADJ |
 | `agent-bv-sepolia-arbitrator-rep` | Arbitrator outcomes A1, A2 and ADJ |
 
-The two ledgers are never summed, in storage, API, or UI. Points are off-chain, Steward-operated, non-transferable, and may be adjusted or cancelled.
+The two ledgers are never summed, in storage, API, or UI. Points are off-chain, operator-run, non-transferable, and may be adjusted or cancelled.
 
 ## 2. Inputs
 
