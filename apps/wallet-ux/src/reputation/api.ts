@@ -130,7 +130,7 @@ function parseLinks(value: unknown): DisclaimerLinks | null {
   }
   return {
     master_disclaimer: link("master_disclaimer"),
-    bvt_securities_disclaimer: link("bvt_securities_disclaimer"),
+    legal_notice_url: link("legal_notice_url"),
     as_is: link("as_is"),
     not_investment: link("not_investment"),
     eligibility_notice: link("eligibility_notice"),

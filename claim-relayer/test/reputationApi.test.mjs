@@ -195,7 +195,9 @@ describe("reputation read API", () => {
       const config = await request(ctx.port, "GET", "/v1/reputation/config");
       assert.equal(config.status, 200);
       assert.equal(config.json.chainId, 84532);
-      assert.equal(config.json.status, "draft");
+      assert.equal(config.json.status, "locked");
+      assert.equal(config.json.points_ledger_status, "pending verification");
+      assert.equal(config.json.points_ledger, undefined);
       assert.equal(config.json.config_version, "sepolia-draft-1");
       assert.equal(config.json.rule_version, "design-v2.2");
       assert.equal(typeof config.json.product, "string");
@@ -205,10 +207,10 @@ describe("reputation read API", () => {
       assert.equal(config.json.thresholds.season_start_block.value, null);
       assert.equal(config.json.thresholds.season_start_timestamp.value, null);
       assert.equal(config.json.caps.usage_points_per_wallet_per_day.value, 20);
-      assert.equal(config.json.caps.usage_points_per_wallet_per_day.status, "draft");
-      assert.equal(config.json.caps.arbitrator_points_per_day.status, "draft");
+      assert.equal(config.json.caps.usage_points_per_wallet_per_day.status, "locked");
+      assert.equal(config.json.caps.arbitrator_points_per_day.status, "locked");
       assert.equal(config.json.thresholds.min_amount_wei.value, "100000000000000");
-      assert.equal(config.json.thresholds.min_amount_wei.status, "draft");
+      assert.equal(config.json.thresholds.min_amount_wei.status, "locked");
       assert.equal(config.json.thresholds.o2_min_create_to_release_seconds.value, 300);
       assert.equal(config.json.thresholds.o5_window_days.value, 7);
       assert.equal(keysOf(config.json).some((key) => MONEY_KEYS.test(key)), false);

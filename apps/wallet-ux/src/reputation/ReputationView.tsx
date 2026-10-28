@@ -89,9 +89,13 @@ function markIntroduced(): void {
 
 function safeHref(value: string | null): string | null {
   if (!value) return null
+  const text = value.trim()
+  if (!/^https:\/\//i.test(text)) return null
   try {
-    const url = new URL(value)
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null
+    const url = new URL(text)
+    if (url.protocol !== "https:") return null
+    if (url.username !== "" || url.password !== "") return null
+    if (!url.hostname) return null
     return url.toString()
   } catch {
     return null
@@ -245,7 +249,7 @@ function OpenItems({ links, capsAreDraft }: { links: DisclaimerLinks | null; cap
   const abuse = safeHref(links?.abuse_policy ?? null)
   const disclaimerSlots: { key: keyof DisclaimerLinks; label: string }[] = [
     { key: "master_disclaimer", label: "Master disclaimer" },
-    { key: "bvt_securities_disclaimer", label: "BVT securities disclaimer" },
+    { key: "legal_notice_url", label: "Legal notice" },
     { key: "as_is", label: "AS IS" },
     { key: "not_investment", label: "Not an investment" },
   ]

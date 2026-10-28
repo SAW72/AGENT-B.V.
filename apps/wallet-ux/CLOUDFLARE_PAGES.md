@@ -2,9 +2,9 @@
 
 The current Pages project is `agent-bv` (https://agent-bv.pages.dev). It is a Direct Upload project. It has no git connection. Cloudflare does not build it, and environment variables set in the Cloudflare dashboard are not used at build time.
 
-The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) stays live. Retire it only after a live refund passes on https://agent-bv.pages.dev. Do not delete or disable `agent-a-wallet-ux` before that. Relayer defaults now allow only https://agent-bv.pages.dev.
+The previous project `agent-a-wallet-ux` (https://agent-a-wallet-ux.pages.dev) has been deleted. That URL no longer serves the wallet. Do not recreate it. Relayer defaults allow only https://agent-bv.pages.dev.
 
-Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. The production deploy never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet unless `VITE_CLAIM_RELAYER_URL` is set, in which case a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
+Wallet UX is a static Vite app. The claim relayer stays on Render (`claim-relayer/`, service `bot-verifier-claim-relayer`). It is not a Pages or Workers app. The claim API secret is retired. The production deploy never embeds one. The page does not embed a claim secret. Escrow submits go out through the connected wallet. A successful build includes `VITE_CLAIM_RELAYER_URL`, so a refund can also be posted live to that Base Sepolia relayer. Release stays on the payer's wallet. The connected wallet signs the claim. Live submit is authorized by the wallet signature, not a shared secret.
 
 [`wrangler.toml`](wrangler.toml) records the project name and `pages_build_output_dir = "./dist"`. That file is not a git connection. Cloudflare does not read it to build the site.
 
@@ -14,7 +14,7 @@ Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is 
 
 A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
 
-Spencer is still required for mainnet, spending, outside messages, and deletes.
+Spencer is the production approver. Spencer is still required for mainnet, spending, outside messages, and deletes.
 
 Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
@@ -33,7 +33,7 @@ node scripts/guard-claim-secret.mjs dist
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
-`npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://bot-verifier-claim-relayer.onrender.com` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value does not. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset. Any RPC URL must answer `eth_chainId` with `84532`.
+`npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://bot-verifier-claim-relayer.onrender.com` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value fails the build; it does not fall back to the file. The relayer URL must be exactly `https://bot-verifier-claim-relayer.onrender.com`, `https://bot-verifier-claim-relayer.onrender.com/`, or `https://bot-verifier-claim-relayer.onrender.com/v1/claims`. The build inlines that allowlist entry. An https RPC host on the allowlist (`sepolia.base.org`) is accepted. Any other public https RPC host must answer `eth_chainId` with `84532`. Anything else fails the build. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset.
 
 Before the production upload, note the deployment ID of the live production deployment (the current `main` deployment). That ID is the rollback target. Preview deployment IDs are not rollback targets.
 
@@ -89,14 +89,14 @@ VITE_CLAIM_RELAYER_URL:
 check results:
 ```
 
-`VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set: the checked-in URL, or a non-empty shell override. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
+`VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set to exactly `https://bot-verifier-claim-relayer.onrender.com`, `https://bot-verifier-claim-relayer.onrender.com/`, or `https://bot-verifier-claim-relayer.onrender.com/v1/claims`. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health`. The relayer rollback target is the last good Render deploy ID.
 
 | Name | Where | Role |
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | Environment of the deploy command. Never a repository secret. | API token with **Pages:Edit** scope only. Wrangler uses it to upload `dist`. |
-| `CLOUDFLARE_ACCOUNT_ID` | Environment of the deploy command. Never a repository secret. | Cloudflare account that owns `agent-bv` and the still-live `agent-a-wallet-ux` project. |
-| `VITE_CLAIM_RELAYER_URL` | [`build-env.required.json`](build-env.required.json). Not a GitHub variable. | Public `https://bot-verifier-claim-relayer.onrender.com`. `npm run build` fails if the resolved value is empty. A non-empty shell value overrides the file. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. |
-| `VITE_BASE_SEPOLIA_RPC_URL` | [`build-env.required.json`](build-env.required.json). | Public `https://sepolia.base.org`. `npm run build` fails if the resolved value is empty. `npm run dev` uses that URL when the variable is unset. Any URL must answer `eth_chainId` with `84532`. |
+| `CLOUDFLARE_ACCOUNT_ID` | Environment of the deploy command. Never a repository secret. | Cloudflare account that owns `agent-bv`. |
+| `VITE_CLAIM_RELAYER_URL` | [`build-env.required.json`](build-env.required.json). Not a GitHub variable. | Public `https://bot-verifier-claim-relayer.onrender.com`. `npm run build` fails if the resolved value is empty. A non-empty shell value overrides the file only when it is exactly one of those three URLs. Any other value fails the build. The build inlines the allowlist entry. The relayer button stays off until `GET /health` is up and not paused. The connected wallet signs the claim. Do not set a claim secret. |
+| `VITE_BASE_SEPOLIA_RPC_URL` | [`build-env.required.json`](build-env.required.json). | Public `https://sepolia.base.org`, which is the RPC host allowlist. `npm run build` fails if the resolved value is empty. A public https host that is not on that allowlist must answer `eth_chainId` with `84532`. Anything else fails the build. `npm run dev` uses `https://sepolia.base.org` when the variable is unset. |
 | `VITE_CLAIM_API_SECRET` | Retired. Must not exist anywhere. | Do not set a claim secret on Pages. Not a repository secret, not an environment secret or variable, and not a Cloudflare Pages environment variable. |
 
 ### Relayer submit
@@ -105,9 +105,9 @@ The claim API secret is retired. Do not set a claim secret on Pages. Relayer aut
 
 Signed-intent auth is live in production only after cutover. The order is `claim-relayer/CUTOVER.md` in [PR #51](https://github.com/SAW72/AGENT-B.V./pull/51).
 
-### Stale workflow
+### Stale unused deploy-wallet-ux
 
-[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Deploy wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above. If that file is run anyway, its build reads [`build-env.required.json`](build-env.required.json) and does not pass `vars.VITE_CLAIM_RELAYER_URL`. An empty GitHub variable passed into the build would override the file and strip the relayer from the bundle.
+[`.github/workflows/deploy-wallet-ux.yml`](../../.github/workflows/deploy-wallet-ux.yml) is stale and unused. Its checks are outdated. A backlog fix is pending. Do not delete the file. `on` is `workflow_dispatch` only, so a push or a pull request does not publish. Do not run **Actions → Stale unused deploy-wallet-ux**. Production is the merge-SHA build and `wrangler pages deploy` above. If that file is run anyway, its build reads [`build-env.required.json`](build-env.required.json) and does not pass `vars.VITE_CLAIM_RELAYER_URL`. An empty shell value fails the build; it does not fall back to the file.
 
 ## Claim relayer
 
@@ -142,11 +142,11 @@ Do not put `PRIVATE_KEY`, `RELAYER_PRIVATE_KEY`, `SPENCER_RUN_AUTH`, `LIVE_SUBMI
 
 `BASE_SEPOLIA_RPC_URL` at the repo root is for Foundry and the claim relayer. This app does not read it.
 
-`x-claim-secret` is retired with the claim API secret. When `VITE_CLAIM_RELAYER_URL` is set, the Render service must allow https://agent-bv.pages.dev in `CORS_ORIGINS`. Relayer defaults now allow only that origin. `https://agent-a-wallet-ux.pages.dev` is refused unless the relayer env adds it. Live claims are Base Sepolia (chain id 84532) only. Ethereum mainnet and Base mainnet are refused before the request is sent. The page does not embed a claim secret.
+`x-claim-secret` is retired with the claim API secret. A successful build includes `VITE_CLAIM_RELAYER_URL`, so the Render service must allow https://agent-bv.pages.dev in `CORS_ORIGINS`. Relayer defaults now allow only that origin. `https://agent-a-wallet-ux.pages.dev` is refused. That Pages project has been deleted. Do not add the origin. Live claims are Base Sepolia (chain id 84532) only. Ethereum mainnet and Base mainnet are refused before the request is sent. The page does not embed a claim secret.
 
 ## Bundle guard
 
-`node scripts/guard-claim-secret.mjs dist` fails the deploy if `dist` contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
+`node scripts/guard-claim-secret.mjs dist` fails the deploy if `dist` or `build-env.required.json` contains the header `x-claim-secret` or the literal string `VITE_CLAIM_API_SECRET`. The scan always includes that JSON file. The header match is case-insensitive. Both markers are also rejected in these encodings: standard base64 with and without padding, URL-safe base64 with and without padding, URL-encoding, hex (lowercase and uppercase), and JSON escaping. The scan does not read a secret from the environment. There is no input that skips it. A directory target also fails when it is empty, has no files, or has no non-empty `.js` file. That failure says `no JavaScript scanned`.
 
 The `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the same `node scripts/guard-claim-secret.mjs dist` from `apps/wallet-ux` after `npm run build`. A leak fails the pull request. A clean scan logs `Claim leak scan passed`.
 
@@ -165,7 +165,7 @@ Both retired addresses also appear in the top-level `notes` string of [`src/base
 
 Before `wrangler pages deploy ... --branch=main`, note the current production deployment ID. That ID is the rollback target. If any live check fails after the production upload, roll back to that ID, then investigate the failed check. A failed preview check never reaches this upload.
 
-In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. Do not roll back or delete `agent-a-wallet-ux` from this step. That project stays live until a live refund passes on https://agent-bv.pages.dev. In **All deployments**, open the actions menu on the noted production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including `preview-<PR#>`. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
+In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. This rollback is only for `agent-bv`. The deleted project `agent-a-wallet-ux` is not a rollback target, and this step does not recreate it. In **All deployments**, open the actions menu on the noted production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including `preview-<PR#>`. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
 
 The same rollback is the Pages API call documented at [Rollback deployment](https://developers.cloudflare.com/api/resources/pages/subresources/projects/subresources/deployments/methods/rollback/). It accepts only a successful production deployment. `$DEPLOYMENT_ID` is the production deployment noted before the `main` upload, not a preview deployment:
 
@@ -183,7 +183,7 @@ The [Wrangler Pages commands](https://developers.cloudflare.com/workers/wrangler
 | --- | --- |
 | Project name | `agent-bv` |
 | Production URL | `https://agent-bv.pages.dev` |
-| Previous project | `agent-a-wallet-ux` at `https://agent-a-wallet-ux.pages.dev`, live until a live refund passes on the new site |
+| Previous project | `agent-a-wallet-ux` at `https://agent-a-wallet-ux.pages.dev`, deleted. Do not recreate it. |
 | Git connection | None. Direct Upload. |
 | Who builds | The operator, at the merge SHA, on Node 22. Cloudflare does not build. |
 | Dashboard env vars at build time | Unused. |
@@ -209,7 +209,7 @@ There is no top-level `404.html`. Without one, Pages serves the landing page wit
 
 Missing files under `/assets/` and `/app/assets/` return **404**. [`landing/assets/404.html`](landing/assets/404.html) is copied to `dist/assets/404.html` and to `dist/app/assets/404.html`. Pages serves the nearest `404.html` for a path that is not a real file and is not rewritten to a page. `wrangler pages dev` returns 404 for `/assets/nope.png` and `/app/assets/nope.js`, and still returns the real image and the built JavaScript with status 200.
 
-[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers both live Pages hosts already send. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not delete `agent-a-wallet-ux`.
+[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers the live Pages host already sends. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not recreate `agent-a-wallet-ux`.
 
 ## Address book
 

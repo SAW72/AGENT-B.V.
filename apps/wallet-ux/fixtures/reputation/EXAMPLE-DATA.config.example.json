@@ -10,81 +10,82 @@
     "rule_version": "design-v2.2",
     "product": "Agent-BV",
     "product_title": "Agent-BV (Agent Bot Verifier)",
-    "status": "draft",
+    "status": "locked",
+    "points_ledger_status": "pending verification",
     "caps": {
       "usage_points_per_wallet_per_day": {
         "value": 20,
-        "status": "draft"
+        "status": "locked"
       },
       "usage_points_per_bot_per_day": {
         "value": 20,
-        "status": "draft"
+        "status": "locked"
       },
       "escrows_per_wallet_per_day": {
         "value": 5,
-        "status": "draft"
+        "status": "locked"
       },
       "o3_per_wallet_per_day": {
         "value": 1,
-        "status": "draft"
+        "status": "locked"
       },
       "o4_per_wallet_per_day": {
         "value": 1,
-        "status": "draft"
+        "status": "locked"
       },
       "pair_per_day": {
         "value": 2,
-        "status": "draft"
+        "status": "locked"
       },
       "pair_lifetime": {
         "value": 10,
-        "status": "draft"
+        "status": "locked"
       },
       "usage_points_per_wallet_per_season": {
         "value": 500,
-        "status": "draft"
+        "status": "locked"
       },
       "arbitrator_points_per_day": {
         "value": 30,
-        "status": "draft"
+        "status": "locked"
       }
     },
     "thresholds": {
       "min_amount_wei": {
         "value": "100000000000000",
-        "status": "draft"
+        "status": "locked"
       },
       "o2_min_create_to_release_seconds": {
         "value": 300,
-        "status": "draft"
+        "status": "locked"
       },
       "o3_min_set_duration_seconds": {
         "value": 3600,
-        "status": "draft"
+        "status": "locked"
       },
       "o5_standalone_disputes_threshold": {
         "value": 3,
-        "status": "draft"
+        "status": "locked"
       },
       "o5_window_days": {
         "value": 7,
-        "status": "draft"
+        "status": "locked"
       },
       "day_boundary": {
         "value": "utc_day_by_block_timestamp",
-        "status": "draft"
+        "status": "locked"
       },
       "season_length_days": {
         "value": 90,
-        "status": "draft"
+        "status": "locked"
       },
       "season_start_block": {
         "value": null,
-        "status": "draft"
+        "status": "locked"
       },
       "season_start_timestamp": {
         "value": null,
-        "status": "draft"
+        "status": "locked"
       }
     }
   }

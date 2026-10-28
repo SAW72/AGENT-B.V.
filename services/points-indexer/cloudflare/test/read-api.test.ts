@@ -1,0 +1,435 @@
+import { reset, runInDurableObject, SELF } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import { afterEach, describe, expect, it } from "vitest";
+import sepolia from "../../../../config/reputation/sepolia.json";
+import { createReadApi, disclaimerLinks, httpsUrl, pointsEnabled } from "../src/read-api";
+import { ESCROW_START_BLOCK } from "./helpers";
+import { publicDetail } from "../src/rpc";
+
+const DISCLAIMER = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
+
+const CORS_ORIGIN = "https://agent-bv.pages.dev";
+
+function expectCors(response: Response) {
+  expect(response.headers.get("access-control-allow-origin")).toBe(CORS_ORIGIN);
+  expect(response.headers.get("access-control-allow-methods")).toContain("GET");
+  expect(response.headers.get("access-control-allow-headers")).toBe("content-type");
+  expect(response.headers.get("vary")).toBe("Origin");
+}
+
+function forbidRankAndEarn(payload: string) {
+  const lower = payload.toLowerCase();
+  expect(lower).not.toContain("rank");
+  expect(lower).not.toContain("earn");
+}
+
+function stub() {
+  return env.POINTS.get(env.POINTS.idFromName("base-sepolia"));
+}
+
+async function wallet() {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  return `0x${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+describe("points read API", () => {
+  afterEach(async () => {
+    await reset();
+  });
+
+  it("serves config, address, and history with the bundled disclaimer", async () => {
+    expect(sepolia.display.disclaimer).toBe(DISCLAIMER);
+    const address = await wallet();
+    const origin = { Origin: "https://agent-bv.pages.dev", "CF-Connecting-IP": "203.0.113.20" };
+
+    const configResponse = await SELF.fetch("https://points.test/v1/points/config", { headers: origin });
+    expect(configResponse.status).toBe(200);
+    expect(configResponse.headers.get("access-control-allow-origin")).toBe("https://agent-bv.pages.dev");
+    const config = await configResponse.json() as {
+      chainId: number;
+      status: string;
+      weights: Record<string, unknown>;
+      rule_version: string | null;
+      disclaimer: { text: string };
+    };
+    expect(config.chainId).toBe(84532);
+    expect(config.status).toBe("draft");
+    expect(config.rule_version).toBeNull();
+    expect(config.weights).toEqual({
+      first_activity: null,
+      fund: null,
+      release_or_refund: null,
+      dispute_open_or_vote: null,
+      vote: null,
+      return_day: null,
+    });
+    expect(config.disclaimer.text).toBe(DISCLAIMER);
+    forbidRankAndEarn(JSON.stringify(config));
+
+    const addressResponse = await SELF.fetch(`https://points.test/v1/points/${address}`, { headers: origin });
+    expect(addressResponse.status).toBe(200);
+    const body = await addressResponse.json() as {
+      address: string;
+      points_total: number;
+      points_withheld: boolean;
+      eligibility: { status: string; reason: string };
+      rows_count: number;
+      disclaimer: { text: string; links: Record<string, string | null> };
+    };
+    expect(body.address).toBe(address);
+    expect(body.points_total).toBe(0);
+    expect(body.points_withheld).toBe(true);
+    expect(body.eligibility).toEqual({ status: "unverified", reason: "ofac_unconfigured" });
+    expect(body.rows_count).toBe(0);
+    expect(body.disclaimer.text).toBe(sepolia.display.disclaimer);
+    expect(body.disclaimer.text).toBe(DISCLAIMER);
+    expect(body.disclaimer.links.master_disclaimer).toBeNull();
+    expect(body.disclaimer.links.legal_notice_url).toBeNull();
+    expect(body.disclaimer.links).not.toHaveProperty("bvt_securities_disclaimer");
+    forbidRankAndEarn(JSON.stringify(body));
+
+    const otherOrigin = await SELF.fetch(`https://points.test/v1/points/${address}`, {
+      headers: { Origin: "https://example.com", "CF-Connecting-IP": "203.0.113.21" },
+    });
+    expect(otherOrigin.headers.get("access-control-allow-origin")).toBeNull();
+
+    const options = await SELF.fetch(`https://points.test/v1/points/${address}`, { method: "OPTIONS", headers: origin });
+    expect(options.status).toBe(204);
+
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const insert = (block: number, logIndex: number, day: number) => {
+        state.storage.sql.exec(
+          `INSERT INTO ledger_rows(
+             seq, chain_id, contract, tx_hash, log_index, block_number, block_timestamp, utc_day,
+             wallet, action, escrow_id, points, eligibility_status, eligibility_reason, points_withheld,
+             rule_weight, counts_for_return_day
+           ) VALUES(?, 84532, ?, ?, ?, ?, 1, ?, ?, 'fund', ?, 0, 'unverified', 'ofac_unconfigured', 1, null, 0)`,
+          block,
+          address,
+          address,
+          logIndex,
+          block,
+          day,
+          address,
+          address,
+        );
+      };
+      insert(10, 1, 10);
+      insert(11, 2, 11);
+    });
+
+    const firstPage = await SELF.fetch(`https://points.test/v1/points/${address}/history?limit=1`, { headers: origin });
+    expect(firstPage.status).toBe(200);
+    const page = await firstPage.json() as {
+      items: Array<{ block_number: number; points: number; points_withheld: boolean; eligibility_reason: string }>;
+      next_cursor: string | null;
+      limit: number;
+      disclaimer: { text: string };
+    };
+    expect(page.limit).toBe(1);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].block_number).toBe(10);
+    expect(page.items[0].points).toBe(0);
+    expect(page.items[0].points_withheld).toBe(true);
+    expect(page.items[0].eligibility_reason).toBe("ofac_unconfigured");
+    expect(page.next_cursor).toBeTruthy();
+    expect(page.disclaimer.text).toBe(DISCLAIMER);
+
+    const secondPage = await SELF.fetch(
+      `https://points.test/v1/points/${address}/history?limit=1&cursor=${page.next_cursor}`,
+      { headers: { ...origin, "CF-Connecting-IP": "203.0.113.22" } },
+    );
+    const rest = await secondPage.json() as { items: Array<{ block_number: number }>; next_cursor: string | null };
+    expect(rest.items.map((item) => item.block_number)).toEqual([11]);
+    expect(rest.next_cursor).toBeNull();
+    forbidRankAndEarn(JSON.stringify(page));
+    forbidRankAndEarn(JSON.stringify(rest));
+
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.23" },
+    });
+    forbidRankAndEarn(await health.text());
+  });
+
+  it("rejects a repeated query param and a missing client address", async () => {
+    const address = await wallet();
+    const origin = "https://agent-bv.pages.dev";
+    const repeated = await SELF.fetch(`https://points.test/v1/points/${address}?cursor=a&cursor=b`, {
+      headers: { "CF-Connecting-IP": "203.0.113.30", Origin: origin },
+    });
+    expect(repeated.status).toBe(400);
+    expect(await repeated.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expect(repeated.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(repeated.headers.get("access-control-allow-methods")).toContain("GET");
+    const options = await SELF.fetch(`https://points.test/v1/points/${address}?x=1&x=2`, {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
+    expect(options.status).toBe(204);
+    expect(options.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(options.headers.get("access-control-allow-methods")).toContain("GET");
+    const healthOptions = await SELF.fetch("https://points.test/health?ready=1&ready=1", {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
+    expect(healthOptions.status).toBe(204);
+    expectCors(healthOptions);
+    const unknownOptions = await SELF.fetch("https://points.test/nope?a=1&a=2", {
+      method: "OPTIONS",
+      headers: { Origin: origin },
+    });
+    expect(unknownOptions.status).toBe(204);
+    expectCors(unknownOptions);
+    const missing = await SELF.fetch(`https://points.test/v1/points/${address}`, {
+      headers: { Origin: origin },
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({ ok: false, error: "client_address_required" });
+    expectCors(missing);
+    const unknownPath = await SELF.fetch("https://points.test/nope?a=1&a=2", {
+      headers: { Origin: origin },
+    });
+    expect(unknownPath.status).toBe(400);
+    expect(await unknownPath.json()).toEqual({ ok: false, error: "duplicate_query" });
+    expectCors(unknownPath);
+  });
+
+  it("accepts only an https link with a host and no userinfo", () => {
+    expect(httpsUrl("https://example.com/legal")).toBe("https://example.com/legal");
+    expect(httpsUrl("http://example.com/legal")).toBeNull();
+    expect(httpsUrl("")).toBeNull();
+    expect(httpsUrl("data:text/html,hi")).toBeNull();
+    expect(httpsUrl("/legal")).toBeNull();
+    expect(httpsUrl("legal")).toBeNull();
+    expect(httpsUrl("https:example.com")).toBeNull();
+    expect(httpsUrl("https://user:pass@example.com/legal")).toBeNull();
+    expect(httpsUrl("https://user@example.com/legal")).toBeNull();
+    expect(httpsUrl("HTTPS://Example.com/Legal")).toBe("https://example.com/Legal");
+    const links = disclaimerLinks({
+      master_disclaimer: "http://example.invalid/master",
+      legal_notice_url: "https://example.invalid/legal",
+      as_is: "data:text/plain,hi",
+      not_investment: "/relative",
+      eligibility_notice: "https:example.invalid",
+      abuse_policy: "HTTPS://Example.invalid/Abuse",
+    });
+    expect(links.master_disclaimer).toBeNull();
+    expect(links.legal_notice_url).toBe("https://example.invalid/legal");
+    expect(links.as_is).toBeNull();
+    expect(links.not_investment).toBeNull();
+    expect(links.eligibility_notice).toBeNull();
+    expect(links.abuse_policy).toBe("https://example.invalid/Abuse");
+  });
+
+  it("drops client addresses and header secrets from log details", () => {
+    const address = `0x${"ab".repeat(20)}`;
+    const detail = publicDetail(
+      `empty ${address} from 203.0.113.8 via 2001:db8::1 Authorization: secret hmac=abcdef http://rpc.test/base`,
+      "http://rpc.test/base",
+    );
+    expect(detail).not.toContain(address);
+    expect(detail).not.toContain("203.0.113.8");
+    expect(detail).not.toContain("2001:db8");
+    expect(detail).not.toContain("secret");
+    expect(detail).not.toContain("abcdef");
+    expect(detail).not.toContain("rpc.test");
+    expect(detail).toContain("[redacted]");
+    const tail = "dead";
+    const addressHex = "00".repeat(18) + tail;
+    const padded = `0x${"00".repeat(12)}${addressHex}`;
+    expect(addressHex).toHaveLength(40);
+    expect(padded).toHaveLength(66);
+    const paddedDetail = publicDetail(`word ${padded} end`);
+    expect(paddedDetail).not.toContain(tail);
+    expect(paddedDetail).not.toContain(addressHex);
+    expect(paddedDetail).toContain("[redacted]");
+    const extra = "ff";
+    const upper = addressHex.toUpperCase();
+    const withMore = `0x${addressHex}${extra}`;
+    const underscored = `0x${addressHex}_note`;
+    const bareUnderscore = `${addressHex}_note`;
+    const bareMore = `${addressHex}${extra}`;
+    const multiWord = `0x${"00".repeat(24)}${addressHex}`;
+    const upperPrefixed = `0X${upper}`;
+    const kept = "block 47715415 tx 12";
+    const mixed = publicDetail(`${kept} ${withMore} ${underscored} ${bareUnderscore} ${bareMore} ${upperPrefixed} ${multiWord}`);
+    expect(mixed).not.toContain(tail);
+    expect(mixed).not.toContain(upper);
+    expect(mixed).not.toContain(extra);
+    expect(mixed).toContain("47715415");
+    expect(mixed).toContain("tx 12");
+    expect(mixed).toContain("[redacted]");
+  });
+
+  it("limits by CF-Connecting-IP and ignores X-Forwarded-For", async () => {
+    const address = await wallet();
+    const path = `https://points.test/v1/points/${address}`;
+    for (let index = 0; index < 20; index += 1) {
+      const response = await SELF.fetch(path, {
+        headers: {
+          "CF-Connecting-IP": "203.0.113.8",
+          "X-Forwarded-For": "198.51.100.1",
+        },
+      });
+      expect(response.status).toBe(200);
+    }
+    const limited = await SELF.fetch(path, {
+      headers: {
+        "CF-Connecting-IP": "203.0.113.8",
+        Origin: CORS_ORIGIN,
+        "X-Forwarded-For": "198.51.100.9",
+      },
+    });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ ok: false, error: "rate_limited" });
+    expectCors(limited);
+    const stillOpen = await SELF.fetch(path, { method: "OPTIONS", headers: { Origin: CORS_ORIGIN } });
+    expect(stillOpen.status).toBe(204);
+    expectCors(stillOpen);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+
+    const other = await SELF.fetch(path, {
+      headers: {
+        "CF-Connecting-IP": "203.0.113.9",
+        "X-Forwarded-For": "203.0.113.8",
+      },
+    });
+    expect(other.status).toBe(200);
+  });
+
+  it("sends CORS on a fresh health response", async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const put = (key: string, value: string) => {
+        state.storage.sql.exec(
+          "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          key,
+          value,
+        );
+      };
+      put("last_pass_at", String(Date.now()));
+      put("chain_head", String(ESCROW_START_BLOCK));
+      put("last_scanned_block", String(ESCROW_START_BLOCK));
+    });
+    const health = await SELF.fetch("https://points.test/health", {
+      headers: { "CF-Connecting-IP": "203.0.113.81", Origin: CORS_ORIGIN },
+    });
+    expect(health.status).toBe(200);
+    expectCors(health);
+  });
+
+  it("opens the read circuit after repeated store failures", async () => {
+    const address = await wallet();
+    const api = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        getCursor: () => ({
+          last_scanned_block: null,
+          finalized_block: null,
+          pass_completed: false,
+          stale: false,
+        }),
+        getLedgerSummary: () => {
+          throw new Error("store_down");
+        },
+        listLedgerRows: () => [],
+        getConfig: () => ({ weights: {}, gates: {}, rule_version: null }),
+      },
+    });
+    for (let index = 0; index < 5; index += 1) {
+      const failed = api.handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+      expect(failed.status).toBe(500);
+      expect(failed.body).toEqual({ ok: false, error: "internal" });
+    }
+    const blocked = api.handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(blocked.status).toBe(503);
+    expect(blocked.body).toEqual({ ok: false, error: "points_unavailable" });
+  });
+
+  it("turns on only for the exact string true", () => {
+    expect(pointsEnabled(undefined)).toBe(false);
+    expect(pointsEnabled({})).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "true" })).toBe(true);
+    expect(pointsEnabled({ POINTS_ENABLED: "TRUE" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: " true " })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "1" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "yes" })).toBe(false);
+    expect(pointsEnabled({ POINTS_ENABLED: "on" })).toBe(false);
+  });
+
+  it("reports a persisted sanctions match and still withholds points", () => {
+    const address = "0x00000000000000000000000000000000000000a1";
+    const store = {
+      getCursor: () => ({
+        last_scanned_block: 1,
+        finalized_block: 1,
+        pass_completed: true,
+        stale: false,
+      }),
+      listLedgerRows: () => [],
+      getConfig: () => ({ weights: {}, gates: {}, rule_version: null }),
+    };
+    const matched = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        ...store,
+        getLedgerSummary: () => ({
+          rows_count: 2,
+          first_activity_utc_day: 1,
+          eligibility_reason: "sanctions_match",
+        }),
+      },
+    }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(matched.status).toBe(200);
+    expect(matched.body).toMatchObject({
+      points_total: 0,
+      points_withheld: true,
+      eligibility: { status: "ineligible", reason: "sanctions_match" },
+    });
+    const clear = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        ...store,
+        getLedgerSummary: () => ({ rows_count: 1, first_activity_utc_day: 1 }),
+      },
+    }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(clear.body).toMatchObject({
+      points_total: 0,
+      points_withheld: true,
+      eligibility: { status: "unverified", reason: "ofac_unconfigured" },
+    });
+  });
+
+  it("reads stored weights so a tamper shows until the bundle is applied again", async () => {
+    const tampered = {
+      first_activity: 5,
+      fund: 5,
+      release_or_refund: 5,
+      dispute_open_or_vote: 5,
+      vote: 5,
+      return_day: 5,
+    };
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO meta(key, value) VALUES('weights', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        JSON.stringify(tampered),
+      );
+    });
+    const tamperedResponse = await SELF.fetch("https://points.test/v1/points/config", {
+      headers: { "CF-Connecting-IP": "203.0.113.31" },
+    });
+    const tamperedBody = await tamperedResponse.json() as { weights: Record<string, unknown> };
+    expect(tamperedBody.weights).toEqual(tampered);
+    await runInDurableObject(stub(), async (_instance, state) => {
+      const { refreshBundled } = await import("../src/ledger");
+      refreshBundled(state.storage.sql);
+    });
+    const restored = await SELF.fetch("https://points.test/v1/points/config", {
+      headers: { "CF-Connecting-IP": "203.0.113.32" },
+    });
+    const restoredBody = await restored.json() as { weights: Record<string, number | null> };
+    expect(restoredBody.weights.first_activity).toBeNull();
+    expect(restoredBody.weights.fund).toBeNull();
+    expect(restoredBody.weights.return_day).toBeNull();
+  });
+});

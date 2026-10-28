@@ -615,7 +615,9 @@ function paceFailure(result) {
  * continues. A reported finalized head behind the stored head scans nothing.
  * A non-array getLogs result does not move the cursor. When the client has
  * getBlock, the window commits only after headers and receipt logs agree.
- * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, onListening?: Function, onIndexer?: Function }} [options]
+ * `sanctionsFetch` refreshes the local OFAC cache before a rebuild. Leave it
+ * unset in tests so they do not dial the list.
+ * @param {{ rpc?: object, env?: NodeJS.ProcessEnv, config?: object, once?: boolean, serve?: boolean, port?: number, now?: () => number, paceNow?: () => number, wallNow?: () => number, sleep?: (ms: number) => Promise<void>, sanctionsFetch?: typeof fetch, onListening?: Function, onIndexer?: Function }} [options]
  */
 export async function start(options = {}) {
   const cfg = assertConfig(options.config ?? loadConfig(options.env ?? process.env));
@@ -968,6 +970,17 @@ export async function start(options = {}) {
     // links, and derived rows, then renumbers seq. A partial replay is not wired.
     // This pass skips that replay when it inserted no raw log and the finalized
     // head did not move over a stored log. A failed replay stays due on the next pass.
+    if (indexer && typeof options.sanctionsFetch === "function") {
+      try {
+        const outcome = await indexer.refreshSanctions({
+          fetch: options.sanctionsFetch,
+          now: wallNow(),
+        });
+        if (outcome?.refreshed) dirty = true;
+      } catch {
+        console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      }
+    }
     let rebuilds = 0;
     if (dirty) {
       status.ledgerStale = true;
@@ -1103,7 +1116,7 @@ function invokedDirectly() {
 }
 
 if (invokedDirectly()) {
-  start({ serve: true }).catch((error) => {
+  start({ serve: true, sanctionsFetch: globalThis.fetch }).catch((error) => {
     const rpcUrl = blank(process.env.BASE_SEPOLIA_RPC_URL) ? DEFAULT_RPC_URL : String(process.env.BASE_SEPOLIA_RPC_URL).trim();
     logFailure(error, rpcUrl);
     process.exit(1);

@@ -18,10 +18,16 @@
 # relayer stays warm. The app still hard-refuses mainnet (chain ids 1 and 8453).
 # Do not set a mainnet CHAIN_ID in this file.
 #
-# Single web instance. Quote reservations are in memory. Live-claim (sender, nonce)
-# pairs are a JSONL file at INTENT_NONCE_PATH. Neither is shared across processes.
-# The filesystem is ephemeral. CLAIM_LOG_PATH and INTENT_NONCE_PATH under /tmp are
-# lost on restart or spin-down.
+# Single web instance. Quote reservations stay in memory. Abuse counters are a
+# JSON file at ABUSE_STATE_PATH. Live-claim (sender, nonce) pairs are a JSONL
+# file at INTENT_NONCE_PATH. A process restart on the same instance reloads
+# both files. They are not shared across processes.
+# Render free has no persistent disk. /var/data is the paid-disk mount and is
+# not writable on this plan, so ABUSE_STATE_PATH, INTENT_NONCE_PATH, and
+# CLAIM_LOG_PATH all stay under /tmp/claim-relayer. A spin-down or deploy drops
+# /tmp. This blueprint does not attach a disk and does not change plan.
+# A failed write fails the claim. The budget and the nonce are not treated as
+# recorded.
 # Never put RELAYER_PRIVATE_KEY in git.
 # LIVE_SUBMIT and SPENCER_RUN_AUTH stay 0 (fixture mode). Unlock both to 1 in the
 # dashboard, with CHAIN_ID=84532, for Base Sepolia claim submits. Leave that unlock
@@ -69,6 +75,8 @@ services:
         value: "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861"
       - key: CLAIM_LOG_PATH
         value: /tmp/claim-relayer/claims.jsonl
+      - key: ABUSE_STATE_PATH
+        value: /tmp/claim-relayer/abuse-state.json
       - key: INTENT_NONCE_PATH
         value: /tmp/claim-relayer/intent-nonces.jsonl
       - key: ERC1271_ENABLED

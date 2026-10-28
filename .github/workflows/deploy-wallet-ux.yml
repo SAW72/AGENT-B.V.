@@ -1,12 +1,12 @@
-# Manual Cloudflare Pages upload for the wallet UX.
-# Actions → Deploy wallet-ux → Run workflow, on main.
+# Stale unused workflow. Do not run it. Production is the merge-SHA wrangler deploy in apps/wallet-ux/CLOUDFLARE_PAGES.md.
+# Actions → Stale unused deploy-wallet-ux → Run workflow, on main.
 # workflow_dispatch only: a push or pull request does not publish.
 # Node.js 22 matches apps/wallet-ux/.node-version and the wallet-ux job in ci.yml.
 # There is no .nvmrc and package.json has no engines field.
 # The claim API secret is retired. This workflow has no input that can embed it.
 # A non-main ref skips this job. The first step fails the job if a run still starts.
 
-name: Deploy wallet-ux
+name: Stale unused deploy-wallet-ux
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         working-directory: .
         run: |
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "Deploy wallet-ux only publishes from refs/heads/main. This run is ${GITHUB_REF}."
+            echo "Stale unused deploy-wallet-ux only publishes from refs/heads/main. This run is ${GITHUB_REF}."
             exit 1
           fi
           echo "github.ref is refs/heads/main."
@@ -58,13 +58,13 @@ jobs:
           if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
             echo "CLOUDFLARE_API_TOKEN is set."
           else
-            echo "CLOUDFLARE_API_TOKEN is empty. Store it as a secret on the production GitHub environment only, never as a repository secret. Use the Pages:Edit scope only. Spencer: delete any existing repository-level copy before running Deploy wallet-ux."
+            echo "CLOUDFLARE_API_TOKEN is empty. Store it as a secret on the production GitHub environment only, never as a repository secret. Use the Pages:Edit scope only. Spencer: delete any existing repository-level copy before running Stale unused deploy-wallet-ux."
             missing=1
           fi
           if [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "CLOUDFLARE_ACCOUNT_ID is set."
           else
-            echo "CLOUDFLARE_ACCOUNT_ID is empty. Store it as a secret on the production GitHub environment only, never as a repository secret. Spencer: delete any existing repository-level copy before running Deploy wallet-ux."
+            echo "CLOUDFLARE_ACCOUNT_ID is empty. Store it as a secret on the production GitHub environment only, never as a repository secret. Spencer: delete any existing repository-level copy before running Stale unused deploy-wallet-ux."
             missing=1
           fi
           if [ "$missing" -ne 0 ]; then
@@ -94,6 +94,7 @@ jobs:
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/guard-escrow-addresses.mjs dist
 
       - name: Reject retired claim-secret markers
+        # Also scans apps/wallet-ux/build-env.required.json. The script appends that file.
         run: node scripts/guard-claim-secret.mjs dist
 
       - name: Reject non-ASCII dashes in the claim domain name
