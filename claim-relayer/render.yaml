@@ -93,5 +93,9 @@ services:
         sync: false
       - key: SANCTIONS_RELEASE_ADMINS
         sync: false
+      - key: SANCTIONS_DB_PATH
+        sync: false
+      - key: SCREEN_SIWE_DOMAIN
+        sync: false
       - key: CORS_ORIGINS
         value: "https://agent-bv.pages.dev,http://localhost:5173,http://127.0.0.1:5173"

@@ -102,9 +102,13 @@ export function sha256Utf8(text) {
   return sha256Hex(new TextEncoder().encode(String(text)));
 }
 
-export function hmacSha256Hex(key, message) {
-  const enc = new TextEncoder();
-  let keyBytes = enc.encode(String(key));
+function asBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  return new TextEncoder().encode(String(value ?? ""));
+}
+
+export function hmacSha256(key, message) {
+  let keyBytes = asBytes(key);
   if (keyBytes.length > 64) keyBytes = sha256Bytes(keyBytes);
   const ipad = new Uint8Array(64);
   const opad = new Uint8Array(64);
@@ -114,8 +118,47 @@ export function hmacSha256Hex(key, message) {
     ipad[i] ^= 0x36;
     opad[i] ^= 0x5c;
   }
-  const inner = sha256Bytes(concat(ipad, enc.encode(String(message))));
-  return hex(sha256Bytes(concat(opad, inner)));
+  const inner = sha256Bytes(concat(ipad, asBytes(message)));
+  return sha256Bytes(concat(opad, inner));
+}
+
+export function hmacSha256Hex(key, message) {
+  return hex(hmacSha256(key, message));
+}
+
+export const WALLET_HKDF_SALT = "abv-wallet-hkdf-v1";
+export const WALLET_HMAC_INFO = "abv-wallet-hmac-v1";
+export const WALLET_AES_INFO = "abv-wallet-aes-v1";
+
+/** RFC 5869 HKDF-SHA256. Salt and info are domain strings, not secrets. */
+export function hkdfSha256(ikm, salt, info, length = 32) {
+  const saltBytes = asBytes(salt);
+  const prk = hmacSha256(saltBytes.length === 0 ? new Uint8Array(32) : saltBytes, asBytes(ikm));
+  const infoBytes = asBytes(info);
+  const out = new Uint8Array(length);
+  let prev = new Uint8Array(0);
+  let offset = 0;
+  let counter = 1;
+  while (offset < length && counter < 256) {
+    const block = new Uint8Array(prev.length + infoBytes.length + 1);
+    block.set(prev, 0);
+    block.set(infoBytes, prev.length);
+    block[block.length - 1] = counter;
+    prev = hmacSha256(prk, block);
+    const take = Math.min(prev.length, length - offset);
+    out.set(prev.subarray(0, take), offset);
+    offset += take;
+    counter += 1;
+  }
+  return out;
+}
+
+export function walletHmacKey(pepper) {
+  return hkdfSha256(pepper, WALLET_HKDF_SALT, WALLET_HMAC_INFO, 32);
+}
+
+export function walletAesKey(pepper) {
+  return hkdfSha256(pepper, WALLET_HKDF_SALT, WALLET_AES_INFO, 32);
 }
 
 function concat(left, right) {

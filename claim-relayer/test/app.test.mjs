@@ -890,6 +890,8 @@ describe("claim relayer HTTP", () => {
           RELAYER_PRIVATE_KEY: SECRET,
           CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
+          SANCTIONS_DB_PATH: join(dir, "sanctions.sqlite"),
+          SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
         const health = await request(port, "GET", "/health");
@@ -944,6 +946,8 @@ describe("claim relayer HTTP", () => {
           KILL_SWITCH: "0",
           CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
+          SANCTIONS_DB_PATH: join(dir, "sanctions.sqlite"),
+          SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
         const health = await request(port, "GET", "/health");

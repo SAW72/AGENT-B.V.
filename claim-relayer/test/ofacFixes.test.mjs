@@ -17,6 +17,7 @@ import { createRateLimiter } from "../reputation/rateLimit.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
 import { createSanctionsGate } from "../sanctionsGate.mjs";
+import { postScreen, screenSigner } from "./screenSession.mjs";
 import {
   PUBLIC_DENIAL_MESSAGE,
   SANCTIONS_CLEAR_RETENTION_MS,
@@ -156,10 +157,20 @@ describe("account wallet screen", () => {
   const now = 1_800_000_000_000;
 
   function gate(addresses = [LISTED]) {
-    return createSanctionsGate({
+    const open = createSanctionsGate({
       pepper: TEST_PEPPER,
       now: () => now,
       screen: screenFromAddressList(addresses, now, { minAddresses: 1, listVersion: "acct" }),
+    });
+    const signup = open.signup.bind(open);
+    const link = open.link.bind(open);
+    const change = open.change.bind(open);
+    const unlink = open.unlink.bind(open);
+    return Object.assign(open, {
+      signup: (body) => signup({ ...body, proven: true }),
+      link: (body) => link({ ...body, proven: true }),
+      change: (body) => change({ ...body, proven: true }),
+      unlink: (body) => unlink({ ...body, proven: true }),
     });
   }
 
@@ -191,7 +202,7 @@ describe("account wallet screen", () => {
 
   it("fails closed when the list is down and still denies a stored match", async () => {
     const open = createSanctionsGate({ pepper: TEST_PEPPER, now: () => now });
-    const down = await open.signup({ accountId: "acct-5", wallet: CLEAR });
+    const down = await open.signup({ accountId: "acct-5", wallet: CLEAR, proven: true });
     assert.equal(down.http, 403);
     assert.equal(down.decision.result, "unavailable");
     const remembered = gate();
@@ -368,10 +379,7 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
       assert.equal(denied.raw.toLowerCase().includes("sanction"), false);
       assert.equal(denied.raw.includes("SDN"), false);
       assert.equal(broadcasts, 0);
-      const signed = await request(server.address().port, "POST", "/v1/screen/signup", {
-        accountId: "person-1",
-        wallet: CLEAR,
-      });
+      const signed = await postScreen(request, server.address().port, "signup", screenSigner(), "person-1");
       assert.equal(signed.status, 200);
       assert.equal(signed.json.status, "unverified");
       assert.equal(logs.join("\n").includes(CLEAR), false);
@@ -391,8 +399,8 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
         accountId: "bypass",
         wallet: "not-an-address",
       });
-      assert.equal(response.status, 403);
-      assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
+      assert.equal(response.status, 401);
+      assert.equal(response.json.error, "unproven");
     } finally {
       await ctx.close();
     }
@@ -474,7 +482,7 @@ describe("false-positive release", () => {
       now: () => now,
       screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
     });
-    await open.signup({ accountId: "acct-fp", wallet: LISTED });
+    await open.signup({ accountId: "acct-fp", wallet: LISTED, proven: true });
     assert.equal(open.release(LISTED, "ops-1").error, "release_refused");
     assert.equal(open.blocks(LISTED), true);
     open.replace(screenFromAddressList([], now, { minAddresses: 1, listVersion: "down" }));
@@ -553,7 +561,7 @@ describe("false-positive release", () => {
     await once(server, "listening");
     const port = server.address().port;
     try {
-      await request(port, "POST", "/v1/screen/signup", { accountId: "acct-http", wallet: LISTED });
+      await sanctions.signup({ accountId: "acct-http", wallet: LISTED, proven: true });
       const missing = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED, actor: "ops-1" });
       assert.equal(missing.status, 401);
       assert.equal(missing.json.error, "unauthorized");
@@ -658,10 +666,7 @@ describe("authenticated edge country", () => {
       deps: { edgeCountry: "US" },
     });
     try {
-      const allowed = await request(ctx.port, "POST", "/v1/screen/signup", {
-        accountId: "edge-us",
-        wallet: CLEAR,
-      }, {
+      const allowed = await postScreen(request, ctx.port, "signup", screenSigner(), "edge-us", {
         "x-relayer-edge-auth": EDGE_AUTH,
         "cf-ipcountry": "US",
       });

@@ -78,7 +78,7 @@ export function createCors(allowedOrigins) {
   );
   return function corsHeaders(req) {
     const headers = {
-      "access-control-allow-headers": "content-type,x-admin-secret,authorization",
+      "access-control-allow-headers": "content-type,x-admin-secret,authorization,x-screen-session",
       "access-control-allow-methods": "GET,POST,OPTIONS",
       vary: "Origin",
     };
@@ -253,6 +253,10 @@ export function createClaimRelayer(deps) {
     typeof deps.adminRateLimit === "function"
       ? deps.adminRateLimit
       : createRateLimiter({ windowMs: 60_000, max: 30, clock: now });
+  const limitScreen =
+    typeof deps.screenRateLimit === "function"
+      ? deps.screenRateLimit
+      : createRateLimiter({ windowMs: 60_000, max: 30, clock: now });
 
   function refuseIfKilled(res, req) {
     if (!killSwitch.isOn()) return false;
@@ -414,6 +418,13 @@ export function createClaimRelayer(deps) {
         }
       }
 
+      if (path === "/v1/screen" || path.startsWith("/v1/screen/")) {
+        if (!limitScreen(clientIp(req))) {
+          sendJson(res, req, 429, { ok: false, error: "rate_limited", retryAfter: 60 }, corsHeaders);
+          return;
+        }
+      }
+
       if (req.method === "POST" && (path === "/v1/admin/pause" || path === "/v1/admin/unpause")) {
         if (!config.adminSecret) {
           sendJson(
@@ -445,6 +456,24 @@ export function createClaimRelayer(deps) {
         return;
       }
 
+      if (req.method === "POST" && path === "/v1/admin/sanctions/untie") {
+        const admin = authorizeReleaseAdmin(req, config.sanctionsReleaseAdmins);
+        if (!admin.ok) {
+          sendJson(res, req, 401, { ok: false, error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const body = await readBody(req);
+        const result = sanctions.dropTie(body.accountId, body.wallet, admin.actor);
+        sendJson(
+          res,
+          req,
+          result.ok ? 200 : result.http,
+          result.ok ? { ok: true } : { ok: false, error: result.error },
+          corsHeaders,
+        );
+        return;
+      }
+
       if (req.method === "POST" && path === "/v1/admin/sanctions/release") {
         const admin = authorizeReleaseAdmin(req, config.sanctionsReleaseAdmins);
         if (!admin.ok) {
@@ -463,22 +492,40 @@ export function createClaimRelayer(deps) {
         return;
       }
 
-      if (req.method === "POST" && screenRoute(path)) {
-        const body = await readBody(req);
+      if (req.method === "POST" && (path === "/v1/screen/nonce" || screenRoute(path))) {
         if (locationDenied(req)) {
           denyScreen(res, req);
           return;
         }
+        if (path === "/v1/screen/nonce") {
+          const issued = sanctions.issueNonce();
+          sendJson(res, req, 200, { ok: true, nonce: issued.nonce, expiresAt: issued.expiresAt }, corsHeaders);
+          return;
+        }
+        const body = await readBody(req);
         const op = screenRoute(path);
-        const payload = op === "change" ? { ...body, wallet: body.nextWallet } : body;
-        const result = await sanctions[op](payload);
-        sendJson(
-          res,
-          req,
-          result.ok ? 200 : 403,
-          result.ok ? { ok: true, status: "unverified" } : { ok: false, message: PUBLIC_DENIAL_MESSAGE },
-          corsHeaders,
-        );
+        const auth = await sanctions.verifyScreen(op, body, headerValue(req, "x-screen-session"), {
+          domain: config.screenSiweDomain,
+          chainId: config.chainId,
+        });
+        if (!auth.ok) {
+          sendJson(res, req, 401, { ok: false, error: "unproven" }, corsHeaders);
+          return;
+        }
+        const result = await sanctions[op]({
+          accountId: auth.accountId,
+          wallet: auth.wallet,
+          proven: true,
+        });
+        if (result.http === 401) {
+          sendJson(res, req, 401, { ok: false, error: "unproven" }, corsHeaders);
+          return;
+        }
+        const payload = result.ok
+          ? { ok: true, status: "unverified" }
+          : { ok: false, message: PUBLIC_DENIAL_MESSAGE };
+        if (op === "signup" && result.ok) payload.session = sanctions.sessionFor(auth.accountId, auth.wallet);
+        sendJson(res, req, result.ok ? 200 : 403, payload, corsHeaders);
         return;
       }
 

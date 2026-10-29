@@ -1,5 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { normalizeSanctionsAddress } from "./sanctions.mjs";
+import { sha256Utf8 } from "./sha256.mjs";
 
 const ALLOWED = new Set([
   "event",
@@ -61,6 +63,12 @@ export function sanitizeLogRecord(record) {
       continue;
     }
     if (typeof value === "string") {
+      if (key === "payer" || key === "payee") {
+        const normalized = normalizeSanctionsAddress(value);
+        if (!normalized) continue;
+        out[key] = sha256Utf8(normalized);
+        continue;
+      }
       if (/private[_-]?key|secret|mnemonic|seed phrase/i.test(value)) continue;
       const limit = key === "calldata" ? 4096 : 300;
       out[key] = value.slice(0, limit);

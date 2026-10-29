@@ -353,6 +353,7 @@ export function loadConfig(env = process.env) {
     adminSecret: String(env.ADMIN_SECRET || "").trim(),
     sanctionsReleaseAdmins: parseReleaseAdmins(env.SANCTIONS_RELEASE_ADMINS),
     relayerEdgeAuth: String(env.RELAYER_EDGE_AUTH || "").trim(),
+    screenSiweDomain: String(env.SCREEN_SIWE_DOMAIN || "").trim() || "agent-bv.pages.dev",
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),

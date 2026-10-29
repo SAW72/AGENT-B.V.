@@ -18,6 +18,7 @@ import {
   SANCTIONS_READ_WALLETS,
 } from "./sanctions.mjs";
 import { SANCTIONS_CLEAR_RETENTION_MS, SANCTIONS_MATCH_RETENTION_MS } from "./sanctions.mjs";
+import { walletAesKey } from "./sha256.mjs";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -61,25 +62,50 @@ function b64ToBytes(value) {
   return out;
 }
 
-async function aesKey(pepper) {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(pepper)));
-  return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
+function sealAad(accountId, walletHash) {
+  const account = encoder.encode(String(accountId || ""));
+  const hash = encoder.encode(String(walletHash || ""));
+  const out = new Uint8Array(8 + account.length + hash.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, account.length);
+  view.setUint32(4, hash.length);
+  out.set(account, 8);
+  out.set(hash, 8 + account.length);
+  return out;
 }
 
-export async function sealWallet(pepper, wallet) {
+async function aesKey(pepper) {
+  const raw = walletAesKey(pepper);
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+export async function sealWallet(pepper, wallet, binding) {
   if (typeof pepper !== "string" || pepper.length === 0) throw new Error("pepper_missing");
+  const accountId = String(binding?.accountId || "");
+  const walletHash = String(binding?.walletHash || "");
+  if (!accountId || !walletHash) throw new Error("seal_binding");
   const key = await aesKey(pepper);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(wallet)));
+  const cipher = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: sealAad(accountId, walletHash) },
+      key,
+      encoder.encode(wallet),
+    ),
+  );
   return `${bytesToB64(iv)}.${bytesToB64(cipher)}`;
 }
 
-export async function openWallet(pepper, sealed) {
+export async function openWallet(pepper, sealed, binding) {
   const parts = String(sealed || "").split(".");
   if (parts.length !== 2) throw new Error("sealed_wallet");
   const key = await aesKey(pepper);
   const plain = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: b64ToBytes(parts[0]) },
+    {
+      name: "AES-GCM",
+      iv: b64ToBytes(parts[0]),
+      additionalData: sealAad(binding?.accountId, binding?.walletHash),
+    },
     key,
     b64ToBytes(parts[1]),
   );
@@ -162,7 +188,7 @@ async function rememberLink(sql, input, wallet) {
   if (!normalized) throw new Error("wallet");
   const hash = walletHashHex(input.pepper, normalized);
   if (!hash) throw new Error("pepper_missing");
-  const sealed = await sealWallet(input.pepper, normalized);
+  const sealed = await sealWallet(input.pepper, normalized, { accountId: input.accountId, walletHash: hash });
   const now = input.now ?? Date.now();
   sql.run(
     `INSERT INTO sanctions_account_wallets(account_id, wallet_hash, wallet_sealed, linked_at, unlinked_at)
@@ -227,8 +253,22 @@ function requireAccount(input) {
   return accountId;
 }
 
+function requireProven(input) {
+  if (input?.proven !== true) {
+    const error = new Error("unproven");
+    error.code = "unproven";
+    throw error;
+  }
+}
+
+function refused(error) {
+  if (error && error.code === "unproven") return { ok: false, http: 401, error: "unproven" };
+  return deny(unavailable());
+}
+
 export async function signupAccount(sql, screen, input) {
   try {
+    requireProven(input);
     const accountId = requireAccount(input);
     const scoped = { ...input, accountId, decisionPoint: "signup" };
     const decision = guardDecision(screen, input.wallet);
@@ -242,13 +282,14 @@ export async function signupAccount(sql, screen, input) {
     if (accountHasMatch(sql, accountId)) return deny({ result: "match", reason: SANCTIONS_MATCH, persisted: true });
     await rememberLink(sql, scoped, input.wallet);
     return allowUnverified(decision);
-  } catch {
-    return deny(unavailable());
+  } catch (error) {
+    return refused(error);
   }
 }
 
 export async function linkWallet(sql, screen, input) {
   try {
+    requireProven(input);
     const accountId = requireAccount(input);
     const scoped = { ...input, accountId, decisionPoint: input.decisionPoint || "link" };
     const decision = guardDecision(screen, input.wallet);
@@ -267,8 +308,8 @@ export async function linkWallet(sql, screen, input) {
     }
     await rememberLink(sql, scoped, input.wallet);
     return allowUnverified(decision);
-  } catch {
-    return deny(unavailable());
+  } catch (error) {
+    return refused(error);
   }
 }
 
@@ -278,6 +319,7 @@ export async function changeWallet(sql, screen, input) {
 
 export async function unlinkWallet(sql, screen, input) {
   try {
+    requireProven(input);
     const accountId = requireAccount(input);
     const normalized = normalizeSanctionsAddress(input.wallet);
     const hash = walletHashHex(input.pepper, normalized);
@@ -296,18 +338,21 @@ export async function unlinkWallet(sql, screen, input) {
     const decision = guardDecision(screen, normalized);
     if (decision.result !== "clear") return deny(decision);
     return allowUnverified(decision);
-  } catch {
-    return deny(unavailable());
+  } catch (error) {
+    return refused(error);
   }
 }
 
 export async function rescreenLinkedWallets(sql, screen, input) {
-  const rows = sql.all("SELECT account_id, wallet_sealed FROM sanctions_account_wallets");
+  const rows = sql.all("SELECT account_id, wallet_hash, wallet_sealed FROM sanctions_account_wallets");
   let checked = 0;
   for (const row of rows) {
     let wallet = "";
     try {
-      wallet = await openWallet(input.pepper, row.wallet_sealed);
+      wallet = await openWallet(input.pepper, row.wallet_sealed, {
+        accountId: row.account_id,
+        walletHash: row.wallet_hash,
+      });
     } catch {
       sql.run(
         `INSERT INTO sanctions_blocks(account_id, wallet_hash, reason, blocked_at) VALUES(?, ?, ?, ?)`,
@@ -387,6 +432,68 @@ export function releaseFalsePositive(sql, screen, input) {
   }
   if (screen.persisted instanceof Set) screen.persisted.delete(normalized);
   if (screen.memo instanceof Map) screen.memo.delete(normalized);
+  return { ok: true, http: 200 };
+}
+
+const TIE_AUDIT_SQL =
+  `INSERT INTO sanctions_tie_audit(account_id, wallet_hash, outcome, acted_at, actor) VALUES(?, ?, ?, ?, ?)`;
+
+/**
+ * Admin removal of one account-wallet tie. The audit insert is append-only.
+ * A direct sanctions_wallets match is left in place.
+ */
+export function dropAccountTie(sql, screen, input) {
+  const actor = releaseActor(input?.actor);
+  const at = Number.isFinite(input?.now) ? input.now : Date.now();
+  let accountId = "";
+  try {
+    accountId = requireAccount(input);
+  } catch {
+    accountId = "";
+  }
+  const normalized = normalizeSanctionsAddress(input?.wallet);
+  const hash = walletHashHex(input?.pepper, normalized);
+  if (!actor || !accountId || !normalized || !hash) {
+    return { ok: false, http: 403, error: "untie_refused" };
+  }
+  const existing = sql.get(
+    `SELECT 1 AS hit FROM sanctions_account_wallets
+     WHERE account_id = ? AND wallet_hash = ?`,
+    accountId,
+    hash,
+  );
+  sql.exec("BEGIN IMMEDIATE");
+  try {
+    if (!existing) {
+      sql.run(TIE_AUDIT_SQL, accountId, hash, "untie_absent", at, actor);
+      sql.exec("COMMIT");
+      return { ok: false, http: 404, error: "untie_absent" };
+    }
+    sql.run(
+      "DELETE FROM sanctions_account_wallets WHERE account_id = ? AND wallet_hash = ?",
+      accountId,
+      hash,
+    );
+    const still = sql.get(
+      `SELECT 1 AS hit
+       FROM sanctions_account_wallets link
+       JOIN sanctions_wallets match ON match.wallet_hash = link.wallet_hash
+       WHERE link.account_id = ?
+       LIMIT 1`,
+      accountId,
+    );
+    if (!still) sql.run("DELETE FROM sanctions_blocks WHERE account_id = ?", accountId);
+    sql.run(TIE_AUDIT_SQL, accountId, hash, "untied", at, actor);
+    sql.exec("COMMIT");
+  } catch (error) {
+    try {
+      sql.exec("ROLLBACK");
+    } catch {
+      // The transaction is already closed.
+    }
+    throw error;
+  }
+  if (screen?.memo instanceof Map) screen.memo.delete(normalized);
   return { ok: true, http: 200 };
 }
 

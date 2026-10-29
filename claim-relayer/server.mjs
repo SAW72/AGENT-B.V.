@@ -1,7 +1,10 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { createClaimRelayer } from "./app.mjs";
 import { createSepoliaBroadcaster } from "./broadcast.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, loadConfig } from "./config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, httpError, loadConfig } from "./config.mjs";
 import { createAbuseGuard } from "./abuseLimits.mjs";
 import { createClaimLog } from "./claimLog.mjs";
 import { createRpcEscrowChain, httpRpcRequest } from "./escrowChain.mjs";
@@ -9,6 +12,15 @@ import { createFileIntentNonceStore } from "./intentNonceStore.mjs";
 import { createKillSwitch } from "./killSwitch.mjs";
 import { createNonceStore } from "./nonceStore.mjs";
 import { createSanctionsGate } from "./sanctionsGate.mjs";
+import { startSanctionsRefresh } from "./sanctionsRefresh.mjs";
+
+export function assertFileSanctionsDb(value) {
+  const dbPath = String(value || "").trim();
+  if (!dbPath || dbPath === ":memory:" || dbPath.includes("mode=memory")) {
+    throw httpError(500, "sanctions_db_path_required");
+  }
+  return dbPath;
+}
 
 /**
  * Process entry. The relayer key is passed into the broadcaster only when live
@@ -16,6 +28,9 @@ import { createSanctionsGate } from "./sanctionsGate.mjs";
  */
 export function startServer(env = process.env) {
   const config = loadConfig(env);
+  const dbPath = assertFileSanctionsDb(env.SANCTIONS_DB_PATH);
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const sanctionsDb = new DatabaseSync(dbPath);
   const killSwitch = createKillSwitch({ initial: config.killSwitchInitial });
   const nonceStore = createNonceStore();
   const claimLog = createClaimLog({ filePath: config.claimLogPath });
@@ -36,6 +51,12 @@ export function startServer(env = process.env) {
     : null;
   // No default country. Public routes deny until RELAYER_EDGE_AUTH matches
   // x-relayer-edge-auth and the proxy supplies the country header.
+  const sanctions = createSanctionsGate({
+    pepper: typeof env.WALLET_HASH_PEPPER === "string" ? env.WALLET_HASH_PEPPER : "",
+    db: sanctionsDb,
+    siweDomain: config.screenSiweDomain,
+    chainId: config.chainId,
+  });
   const server = createClaimRelayer({
     config,
     killSwitch,
@@ -45,10 +66,15 @@ export function startServer(env = process.env) {
     chain,
     claimLog,
     broadcaster,
-    sanctions: createSanctionsGate({
-      pepper: typeof env.WALLET_HASH_PEPPER === "string" ? env.WALLET_HASH_PEPPER : "",
-    }),
+    sanctions,
   });
+  const refresh = String(env.SANCTIONS_REFRESH ?? "1") === "0"
+    ? { started: Promise.resolve(), stop() {} }
+    : startSanctionsRefresh(sanctions);
+  server.on("close", () => {
+    refresh.stop();
+  });
+  server.sanctionsRefreshStarted = refresh.started;
   const mode = config.liveSubmit.allowed ? "live" : "fixture";
   if (config.escrowRetired) {
     console.error(

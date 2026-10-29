@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createClaimLog, sanitizeLogRecord } from "../claimLog.mjs";
+import { sha256Utf8 } from "../sha256.mjs";
 
 describe("claim JSONL log", () => {
   it("drops secrets and nested objects", () => {
@@ -16,7 +17,12 @@ describe("claim JSONL log", () => {
       nested: { privateKey: "hidden" },
       note: "contains private_key material",
     });
-    assert.deepEqual(clean, { event: "quote", claimId: "claim-1", payer: "0xabc" });
+    assert.deepEqual(clean, { event: "quote", claimId: "claim-1" });
+    const wallet = "0x5555555555555555555555555555555555555555";
+    const hashed = sanitizeLogRecord({ event: "quote", payer: wallet, payee: "not-a-wallet" });
+    assert.equal(hashed.payer, sha256Utf8(wallet));
+    assert.equal("payee" in hashed, false);
+    assert.equal(JSON.stringify(hashed).includes(wallet), false);
   });
 
   it("appends one JSON object per line", async () => {

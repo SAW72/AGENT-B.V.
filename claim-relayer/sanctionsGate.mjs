@@ -11,9 +11,15 @@ import {
   changeWallet,
   unlinkWallet,
   releaseFalsePositive,
+  dropAccountTie,
   walletBlockedByAccount,
   guardDecision,
 } from "./accountScreen.mjs";
+import {
+  createScreenSession,
+  issueScreenNonce,
+  verifyScreenProof,
+} from "./screenAuth.mjs";
 import {
   SANCTIONS_INSERT_CHECK,
   SANCTIONS_INSERT_WALLET,
@@ -27,6 +33,7 @@ import {
   sanctionsCheckParams,
   screenFromStored,
   swapSanctionsCache,
+  walletHashHex,
 } from "./sanctions.mjs";
 
 function unavailable() {
@@ -137,7 +144,14 @@ export function createSanctionsGate(options = {}) {
       return linkWallet(sql, snapshot, { ...body, pepper, now: now(), chainId: 84532 });
     },
     change(body) {
-      return changeWallet(sql, snapshot, { ...body, wallet: body?.nextWallet || body?.wallet, decisionPoint: "change" });
+      return changeWallet(sql, snapshot, {
+        ...body,
+        wallet: body?.nextWallet || body?.wallet,
+        pepper,
+        now: now(),
+        chainId: 84532,
+        decisionPoint: "change",
+      });
     },
     unlink(body) {
       return unlinkWallet(sql, snapshot, { ...body, pepper, now: now(), chainId: 84532 });
@@ -152,6 +166,28 @@ export function createSanctionsGate(options = {}) {
     },
     release(wallet, actor) {
       return releaseFalsePositive(sql, snapshot, { wallet, pepper, now: now(), actor });
+    },
+    issueNonce() {
+      return issueScreenNonce(sql, now());
+    },
+    verifyScreen(action, body, sessionToken, overrides = {}) {
+      return verifyScreenProof(sql, {
+        action,
+        message: body?.message,
+        signature: body?.signature,
+        sessionToken,
+        domain: overrides.domain || options.siweDomain || "agent-bv.pages.dev",
+        chainId: overrides.chainId || options.chainId || 84532,
+        now: now(),
+      });
+    },
+    sessionFor(accountId, wallet) {
+      const hash = walletHashHex(pepper, wallet);
+      if (!hash) return "";
+      return createScreenSession(sql, accountId, hash, now());
+    },
+    dropTie(accountId, wallet, actor) {
+      return dropAccountTie(sql, snapshot, { accountId, wallet, pepper, now: now(), actor });
     },
   };
 }

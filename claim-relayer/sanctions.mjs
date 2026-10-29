@@ -8,7 +8,7 @@
 // We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party.
 // This module does not claim a certification.
 
-import { hmacSha256Hex, sha256Utf8 } from "./sha256.mjs";
+import { hmacSha256Hex, sha256Utf8, walletHmacKey } from "./sha256.mjs";
 
 export const SDN_ADVANCED_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML";
 export const SDN_HOST = "sanctionslistservice.ofac.treas.gov";
@@ -138,6 +138,35 @@ export const SANCTIONS_SCHEMA_SQL = [
    BEGIN
      SELECT RAISE(ABORT, 'sanctions_release_audit is append-only');
    END`,
+  `CREATE TABLE IF NOT EXISTS screen_nonces (
+    nonce TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+  )`,
+  `CREATE TABLE IF NOT EXISTS screen_sessions (
+    token_hash TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    wallet_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS sanctions_tie_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    wallet_hash TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    acted_at INTEGER NOT NULL,
+    actor TEXT NOT NULL
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_tie_audit_no_update
+   BEFORE UPDATE ON sanctions_tie_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_tie_audit is append-only');
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_tie_audit_no_delete
+   BEFORE DELETE ON sanctions_tie_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_tie_audit is append-only');
+   END`,
 ];
 
 export const SANCTIONS_READ_CACHE =
@@ -211,7 +240,7 @@ export function normalizeSanctionsAddress(value) {
 export function walletHashHex(pepper, normalized) {
   if (typeof pepper !== "string" || pepper.length === 0) return null;
   if (typeof normalized !== "string" || !EVM_ADDRESS.test(normalized)) return null;
-  return hmacSha256Hex(pepper, normalized);
+  return hmacSha256Hex(walletHmacKey(pepper), normalized);
 }
 
 export function canonicalAddressList(addresses) {
