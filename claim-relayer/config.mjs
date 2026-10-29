@@ -318,6 +318,7 @@ export function loadConfig(env = process.env) {
     escrowOwner: escrow.escrowOwner,
     bvtAddress: escrow.bvtAddress,
     adminSecret: String(env.ADMIN_SECRET || "").trim(),
+    sanctionsReleaseSecret: String(env.SANCTIONS_RELEASE_SECRET || "").trim(),
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),

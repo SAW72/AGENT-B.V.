@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideGeoblock as pagesDecide, PUBLIC_DENIAL_MESSAGE as pagesMessage } from "../functions/geo.mjs";
-import { decideGeoblock as relayerDecide, PUBLIC_DENIAL_MESSAGE as relayerMessage } from "../../../claim-relayer/geoblock.mjs";
+import { decideGeoblock as pagesDecide, OWNER_POLICY_COUNTRY_CODES as pagesPolicy, PUBLIC_DENIAL_MESSAGE as pagesMessage } from "../functions/geo.mjs";
+import { decideGeoblock as relayerDecide, OWNER_POLICY_COUNTRY_CODES as relayerPolicy, PUBLIC_DENIAL_MESSAGE as relayerMessage } from "../../../claim-relayer/geoblock.mjs";
 
 const cases = [
   { country: "CU", edge: true },
@@ -18,12 +18,18 @@ const cases = [
   { country: "UA", region: "Kyiv", edge: true },
   { country: "", edge: true },
   { country: "XX", edge: true },
+  { country: "T1", edge: false },
   { country: "", edge: false },
+  { country: "US", edge: false, publicRoute: true },
+  { country: "SY", edge: false, publicRoute: true },
+  { country: "US", edge: true, publicRoute: true },
 ];
 
 describe("Pages geoblock matches the relayer module", () => {
   it("uses the same denial sentence and the same decisions", () => {
     expect(pagesMessage).toBe(relayerMessage);
+    expect([...pagesPolicy]).toEqual(["SY", "RU", "VE"]);
+    expect([...pagesPolicy]).toEqual([...relayerPolicy]);
     const at = 1_700_000_000_000;
     for (const input of cases) {
       const left = pagesDecide({ ...input, at });
@@ -31,5 +37,11 @@ describe("Pages geoblock matches the relayer module", () => {
       expect(left.decision, JSON.stringify(input)).toBe(right.decision);
       expect(left.country, JSON.stringify(input)).toBe(right.country);
     }
+    for (const country of ["SY", "RU", "VE"]) {
+      expect(pagesDecide({ country, edge: true, at }).decision).toBe("deny");
+      expect(relayerDecide({ country, edge: true, at }).decision).toBe("deny");
+    }
+    expect(pagesDecide({ country: "", edge: false, at }).decision).toBe("deny");
+    expect(relayerDecide({ country: "US", edge: false, publicRoute: true, at }).decision).toBe("deny");
   });
 });

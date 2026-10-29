@@ -331,6 +331,58 @@ export async function rescreenLinkedWallets(sql, screen, input) {
   return { checked };
 }
 
+const RELEASE_AUDIT_SQL =
+  `INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)`;
+
+/**
+ * False positives only. A wallet still on the ready SDN address set is a confirmed
+ * true match and is never removed. The audit insert is append-only.
+ */
+export function releaseFalsePositive(sql, screen, input) {
+  const normalized = normalizeSanctionsAddress(input?.wallet);
+  const hash = walletHashHex(input?.pepper, normalized);
+  const at = Number.isFinite(input?.now) ? input.now : Date.now();
+  const listVersion = screen?.listVersion == null ? null : String(screen.listVersion);
+  if (!normalized || !hash) return { ok: false, http: 403, error: "release_refused" };
+  const ready = screen?.listReady === true && screen.addresses instanceof Set;
+  const listed = ready && screen.addresses.has(normalized);
+  if (!ready || listed) {
+    sql.run(RELEASE_AUDIT_SQL, hash, listed ? "refused_match" : "refused_unavailable", listVersion, at);
+    return { ok: false, http: 403, error: "release_refused" };
+  }
+  sql.exec("BEGIN IMMEDIATE");
+  try {
+    sql.run("DELETE FROM sanctions_wallets WHERE wallet = ?", normalized);
+    const accounts = sql.all(
+      "SELECT DISTINCT account_id FROM sanctions_account_wallets WHERE wallet_hash = ?",
+      hash,
+    );
+    for (const row of accounts) {
+      const still = sql.get(
+        `SELECT 1 AS hit
+         FROM sanctions_account_wallets link
+         JOIN sanctions_wallets match ON match.wallet_hash = link.wallet_hash
+         WHERE link.account_id = ?
+         LIMIT 1`,
+        String(row.account_id),
+      );
+      if (!still) sql.run("DELETE FROM sanctions_blocks WHERE account_id = ?", String(row.account_id));
+    }
+    sql.run(RELEASE_AUDIT_SQL, hash, "released", listVersion, at);
+    sql.exec("COMMIT");
+  } catch (error) {
+    try {
+      sql.exec("ROLLBACK");
+    } catch {
+      // The transaction is already closed.
+    }
+    throw error;
+  }
+  if (screen.persisted instanceof Set) screen.persisted.delete(normalized);
+  if (screen.memo instanceof Map) screen.memo.delete(normalized);
+  return { ok: true, http: 200 };
+}
+
 export function purgeRetention(sql, now) {
   const clearBefore = now - SANCTIONS_CLEAR_RETENTION_MS;
   const matchBefore = now - SANCTIONS_MATCH_RETENTION_MS;

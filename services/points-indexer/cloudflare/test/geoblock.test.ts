@@ -13,9 +13,9 @@ describe("worker edge geoblock", () => {
     const missing = await statusFor({}, "?__geo=raw");
     expect(missing.status).toBe(403);
     expect(await missing.json()).toEqual({ ok: false, message: MESSAGE });
-    for (const country of ["CU", "IR", "KP"]) {
+    for (const country of ["CU", "IR", "KP", "SY", "RU", "VE"]) {
       const response = await statusFor({ "CF-IPCountry": country }, "?__geo=raw");
-      expect(response.status).toBe(403);
+      expect(response.status, country).toBe(403);
       const body = await response.text();
       expect(body.toLowerCase().includes("sanction")).toBe(false);
       expect(body.includes("SDN")).toBe(false);
@@ -24,7 +24,5 @@ describe("worker edge geoblock", () => {
     expect(crimea.status).toBe(403);
     const ukraine = await statusFor({ "CF-IPCountry": "UA" }, "?__geo=raw");
     expect(ukraine.status).not.toBe(403);
-    const syria = await statusFor({ "CF-IPCountry": "SY" }, "?__geo=raw");
-    expect(syria.status).not.toBe(403);
   });
 });

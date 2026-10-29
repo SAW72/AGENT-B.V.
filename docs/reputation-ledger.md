@@ -168,7 +168,7 @@ These five are decided. They are not open questions. Checklist items 7, 9, 11, a
 
 ## Hooks (fail closed)
 
-Tokenomics confirmed that the #7 and #9 hooks fail closed. PR #28's stub returns `eligible: true` with reason `pending-#7` for staging. **This service does not.** The default eligibility hook returns `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }` until a fresh list is loaded. A wallet that is not on that list stays `unverified`. We screen addresses against U.S. sanctions lists. The row is still stored, `nominal_points` keeps the weight, and `points` is 0 so a raw sum does not credit it. Tests inject `allowAllEligibility` when they need to see weights land.
+Tokenomics confirmed that the #7 and #9 hooks fail closed. PR #28's stub returns `eligible: true` with reason `pending-#7` for staging. **This service does not.** The default eligibility hook returns `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }` until a fresh list is loaded. A wallet that is not on that list stays `unverified`. We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party. The row is still stored, `nominal_points` keeps the weight, and `points` is 0 so a raw sum does not credit it. Tests inject `allowAllEligibility` when they need to see weights land.
 
 The enforcer hook receives:
 

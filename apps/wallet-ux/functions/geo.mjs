@@ -1,12 +1,18 @@
 // Pages cannot rely on a file outside this project. The country set is checked
 // against claim-relayer/geoblock.mjs by scripts/geoblock-parity.test.mjs.
 // Wallet screening stays authoritative. Log only the matched code, decision, and time.
+// Owner policy (Spencer 2026-10-28) also blocks SY, RU, and VE.
+// Unknown location denies. An off-edge request on a public route denies.
 
 export const PUBLIC_DENIAL_MESSAGE = "Agent-B.V. isn't available for this wallet or location. If you think this is a mistake, contact hello@stewardoftheking.com.";
 
 export const COMPREHENSIVE_COUNTRY_CODES = Object.freeze(["CU", "IR", "KP"]);
 
+/** Owner policy (Spencer 2026-10-28). Not an OFAC FAQ 10 comprehensive program. */
+export const OWNER_POLICY_COUNTRY_CODES = Object.freeze(["SY", "RU", "VE"]);
+
 const COMPREHENSIVE = new Set(COMPREHENSIVE_COUNTRY_CODES);
+const OWNER_POLICY = new Set(OWNER_POLICY_COUNTRY_CODES);
 
 const REGION_CODE = {
   "43": "UA-43",
@@ -49,11 +55,13 @@ export function decideGeoblock(input = {}) {
   const at = Number.isFinite(input.at) ? input.at : Date.now();
   const country = countryCode(input.country);
   const edge = input.edge === true;
-  if (!country || country === "XX" || country === "T1") {
-    if (!edge) return { decision: "skip", country: country || "missing", at };
+  if (input.publicRoute === true && !edge) {
     return { decision: "deny", country: country || "missing", at };
   }
-  if (COMPREHENSIVE.has(country)) return { decision: "deny", country, at };
+  if (!country || country === "XX" || country === "T1") {
+    return { decision: "deny", country: country || "missing", at };
+  }
+  if (COMPREHENSIVE.has(country) || OWNER_POLICY.has(country)) return { decision: "deny", country, at };
   if (country === "UA") {
     const jurisdiction = regionJurisdiction(input.regionCode, input.region);
     if (jurisdiction) return { decision: "deny", country: jurisdiction, at };

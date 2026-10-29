@@ -342,7 +342,7 @@ The escrow contract does not read the chain. The check lives in the points write
 
 The running definition in that same doc, which this spec uses:
 
-- Default eligibility result when the list is not ready: `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }`. A wallet that is not on the list stays `{ eligible: false, status: "unverified", reason: "unverified" }`. We screen addresses against U.S. sanctions lists.
+- Default eligibility result when the list is not ready: `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }`. A wallet that is not on the list stays `{ eligible: false, status: "unverified", reason: "unverified" }`. We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party.
 - The API reports `eligibility.status` `"unverified"` and `points_withheld: true`.
 - The row is still stored. `points` is 0 so a raw sum does not credit it.
 - `docs/reputation/INDEXER_SPEC.md` shows a staging stub `{ eligible: true, reason: "pending-#7" }` and says public launch is blocked until #7 closes. `docs/reputation-ledger.md` says this service does not use that stub. This spec follows the ledger doc: eligible is false until a real screen exists.

@@ -1,16 +1,16 @@
 import { decideGeoblock, geoLog, PUBLIC_DENIAL_MESSAGE } from "./geo.mjs";
 
 export async function onRequest(context) {
-  const headers = context.request.headers;
   const cf = context.request.cf;
   const onEdge = cf != null && typeof cf === "object";
-  // request.cf is set by Cloudflare. wrangler pages dev leaves it unset, so local
-  // previews are not treated as the edge. On the edge a missing country denies.
+  // Pages is a public route. request.cf is set by Cloudflare. A client
+  // CF-IPCountry header is not a location. Off-edge and unknown country deny.
   const decision = decideGeoblock({
-    country: (onEdge && typeof cf.country === "string" && cf.country) || headers.get("CF-IPCountry") || "",
-    regionCode: (onEdge && typeof cf.regionCode === "string" && cf.regionCode) || headers.get("CF-Region-Code") || "",
-    region: (onEdge && typeof cf.region === "string" && cf.region) || headers.get("CF-Region") || "",
+    country: onEdge && typeof cf.country === "string" ? cf.country : "",
+    regionCode: onEdge && typeof cf.regionCode === "string" ? cf.regionCode : "",
+    region: onEdge && typeof cf.region === "string" ? cf.region : "",
     edge: onEdge,
+    publicRoute: true,
   });
   console.info(JSON.stringify(geoLog(decision)));
   if (decision.decision === "deny") {

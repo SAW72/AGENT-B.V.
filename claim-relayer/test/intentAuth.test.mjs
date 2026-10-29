@@ -81,6 +81,7 @@ async function boot(env = {}, extra = {}) {
     },
     now: () => NOW_MS,
     sanctions: extra.sanctions || clearSanctionsGate(NOW_MS),
+    edgeCountry: extra.edgeCountry === undefined ? "US" : extra.edgeCountry,
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -567,6 +568,7 @@ describe("signed claim intent auth", () => {
       },
       now: () => NOW_MS,
       sanctions: clearSanctionsGate(NOW_MS),
+      edgeCountry: "US",
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

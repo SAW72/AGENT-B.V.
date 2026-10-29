@@ -90,6 +90,7 @@ async function boot(sanctions) {
     claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
     broadcaster: null,
     sanctions,
+    edgeCountry: "US",
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -102,12 +103,12 @@ async function boot(sanctions) {
 describe("edge geoblock", () => {
   const at = 1_700_000_000_000;
 
-  it("names the program list confirmed on 2026-10-27 and blocks only that list", () => {
+  it("names the program list confirmed on 2026-10-27 and denies owner-policy countries", () => {
     assert.match(PROGRAM_NOTE, /2026-10-27/);
-    for (const country of ["CU", "IR", "KP"]) {
+    for (const country of ["CU", "IR", "KP", "SY", "RU", "VE"]) {
       assert.equal(decideGeoblock({ country, edge: true, at }).decision, "deny");
     }
-    for (const country of ["SY", "RU", "VE", "US", "DE"]) {
+    for (const country of ["US", "DE"]) {
       assert.equal(decideGeoblock({ country, edge: true, at }).decision, "allow");
     }
     assert.equal(decideGeoblock({ country: "UA", edge: true, at }).decision, "allow");
@@ -117,7 +118,12 @@ describe("edge geoblock", () => {
     assert.equal(decideGeoblock({ country: "UA", region: "Kyiv", edge: true, at }).decision, "allow");
     assert.equal(decideGeoblock({ country: "", edge: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "XX", edge: true, at }).decision, "deny");
-    assert.equal(decideGeoblock({ country: "", edge: false, at }).decision, "skip");
+    assert.equal(decideGeoblock({ country: "T1", edge: false, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "", edge: false, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "US", edge: false, publicRoute: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "SY", edge: false, publicRoute: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "US", edge: true, publicRoute: true, at }).decision, "allow");
+    assert.equal(decideGeoblock({ country: "", edge: false, at }).decision === "skip", false);
     const log = geoLog(decideGeoblock({ country: "CU", edge: true, at }));
     assert.deepEqual(Object.keys(log).sort(), ["at", "country", "decision", "message"]);
     assert.equal(JSON.stringify(log).includes("."), false);
@@ -320,6 +326,7 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
       broadcaster: { async send() { broadcasts += 1; return { txHash: "0x" + "ab".repeat(32) }; } },
       sanctions,
       now: () => now,
+      edgeCountry: "US",
     });
     const logs = [];
     const logged = mock.method(console, "info", (...args) => logs.push(args.map(String).join(" ")));
@@ -366,6 +373,167 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
       assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
     } finally {
       await ctx.close();
+    }
+  });
+});
+
+describe("public routes deny when location is unknown or off-edge", () => {
+  it("ignores a client country header when the process is off-edge", async () => {
+    const sanctions = clearSanctionsGate();
+    const dir = await mkdtemp(join(tmpdir(), "ofac-off-edge-"));
+    const config = loadConfig({ CLAIM_LOG_PATH: join(dir, "claims.jsonl") });
+    const server = createClaimRelayer({
+      config,
+      killSwitch: createKillSwitch({ initial: false }),
+      nonceStore: createNonceStore(),
+      claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
+      broadcaster: null,
+      sanctions,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const response = await request(server.address().port, "POST", "/v1/screen/signup", {
+        accountId: "off-edge",
+        wallet: CLEAR,
+      }, { "cf-ipcountry": "US" });
+      assert.equal(response.status, 403);
+      assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
+      assert.equal(response.raw.toLowerCase().includes("sanction"), false);
+    } finally {
+      await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("denies a server-side owner-policy country on a public route", async () => {
+    const sanctions = clearSanctionsGate();
+    const dir = await mkdtemp(join(tmpdir(), "ofac-sy-"));
+    const config = loadConfig({ CLAIM_LOG_PATH: join(dir, "claims.jsonl") });
+    const server = createClaimRelayer({
+      config,
+      killSwitch: createKillSwitch({ initial: false }),
+      nonceStore: createNonceStore(),
+      claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
+      broadcaster: null,
+      sanctions,
+      edgeCountry: "RU",
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const response = await request(server.address().port, "POST", "/v1/screen/signup", {
+        accountId: "owner-policy",
+        wallet: CLEAR,
+      });
+      assert.equal(response.status, 403);
+      assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
+    } finally {
+      await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+});
+
+describe("false-positive release", () => {
+  const now = 1_900_000_000_000;
+  const secret = "release-test-secret";
+
+  it("keeps a true match blocked, releases a false positive, and keeps the audit row", async () => {
+    const open = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
+    });
+    await open.signup({ accountId: "acct-fp", wallet: LISTED });
+    assert.equal(open.release(LISTED).error, "release_refused");
+    assert.equal(open.blocks(LISTED), true);
+    open.replace(screenFromAddressList([], now, { minAddresses: 1, listVersion: "down" }));
+    assert.equal(open.release(LISTED).error, "release_refused");
+    assert.equal(open.blocks(LISTED), true);
+    open.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
+    assert.equal(open.release(LISTED).ok, true);
+    assert.equal(open.blocks(LISTED), false);
+    const sql = nodeSql(open.db);
+    const rows = sql.all("SELECT outcome FROM sanctions_release_audit ORDER BY id");
+    assert.deepEqual(rows.map((row) => row.outcome), ["refused_match", "refused_unavailable", "released"]);
+    assert.equal(JSON.stringify(sql.all("SELECT * FROM sanctions_release_audit")).includes(LISTED), false);
+    purgeRetention(sql, now + SANCTIONS_MATCH_RETENTION_MS + DAY);
+    assert.equal(sql.all("SELECT id FROM sanctions_release_audit").length, 3);
+  });
+
+  it("requires the env secret and does not echo it", async () => {
+    const sanctions = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
+    });
+    const dir = await mkdtemp(join(tmpdir(), "ofac-release-"));
+    const config = loadConfig({
+      CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+      SANCTIONS_RELEASE_SECRET: secret,
+    });
+    const server = createClaimRelayer({
+      config,
+      killSwitch: createKillSwitch({ initial: false }),
+      nonceStore: createNonceStore(),
+      claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
+      broadcaster: null,
+      sanctions,
+      now: () => now,
+      edgeCountry: "US",
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = server.address().port;
+    try {
+      await request(port, "POST", "/v1/screen/signup", { accountId: "acct-http", wallet: LISTED });
+      const missing = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED });
+      assert.equal(missing.status, 401);
+      assert.equal(missing.json.error, "unauthorized");
+      const wrong = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
+        "x-admin-secret": "not-the-secret",
+      });
+      assert.equal(wrong.status, 401);
+      assert.equal(sanctions.blocks(LISTED), true);
+      const refused = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
+        "x-admin-secret": secret,
+      });
+      assert.equal(refused.status, 403);
+      assert.equal(refused.json.error, "release_refused");
+      assert.equal(JSON.stringify(refused.json).includes(secret), false);
+      sanctions.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
+      const released = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
+        authorization: `Bearer ${secret}`,
+      });
+      assert.equal(released.status, 200);
+      assert.equal(released.json.ok, true);
+      assert.equal(JSON.stringify(released.json).includes(secret), false);
+      assert.equal(sanctions.blocks(LISTED), false);
+      const health = await request(port, "GET", "/health");
+      assert.equal(JSON.stringify(health.json).includes(secret), false);
+      const closedDir = await mkdtemp(join(tmpdir(), "ofac-release-closed-"));
+      const closedConfig = loadConfig({ CLAIM_LOG_PATH: join(closedDir, "claims.jsonl") });
+      const closed = createClaimRelayer({
+        config: closedConfig,
+        killSwitch: createKillSwitch({ initial: false }),
+        nonceStore: createNonceStore(),
+        claimLog: createClaimLog({ filePath: join(closedDir, "claims.jsonl") }),
+        broadcaster: null,
+        sanctions,
+        now: () => now,
+        edgeCountry: "US",
+      });
+      closed.listen(0, "127.0.0.1");
+      await once(closed, "listening");
+      try {
+        const refusedClosed = await request(closed.address().port, "POST", "/v1/admin/sanctions/release", {
+          wallet: CLEAR,
+        }, { "x-admin-secret": secret });
+        assert.equal(refusedClosed.status, 401);
+      } finally {
+        await new Promise((resolve, reject) => closed.close((err) => (err ? reject(err) : resolve())));
+      }
+    } finally {
+      await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }
   });
 });

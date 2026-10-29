@@ -125,6 +125,7 @@ describe("intent nonce store", () => {
       broadcaster,
       now: () => NOW_MS,
       sanctions: clearSanctionsGate(NOW_MS),
+      edgeCountry: "US",
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

@@ -10,6 +10,7 @@ import {
   linkWallet,
   changeWallet,
   unlinkWallet,
+  releaseFalsePositive,
   walletBlockedByAccount,
   guardDecision,
 } from "./accountScreen.mjs";
@@ -148,6 +149,9 @@ export function createSanctionsGate(options = {}) {
       } catch {
         return true;
       }
+    },
+    release(wallet) {
+      return releaseFalsePositive(sql, snapshot, { wallet, pepper, now: now() });
     },
   };
 }

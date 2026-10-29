@@ -1,9 +1,10 @@
 // Edge jurisdiction check. Wallet screening stays authoritative.
-// Country codes are the broad jurisdiction programs named in OFAC FAQ 10
-// (page dated October 26, 2026): Cuba, Iran, and North Korea.
-// Syria is not on that list. Crimea, the so-called DNR, and the so-called LNR
-// are on that list and are not ISO countries. Cloudflare's country header is
-// UA for those regions, so the region code is read as well.
+// Country codes CU, IR, and KP are the broad jurisdiction programs named in
+// OFAC FAQ 10 (page dated October 26, 2026). Crimea, the so-called DNR, and
+// the so-called LNR are on that list and are not ISO countries. Cloudflare's
+// country header is UA for those regions, so the region code is read as well.
+// Owner policy (Spencer 2026-10-28) also blocks SY, RU, and VE.
+// Unknown location denies. An off-edge request on a public route denies.
 // Log only the matched code, the decision, and a timestamp. Never a raw IP.
 
 import { PUBLIC_DENIAL_MESSAGE } from "./sanctions.mjs";
@@ -13,7 +14,11 @@ export { PUBLIC_DENIAL_MESSAGE };
 /** Confirmed from OFAC FAQ 10 on 2026-10-27. */
 export const COMPREHENSIVE_COUNTRY_CODES = Object.freeze(["CU", "IR", "KP"]);
 
+/** Owner policy (Spencer 2026-10-28). Not an OFAC FAQ 10 comprehensive program. */
+export const OWNER_POLICY_COUNTRY_CODES = Object.freeze(["SY", "RU", "VE"]);
+
 const COMPREHENSIVE = new Set(COMPREHENSIVE_COUNTRY_CODES);
+const OWNER_POLICY = new Set(OWNER_POLICY_COUNTRY_CODES);
 
 const REGION_CODE = {
   "43": "UA-43",
@@ -55,18 +60,20 @@ function regionJurisdiction(regionCode, regionName) {
 }
 
 /**
- * @param {{ country?: string, regionCode?: string, region?: string, edge?: boolean, at?: number }} input
- * edge true: a missing or unknown country denies. edge false: no country header skips this check.
+ * @param {{ country?: string, regionCode?: string, region?: string, edge?: boolean, publicRoute?: boolean, at?: number }} input
+ * Unknown location denies. Off-edge on a public route denies. Do not skip.
  */
 export function decideGeoblock(input = {}) {
   const at = Number.isFinite(input.at) ? input.at : Date.now();
   const country = countryCode(input.country);
   const edge = input.edge === true;
-  if (!country || country === "XX" || country === "T1") {
-    if (!edge) return { decision: "skip", country: country || "missing", at };
+  if (input.publicRoute === true && !edge) {
     return { decision: "deny", country: country || "missing", at };
   }
-  if (COMPREHENSIVE.has(country)) return { decision: "deny", country, at };
+  if (!country || country === "XX" || country === "T1") {
+    return { decision: "deny", country: country || "missing", at };
+  }
+  if (COMPREHENSIVE.has(country) || OWNER_POLICY.has(country)) return { decision: "deny", country, at };
   if (country === "UA") {
     const jurisdiction = regionJurisdiction(input.regionCode, input.region);
     if (jurisdiction) return { decision: "deny", country: jurisdiction, at };

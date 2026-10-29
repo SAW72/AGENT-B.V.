@@ -1,4 +1,5 @@
 export const COMPREHENSIVE_COUNTRY_CODES: readonly string[];
+export const OWNER_POLICY_COUNTRY_CODES: readonly string[];
 export const PROGRAM_NOTE: string;
 export const PUBLIC_DENIAL_MESSAGE: string;
 
@@ -13,6 +14,7 @@ export function decideGeoblock(input?: {
   regionCode?: string;
   region?: string;
   edge?: boolean;
+  publicRoute?: boolean;
   at?: number;
 }): GeoDecision;
 

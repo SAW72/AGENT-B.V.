@@ -184,7 +184,11 @@ async function enabledHealth(request: Request, env: Env, repeated: boolean): Pro
 
 function geoDenied(request: Request): Response | null {
   try {
-    const decision = decideGeoblock(geoInputFromHeaders(request.headers, request.cf, true));
+    // The Worker is the edge. Public reads deny an unknown country and the blocked set.
+    const decision = decideGeoblock({
+      ...geoInputFromHeaders(request.headers, request.cf, true),
+      publicRoute: true,
+    });
     console.info(JSON.stringify(geoLog(decision)));
     if (decision.decision !== "deny") return null;
     return json(403, { ok: false, message: PUBLIC_DENIAL_MESSAGE });

@@ -1061,6 +1061,7 @@ async function boot(env = {}, extra = {}) {
     broadcaster: extra.broadcaster ?? null,
     now: () => nowMs,
     sanctions: extra.sanctions || clearSanctionsGate(nowMs),
+    edgeCountry: "US",
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

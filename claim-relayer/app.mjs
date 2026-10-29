@@ -18,7 +18,7 @@ import { createDefaultHooks } from "./reputation/hooks.mjs";
 import { createReputationRuntime, handleReputationRequest } from "./reputation/runtime.mjs";
 import { createSanctionsGate } from "./sanctionsGate.mjs";
 import { PUBLIC_DENIAL_MESSAGE } from "./sanctions.mjs";
-import { decideGeoblock, geoInputFromHeaders, geoLog } from "./geoblock.mjs";
+import { decideGeoblock, geoLog } from "./geoblock.mjs";
 
 const MAX_BODY = 32 * 1024;
 
@@ -233,7 +233,17 @@ export function createClaimRelayer(deps) {
 
   function locationDenied(req) {
     try {
-      const geo = decideGeoblock(geoInputFromHeaders(req.headers, null, false));
+      // This process is not the edge. Client CF-IPCountry is not a location.
+      // Public claim and screen routes deny until a server-side country is set.
+      const country = typeof deps.edgeCountry === "string" ? deps.edgeCountry.trim() : "";
+      const geo = decideGeoblock({
+        country,
+        regionCode: country ? String(deps.edgeRegionCode || "") : "",
+        region: country ? String(deps.edgeRegion || "") : "",
+        edge: country !== "",
+        publicRoute: true,
+        at: now(),
+      });
       console.info(JSON.stringify(geoLog(geo)));
       return geo.decision === "deny";
     } catch {
@@ -360,6 +370,23 @@ export function createClaimRelayer(deps) {
           chainId: config.chainId,
         });
         sendJson(res, req, 200, { ok: true, killSwitch: killSwitch.isOn(), noop: false }, corsHeaders);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/v1/admin/sanctions/release") {
+        if (!adminAuthorized(req, config.sanctionsReleaseSecret)) {
+          sendJson(res, req, 401, { ok: false, error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const body = await readBody(req);
+        const result = await sanctions.release(body.wallet);
+        sendJson(
+          res,
+          req,
+          result.ok ? 200 : result.http,
+          result.ok ? { ok: true } : { ok: false, error: result.error },
+          corsHeaders,
+        );
         return;
       }
 

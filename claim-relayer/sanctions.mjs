@@ -5,7 +5,8 @@
 // Retained text is copied. A slice of a read chunk must not keep that chunk alive.
 // Non-EVM address formats are out of scope on this Base Sepolia testnet. They are rejected,
 // not stored as a second comparison key. Bech32 and base58 rules wait until a non-EVM chain is added.
-// We screen addresses against U.S. sanctions lists. This module does not claim a certification.
+// We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party.
+// This module does not claim a certification.
 
 import { hmacSha256Hex, sha256Utf8 } from "./sha256.mjs";
 
@@ -117,6 +118,14 @@ export const SANCTIONS_SCHEMA_SQL = [
     wallet_hash TEXT NOT NULL,
     opened_at INTEGER NOT NULL,
     status TEXT NOT NULL
+  )`,
+  // Append-only. Do not UPDATE or DELETE this table. Retention purge does not touch it.
+  `CREATE TABLE IF NOT EXISTS sanctions_release_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_hash TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    list_version TEXT,
+    released_at INTEGER NOT NULL
   )`,
 ];
 
