@@ -219,6 +219,10 @@ function migrateSanctionsTables(sql: Sql) {
   if (cache.size > 0 && !cache.has("raw_sha256")) sql.exec("ALTER TABLE sanctions_cache ADD COLUMN raw_sha256 TEXT");
   const wallets = new Set(all(sql, "PRAGMA table_info(sanctions_wallets)").map((column) => String(column.name)));
   if (wallets.size > 0 && !wallets.has("wallet_hash")) sql.exec("ALTER TABLE sanctions_wallets ADD COLUMN wallet_hash TEXT");
+  const audit = new Set(all(sql, "PRAGMA table_info(sanctions_release_audit)").map((column) => String(column.name)));
+  if (audit.size > 0 && !audit.has("actor")) {
+    sql.exec("ALTER TABLE sanctions_release_audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 export function ensureSchema(sql: Sql) {

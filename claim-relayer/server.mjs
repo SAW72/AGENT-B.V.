@@ -34,6 +34,8 @@ export function startServer(env = process.env) {
         gasCaps: config.abuse,
       })
     : null;
+  // No default country. Public routes deny until RELAYER_EDGE_AUTH matches
+  // x-relayer-edge-auth and the proxy supplies the country header.
   const server = createClaimRelayer({
     config,
     killSwitch,

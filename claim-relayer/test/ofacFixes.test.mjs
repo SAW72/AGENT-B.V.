@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, mock } from "node:test";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
-import { createClaimRelayer } from "../app.mjs";
+import { adminAuthorized, authorizeReleaseAdmin, createClaimRelayer, secretsEqual } from "../app.mjs";
 import { nodeSql, purgeRetention } from "../accountScreen.mjs";
-import { decideGeoblock, geoLog, PROGRAM_NOTE } from "../geoblock.mjs";
+import { decideGeoblock, geoInputFromHeaders, geoLog, PROGRAM_NOTE } from "../geoblock.mjs";
+import { migrateSanctionsSchema } from "../sanctions.mjs";
+import { createRateLimiter } from "../reputation/rateLimit.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
 import { createSanctionsGate } from "../sanctionsGate.mjs";
@@ -71,7 +75,7 @@ function request(port, method, path, body, headers = {}) {
         } catch {
           json = null;
         }
-        resolve({ status: res.statusCode, json, raw });
+        resolve({ status: res.statusCode, json, raw, headers: res.headers });
       });
     });
     req.on("error", reject);
@@ -123,6 +127,24 @@ describe("edge geoblock", () => {
     assert.equal(decideGeoblock({ country: "US", edge: false, publicRoute: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "SY", edge: false, publicRoute: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "US", edge: true, publicRoute: true, at }).decision, "allow");
+    const clientHeaders = {
+      get(name) {
+        if (name === "CF-IPCountry") return "SY";
+        if (name === "CF-Region-Code") return "43";
+        return "";
+      },
+    };
+    const fromCf = geoInputFromHeaders(clientHeaders, { country: "US", regionCode: "", region: "" }, true);
+    assert.equal(fromCf.country, "US");
+    assert.equal(fromCf.regionCode, "");
+    assert.equal(decideGeoblock({ ...fromCf, publicRoute: true, at }).decision, "allow");
+    const blockedCf = geoInputFromHeaders(clientHeaders, { country: "SY" }, true);
+    assert.equal(blockedCf.country, "SY");
+    assert.equal(decideGeoblock({ ...blockedCf, publicRoute: true, at }).decision, "deny");
+    const ignored = geoInputFromHeaders(clientHeaders, undefined, true);
+    assert.equal(ignored.country, "");
+    assert.equal(ignored.edge, false);
+    assert.equal(decideGeoblock({ ...ignored, publicRoute: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "", edge: false, at }).decision === "skip", false);
     const log = geoLog(decideGeoblock({ country: "CU", edge: true, at }));
     assert.deepEqual(Object.keys(log).sort(), ["at", "country", "decision", "message"]);
@@ -433,9 +455,18 @@ describe("public routes deny when location is unknown or off-edge", () => {
   });
 });
 
+function sha256Hex(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 describe("false-positive release", () => {
   const now = 1_900_000_000_000;
-  const secret = "release-test-secret";
+  const opsSecret = "ops-release-secret";
+  const reviewSecret = "review-release-secret";
+  const adminsJson = JSON.stringify({
+    "ops-1": sha256Hex(opsSecret),
+    "review-2": sha256Hex(reviewSecret),
+  });
 
   it("keeps a true match blocked, releases a false positive, and keeps the audit row", async () => {
     const open = createSanctionsGate({
@@ -444,20 +475,57 @@ describe("false-positive release", () => {
       screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
     });
     await open.signup({ accountId: "acct-fp", wallet: LISTED });
-    assert.equal(open.release(LISTED).error, "release_refused");
+    assert.equal(open.release(LISTED, "ops-1").error, "release_refused");
     assert.equal(open.blocks(LISTED), true);
     open.replace(screenFromAddressList([], now, { minAddresses: 1, listVersion: "down" }));
-    assert.equal(open.release(LISTED).error, "release_refused");
+    assert.equal(open.release(LISTED, "ops-1").error, "release_refused");
     assert.equal(open.blocks(LISTED), true);
     open.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
-    assert.equal(open.release(LISTED).ok, true);
+    assert.equal(open.release(LISTED, "review-2").ok, true);
     assert.equal(open.blocks(LISTED), false);
     const sql = nodeSql(open.db);
-    const rows = sql.all("SELECT outcome FROM sanctions_release_audit ORDER BY id");
-    assert.deepEqual(rows.map((row) => row.outcome), ["refused_match", "refused_unavailable", "released"]);
+    const rows = sql.all("SELECT outcome, actor FROM sanctions_release_audit ORDER BY id");
+    assert.deepEqual(rows.map((row) => ({ outcome: row.outcome, actor: row.actor })), [
+      { outcome: "refused_match", actor: "ops-1" },
+      { outcome: "refused_unavailable", actor: "ops-1" },
+      { outcome: "released", actor: "review-2" },
+    ]);
+    assert.throws(() => sql.run("UPDATE sanctions_release_audit SET actor = ? WHERE id = 1", "tampered"));
+    assert.throws(() => sql.run("DELETE FROM sanctions_release_audit WHERE id = 1"));
+    assert.equal(sql.get("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").actor, "ops-1");
     assert.equal(JSON.stringify(sql.all("SELECT * FROM sanctions_release_audit")).includes(LISTED), false);
     purgeRetention(sql, now + SANCTIONS_MATCH_RETENTION_MS + DAY);
     assert.equal(sql.all("SELECT id FROM sanctions_release_audit").length, 3);
+  });
+
+  it("aborts update and delete after migrating an audit table that had no actor column", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`CREATE TABLE sanctions_release_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_hash TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      list_version TEXT,
+      released_at INTEGER NOT NULL
+    )`);
+    db.prepare(
+      "INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)",
+    ).run("abc", "released", "v", 1);
+    migrateSanctionsSchema(db);
+    const migrated = db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
+    assert.equal(migrated.outcome, "released");
+    assert.equal(migrated.actor, "");
+    assert.throws(
+      () => db.prepare("UPDATE sanctions_release_audit SET outcome = ? WHERE id = 1").run("tampered"),
+      (err) => /append-only/.test(String(err && err.message)),
+    );
+    assert.throws(
+      () => db.prepare("DELETE FROM sanctions_release_audit WHERE id = 1").run(),
+      (err) => /append-only/.test(String(err && err.message)),
+    );
+    const after = db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
+    assert.equal(after.outcome, "released");
+    assert.equal(after.actor, "");
+    db.close();
   });
 
   it("requires the env secret and does not echo it", async () => {
@@ -469,7 +537,7 @@ describe("false-positive release", () => {
     const dir = await mkdtemp(join(tmpdir(), "ofac-release-"));
     const config = loadConfig({
       CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
-      SANCTIONS_RELEASE_SECRET: secret,
+      SANCTIONS_RELEASE_ADMINS: adminsJson,
     });
     const server = createClaimRelayer({
       config,
@@ -486,30 +554,50 @@ describe("false-positive release", () => {
     const port = server.address().port;
     try {
       await request(port, "POST", "/v1/screen/signup", { accountId: "acct-http", wallet: LISTED });
-      const missing = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED });
+      const missing = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED, actor: "ops-1" });
       assert.equal(missing.status, 401);
       assert.equal(missing.json.error, "unauthorized");
       const wrong = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
+        "x-sanctions-actor": "ops-1",
         "x-admin-secret": "not-the-secret",
       });
       assert.equal(wrong.status, 401);
+      const otherAdmin = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
+        "x-sanctions-actor": "review-2",
+        "x-admin-secret": opsSecret,
+      });
+      assert.equal(otherAdmin.status, 401);
       assert.equal(sanctions.blocks(LISTED), true);
-      const refused = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
-        "x-admin-secret": secret,
+      const refused = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED, actor: "spoofed" }, {
+        "x-sanctions-actor": "ops-1",
+        "x-admin-secret": opsSecret,
       });
       assert.equal(refused.status, 403);
       assert.equal(refused.json.error, "release_refused");
-      assert.equal(JSON.stringify(refused.json).includes(secret), false);
+      assert.equal(JSON.stringify(refused.json).includes(opsSecret), false);
+      const refusedRow = nodeSql(sanctions.db).get(
+        "SELECT actor, outcome FROM sanctions_release_audit ORDER BY id DESC LIMIT 1",
+      );
+      assert.equal(refusedRow.actor, "ops-1");
+      assert.equal(refusedRow.outcome, "refused_match");
       sanctions.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
-      const released = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED }, {
-        authorization: `Bearer ${secret}`,
+      const released = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED, actor: "spoofed" }, {
+        "x-sanctions-actor": "review-2",
+        authorization: `Bearer ${reviewSecret}`,
       });
       assert.equal(released.status, 200);
       assert.equal(released.json.ok, true);
-      assert.equal(JSON.stringify(released.json).includes(secret), false);
+      assert.equal(JSON.stringify(released.json).includes(reviewSecret), false);
       assert.equal(sanctions.blocks(LISTED), false);
+      const releasedRow = nodeSql(sanctions.db).get(
+        "SELECT actor, outcome FROM sanctions_release_audit ORDER BY id DESC LIMIT 1",
+      );
+      assert.equal(releasedRow.actor, "review-2");
+      assert.equal(releasedRow.outcome, "released");
       const health = await request(port, "GET", "/health");
-      assert.equal(JSON.stringify(health.json).includes(secret), false);
+      assert.equal(JSON.stringify(health.json).includes(opsSecret), false);
+      assert.equal(JSON.stringify(health.json).includes(reviewSecret), false);
+      assert.equal(JSON.stringify(health.json).includes(sha256Hex(opsSecret)), false);
       const closedDir = await mkdtemp(join(tmpdir(), "ofac-release-closed-"));
       const closedConfig = loadConfig({ CLAIM_LOG_PATH: join(closedDir, "claims.jsonl") });
       const closed = createClaimRelayer({
@@ -527,13 +615,155 @@ describe("false-positive release", () => {
       try {
         const refusedClosed = await request(closed.address().port, "POST", "/v1/admin/sanctions/release", {
           wallet: CLEAR,
-        }, { "x-admin-secret": secret });
+        }, { "x-sanctions-actor": "ops-1", "x-admin-secret": opsSecret });
         assert.equal(refusedClosed.status, 401);
       } finally {
         await new Promise((resolve, reject) => closed.close((err) => (err ? reject(err) : resolve())));
       }
     } finally {
       await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+});
+
+const EDGE_AUTH = "edge-proxy-test-secret";
+
+async function bootPublic(env = {}, extra = {}) {
+  const sanctions = extra.sanctions || clearSanctionsGate();
+  const dir = await mkdtemp(join(tmpdir(), "ofac-edge-auth-"));
+  const config = loadConfig({
+    CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+    ...env,
+  });
+  const server = createClaimRelayer({
+    config,
+    killSwitch: createKillSwitch({ initial: false }),
+    nonceStore: createNonceStore(),
+    claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
+    broadcaster: null,
+    sanctions,
+    ...extra.deps,
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    port: server.address().port,
+    close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+describe("authenticated edge country", () => {
+  it("allows an authenticated US header, denies SY, and ignores a forged or client-only country", async () => {
+    const ctx = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, {
+      deps: { edgeCountry: "US" },
+    });
+    try {
+      const allowed = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-us",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "US",
+      });
+      assert.equal(allowed.status, 200);
+      assert.equal(allowed.json.status, "unverified");
+      const syria = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-sy",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "SY",
+      });
+      assert.equal(syria.status, 403);
+      assert.equal(syria.json.message, PUBLIC_DENIAL_MESSAGE);
+      const crimea = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-crimea",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "UA",
+        "cf-region-code": "43",
+      });
+      assert.equal(crimea.status, 403);
+      const forged = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-forged",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": "not-the-proxy",
+        "cf-ipcountry": "US",
+      });
+      assert.equal(forged.status, 403);
+      const missing = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-missing",
+        wallet: CLEAR,
+      }, { "cf-ipcountry": "US" });
+      assert.equal(missing.status, 403);
+      assert.equal(missing.json.message, PUBLIC_DENIAL_MESSAGE);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("keeps an empty edge secret off-edge even when the client sends a US country", async () => {
+    const ctx = await bootPublic({ RELAYER_EDGE_AUTH: "" });
+    try {
+      const response = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "no-secret",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "US",
+      });
+      assert.equal(response.status, 403);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("admin compare and rate limit", () => {
+  it("compares secrets of different lengths and names only the matching release admin", () => {
+    assert.equal(secretsEqual("short", "much-longer-admin-secret"), false);
+    assert.equal(secretsEqual("much-longer-admin-secret", "much-longer-admin-secret"), true);
+    assert.equal(secretsEqual("", "much-longer-admin-secret"), false);
+    assert.equal(secretsEqual("much-longer-admin-secret", ""), false);
+    assert.equal(adminAuthorized({ headers: { "x-admin-secret": "much-longer-admin-secret" } }, "much-longer-admin-secret"), true);
+    assert.equal(adminAuthorized({ headers: { "x-admin-secret": "short" } }, "much-longer-admin-secret"), false);
+    assert.equal(adminAuthorized({ headers: { authorization: "Bearer much-longer-admin-secret" } }, "much-longer-admin-secret"), true);
+    assert.equal(adminAuthorized({ headers: {} }, ""), false);
+    const hash = sha256Hex("ops-compare-secret");
+    const admins = { "ops-1": hash };
+    assert.deepEqual(authorizeReleaseAdmin({
+      headers: { "x-sanctions-actor": "ops-1", "x-admin-secret": "ops-compare-secret" },
+    }, admins), { ok: true, actor: "ops-1" });
+    assert.equal(authorizeReleaseAdmin({
+      headers: { "x-sanctions-actor": "missing", "x-admin-secret": "ops-compare-secret" },
+    }, admins).ok, false);
+    assert.deepEqual(loadConfig({}).sanctionsReleaseAdmins, {});
+    assert.equal(loadConfig({ RELAYER_EDGE_AUTH: "  " }).relayerEdgeAuth, "");
+    assert.deepEqual(loadConfig({ SANCTIONS_RELEASE_ADMINS: "{" }).sanctionsReleaseAdmins, {});
+    assert.deepEqual(loadConfig({
+      SANCTIONS_RELEASE_ADMINS: JSON.stringify({ "ops-1": hash, nope: "short", "": hash }),
+    }).sanctionsReleaseAdmins, { "ops-1": hash });
+    assert.equal(Object.hasOwn(loadConfig({ SANCTIONS_RELEASE_SECRET: "legacy" }), "sanctionsReleaseSecret"), false);
+  });
+
+  it("rate limits every /v1/admin route", async () => {
+    const limiter = createRateLimiter({ max: 2, windowMs: 60_000, clock: () => 5_000 });
+    const ctx = await bootPublic({}, { deps: { adminRateLimit: limiter, edgeCountry: "US" } });
+    try {
+      const first = await request(ctx.port, "POST", "/v1/admin/pause", {});
+      assert.equal(first.status, 200);
+      const second = await request(ctx.port, "POST", "/v1/admin/unpause", {});
+      assert.equal(second.status, 200);
+      const third = await request(ctx.port, "POST", "/v1/admin/sanctions/release", { wallet: CLEAR });
+      assert.equal(third.status, 429);
+      assert.equal(third.json.error, "rate_limited");
+      assert.equal(third.headers["retry-after"], "60");
+      const health = await request(ctx.port, "GET", "/health");
+      assert.equal(health.status, 200);
+    } finally {
+      await ctx.close();
     }
   });
 });

@@ -150,8 +150,8 @@ export function createSanctionsGate(options = {}) {
         return true;
       }
     },
-    release(wallet) {
-      return releaseFalsePositive(sql, snapshot, { wallet, pepper, now: now() });
+    release(wallet, actor) {
+      return releaseFalsePositive(sql, snapshot, { wallet, pepper, now: now(), actor });
     },
   };
 }

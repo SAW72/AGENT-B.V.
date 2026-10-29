@@ -1163,3 +1163,25 @@ describe("OFAC-shaped publication", () => {
     }
   });
 });
+
+describe("sanctions release audit on the indexer schema", () => {
+  it("aborts update and delete and keeps the actor", () => {
+    const ctx = tempIndexer();
+    try {
+      ctx.indexer.db.prepare(
+        "INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at, actor) VALUES(?, ?, ?, ?, ?)",
+      ).run("abc", "released", "v", 1, "ops-1");
+      assert.throws(() => {
+        ctx.indexer.db.prepare("UPDATE sanctions_release_audit SET actor = ? WHERE id = 1").run("other");
+      }, /append-only/);
+      assert.throws(() => {
+        ctx.indexer.db.prepare("DELETE FROM sanctions_release_audit WHERE id = 1").run();
+      }, /append-only/);
+      const row = ctx.indexer.db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
+      assert.equal(row.outcome, "released");
+      assert.equal(row.actor, "ops-1");
+    } finally {
+      ctx.close();
+    }
+  });
+});

@@ -1,6 +1,6 @@
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
-import { healthPayload, httpError, retiredEscrowError } from "./config.mjs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { healthPayload, httpError, isSha256Hex, retiredEscrowError } from "./config.mjs";
 import { KILL_SWITCH } from "./killSwitch.mjs";
 import {
   assertBaseSepolia,
@@ -22,11 +22,21 @@ import { decideGeoblock, geoLog } from "./geoblock.mjs";
 
 const MAX_BODY = 32 * 1024;
 
-function secretsEqual(provided, expected) {
-  const a = Buffer.from(String(provided || ""), "utf8");
-  const b = Buffer.from(String(expected || ""), "utf8");
-  if (!expected || a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+const RELEASE_ADMIN_DUMMY = createHash("sha256").update("sanctions-release-admin-unset", "utf8").digest();
+
+function digestSecret(value) {
+  return createHash("sha256").update(String(value ?? ""), "utf8").digest();
+}
+
+function digestEqual(actual, expected) {
+  if (!Buffer.isBuffer(actual) || !Buffer.isBuffer(expected) || actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
+}
+
+// Hash both sides first so timingSafeEqual always compares equal-length digests.
+export function secretsEqual(provided, expected) {
+  if (!expected) return false;
+  return digestEqual(digestSecret(provided), digestSecret(expected));
 }
 
 function bearerToken(req) {
@@ -37,7 +47,27 @@ function bearerToken(req) {
 export function adminAuthorized(req, adminSecret) {
   if (!adminSecret) return false;
   const header = req.headers["x-admin-secret"] || "";
-  return secretsEqual(header, adminSecret) || secretsEqual(bearerToken(req), adminSecret);
+  const headerOk = secretsEqual(header, adminSecret);
+  const bearerOk = secretsEqual(bearerToken(req), adminSecret);
+  return headerOk || bearerOk;
+}
+
+const RELEASE_ACTOR_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * SANCTIONS_RELEASE_ADMINS maps an admin id to the sha256 hex of that admin's secret.
+ * The request carries x-sanctions-actor plus x-admin-secret or Authorization: Bearer.
+ * An unknown actor still runs the compare, against a dummy digest.
+ */
+export function authorizeReleaseAdmin(req, admins) {
+  const actor = String(req.headers["x-sanctions-actor"] || "").trim();
+  const validId = RELEASE_ACTOR_ID.test(actor);
+  const stored = validId && admins && typeof admins === "object" ? admins[actor] : "";
+  const expected = isSha256Hex(stored) ? Buffer.from(stored, "hex") : RELEASE_ADMIN_DUMMY;
+  const headerOk = digestEqual(digestSecret(req.headers["x-admin-secret"] || ""), expected);
+  const bearerOk = digestEqual(digestSecret(bearerToken(req)), expected);
+  if (!validId || !isSha256Hex(stored) || !(headerOk || bearerOk)) return { ok: false, actor: "" };
+  return { ok: true, actor };
 }
 
 export function createCors(allowedOrigins) {
@@ -219,6 +249,10 @@ export function createClaimRelayer(deps) {
   const limitReputation =
     deps.reputationRateLimit ||
     createRateLimiter({ max: reputation.latest.read_api.rate_limit_per_minute });
+  const limitAdmin =
+    typeof deps.adminRateLimit === "function"
+      ? deps.adminRateLimit
+      : createRateLimiter({ windowMs: 60_000, max: 30, clock: now });
 
   function refuseIfKilled(res, req) {
     if (!killSwitch.isOn()) return false;
@@ -231,16 +265,47 @@ export function createClaimRelayer(deps) {
     return true;
   }
 
+  function headerValue(req, name) {
+    const value = req.headers[String(name || "").toLowerCase()];
+    if (Array.isArray(value)) return String(value[0] || "");
+    return value == null ? "" : String(value);
+  }
+
+  // Production reads a country header only when x-relayer-edge-auth matches
+  // RELAYER_EDGE_AUTH. A missing or different value is off-edge, which denies.
+  // There is no default country. deps.edgeCountry is a test seam and is used
+  // only when that secret is unset. startServer does not set it.
+  function trustedEdge(req) {
+    const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
+    if (secret) {
+      if (!secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret)) {
+        return { edge: false, country: "", regionCode: "", region: "" };
+      }
+      return {
+        edge: true,
+        country: headerValue(req, "cf-ipcountry"),
+        regionCode: headerValue(req, "cf-region-code"),
+        region: headerValue(req, "cf-region"),
+      };
+    }
+    const country = typeof deps.edgeCountry === "string" ? deps.edgeCountry.trim() : "";
+    if (!country) return { edge: false, country: "", regionCode: "", region: "" };
+    return {
+      edge: true,
+      country,
+      regionCode: String(deps.edgeRegionCode || ""),
+      region: String(deps.edgeRegion || ""),
+    };
+  }
+
   function locationDenied(req) {
     try {
-      // This process is not the edge. Client CF-IPCountry is not a location.
-      // Public claim and screen routes deny until a server-side country is set.
-      const country = typeof deps.edgeCountry === "string" ? deps.edgeCountry.trim() : "";
+      const trusted = trustedEdge(req);
       const geo = decideGeoblock({
-        country,
-        regionCode: country ? String(deps.edgeRegionCode || "") : "",
-        region: country ? String(deps.edgeRegion || "") : "",
-        edge: country !== "",
+        country: trusted.country,
+        regionCode: trusted.regionCode,
+        region: trusted.region,
+        edge: trusted.edge,
         publicRoute: true,
         at: now(),
       });
@@ -342,6 +407,13 @@ export function createClaimRelayer(deps) {
         return;
       }
 
+      if (path === "/v1/admin" || path.startsWith("/v1/admin/")) {
+        if (!limitAdmin(clientIp(req))) {
+          sendJson(res, req, 429, { ok: false, error: "rate_limited", retryAfter: 60 }, corsHeaders);
+          return;
+        }
+      }
+
       if (req.method === "POST" && (path === "/v1/admin/pause" || path === "/v1/admin/unpause")) {
         if (!config.adminSecret) {
           sendJson(
@@ -374,12 +446,13 @@ export function createClaimRelayer(deps) {
       }
 
       if (req.method === "POST" && path === "/v1/admin/sanctions/release") {
-        if (!adminAuthorized(req, config.sanctionsReleaseSecret)) {
+        const admin = authorizeReleaseAdmin(req, config.sanctionsReleaseAdmins);
+        if (!admin.ok) {
           sendJson(res, req, 401, { ok: false, error: "unauthorized" }, corsHeaders);
           return;
         }
         const body = await readBody(req);
-        const result = await sanctions.release(body.wallet);
+        const result = await sanctions.release(body.wallet, admin.actor);
         sendJson(
           res,
           req,

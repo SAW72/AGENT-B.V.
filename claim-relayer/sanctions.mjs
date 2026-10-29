@@ -119,14 +119,25 @@ export const SANCTIONS_SCHEMA_SQL = [
     opened_at INTEGER NOT NULL,
     status TEXT NOT NULL
   )`,
-  // Append-only. Do not UPDATE or DELETE this table. Retention purge does not touch it.
+  // Append-only. Triggers abort UPDATE and DELETE. Retention purge does not touch it.
   `CREATE TABLE IF NOT EXISTS sanctions_release_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     wallet_hash TEXT NOT NULL,
     outcome TEXT NOT NULL,
     list_version TEXT,
-    released_at INTEGER NOT NULL
+    released_at INTEGER NOT NULL,
+    actor TEXT NOT NULL DEFAULT ''
   )`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_release_audit_no_update
+   BEFORE UPDATE ON sanctions_release_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_release_audit is append-only');
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_release_audit_no_delete
+   BEFORE DELETE ON sanctions_release_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_release_audit is append-only');
+   END`,
 ];
 
 export const SANCTIONS_READ_CACHE =
@@ -450,6 +461,9 @@ export function screenFromStored(cacheRow, walletRows, now = Date.now(), options
 // A stored match stays a match after the list drops the address or the list is down.
 // A missing list is unavailable, not a clear. An address that fails normalization is unavailable.
 // clear is never an approval.
+// The points indexer loads its own sanctions_wallets rows into this set.
+// A claim-relayer false-positive release deletes the row only in the relayer database.
+// It does not clear the indexer row. The indexer has no release route.
 export function decideSanctions(wallet, screen) {
   try {
     const normalized = normalizeSanctionsAddress(wallet);
@@ -1171,4 +1185,8 @@ export function migrateSanctionsSchema(db) {
   if (!cache.has("raw_sha256")) db.exec("ALTER TABLE sanctions_cache ADD COLUMN raw_sha256 TEXT");
   const wallets = new Set(db.prepare("PRAGMA table_info(sanctions_wallets)").all().map((column) => column.name));
   if (!wallets.has("wallet_hash")) db.exec("ALTER TABLE sanctions_wallets ADD COLUMN wallet_hash TEXT");
+  const audit = new Set(db.prepare("PRAGMA table_info(sanctions_release_audit)").all().map((column) => column.name));
+  if (audit.size > 0 && !audit.has("actor")) {
+    db.exec("ALTER TABLE sanctions_release_audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
+  }
 }

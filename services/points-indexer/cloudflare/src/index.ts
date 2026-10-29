@@ -184,7 +184,8 @@ async function enabledHealth(request: Request, env: Env, repeated: boolean): Pro
 
 function geoDenied(request: Request): Response | null {
   try {
-    // The Worker is the edge. Public reads deny an unknown country and the blocked set.
+    // The Worker is the edge. Country and region come from request.cf only.
+    // A client CF-IPCountry header is ignored. An unknown country denies.
     const decision = decideGeoblock({
       ...geoInputFromHeaders(request.headers, request.cf, true),
       publicRoute: true,

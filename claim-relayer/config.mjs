@@ -262,6 +262,39 @@ export function loadAbuseLimits(env) {
   };
 }
 
+const RELEASE_ACTOR_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+export function isSha256Hex(value) {
+  if (typeof value !== "string" || value.length !== 64) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const digit = code >= 48 && code <= 57;
+    const lower = code >= 97 && code <= 102;
+    const upper = code >= 65 && code <= 70;
+    if (!digit && !lower && !upper) return false;
+  }
+  return true;
+}
+
+/** JSON map of admin id to sha256 hex. Invalid JSON, ids, and hashes are dropped. */
+export function parseReleaseAdmins(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const admins = {};
+  for (const [id, hash] of Object.entries(parsed)) {
+    if (!RELEASE_ACTOR_ID.test(id) || !isSha256Hex(hash)) continue;
+    admins[id] = String(hash).toLowerCase();
+  }
+  return admins;
+}
+
 export function loadConfig(env = process.env) {
   if (env.RELAYER_KEY_FILE || env.RELAYER_PRIVATE_KEY_FILE) {
     throw httpError(500, "key_file_forbidden");
@@ -318,7 +351,8 @@ export function loadConfig(env = process.env) {
     escrowOwner: escrow.escrowOwner,
     bvtAddress: escrow.bvtAddress,
     adminSecret: String(env.ADMIN_SECRET || "").trim(),
-    sanctionsReleaseSecret: String(env.SANCTIONS_RELEASE_SECRET || "").trim(),
+    sanctionsReleaseAdmins: parseReleaseAdmins(env.SANCTIONS_RELEASE_ADMINS),
+    relayerEdgeAuth: String(env.RELAYER_EDGE_AUTH || "").trim(),
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),

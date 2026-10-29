@@ -90,19 +90,15 @@ export function geoLog(decision) {
   };
 }
 
-function readHeader(headers, name) {
-  if (!headers) return "";
-  if (typeof headers.get === "function") return headers.get(name) || "";
-  const value = headers[name.toLowerCase()] ?? headers[name];
-  if (Array.isArray(value)) return value[0] || "";
-  return value || "";
-}
-
+// Client CF-* headers are not a location. Only request.cf, set by the edge, is read.
+// A missing cf object is off-edge. Do not fall back to CF-IPCountry.
 export function geoInputFromHeaders(headers, cf, edge) {
+  void headers;
+  const fromEdge = cf != null && typeof cf === "object";
   return {
-    country: readHeader(headers, "CF-IPCountry") || cf?.country || "",
-    regionCode: readHeader(headers, "CF-Region-Code") || cf?.regionCode || "",
-    region: readHeader(headers, "CF-Region") || cf?.region || "",
-    edge,
+    country: fromEdge && typeof cf.country === "string" ? cf.country : "",
+    regionCode: fromEdge && typeof cf.regionCode === "string" ? cf.regionCode : "",
+    region: fromEdge && typeof cf.region === "string" ? cf.region : "",
+    edge: edge === true && fromEdge,
   };
 }

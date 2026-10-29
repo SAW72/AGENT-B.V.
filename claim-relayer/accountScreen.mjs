@@ -332,7 +332,13 @@ export async function rescreenLinkedWallets(sql, screen, input) {
 }
 
 const RELEASE_AUDIT_SQL =
-  `INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)`;
+  `INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at, actor) VALUES(?, ?, ?, ?, ?)`;
+
+function releaseActor(value) {
+  const actor = String(value || "").trim();
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(actor)) return "";
+  return actor;
+}
 
 /**
  * False positives only. A wallet still on the ready SDN address set is a confirmed
@@ -343,11 +349,12 @@ export function releaseFalsePositive(sql, screen, input) {
   const hash = walletHashHex(input?.pepper, normalized);
   const at = Number.isFinite(input?.now) ? input.now : Date.now();
   const listVersion = screen?.listVersion == null ? null : String(screen.listVersion);
+  const actor = releaseActor(input?.actor);
   if (!normalized || !hash) return { ok: false, http: 403, error: "release_refused" };
   const ready = screen?.listReady === true && screen.addresses instanceof Set;
   const listed = ready && screen.addresses.has(normalized);
   if (!ready || listed) {
-    sql.run(RELEASE_AUDIT_SQL, hash, listed ? "refused_match" : "refused_unavailable", listVersion, at);
+    sql.run(RELEASE_AUDIT_SQL, hash, listed ? "refused_match" : "refused_unavailable", listVersion, at, actor);
     return { ok: false, http: 403, error: "release_refused" };
   }
   sql.exec("BEGIN IMMEDIATE");
@@ -368,7 +375,7 @@ export function releaseFalsePositive(sql, screen, input) {
       );
       if (!still) sql.run("DELETE FROM sanctions_blocks WHERE account_id = ?", String(row.account_id));
     }
-    sql.run(RELEASE_AUDIT_SQL, hash, "released", listVersion, at);
+    sql.run(RELEASE_AUDIT_SQL, hash, "released", listVersion, at, actor);
     sql.exec("COMMIT");
   } catch (error) {
     try {
