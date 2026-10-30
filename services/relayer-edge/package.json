@@ -1,0 +1,9 @@
+{
+  "name": "agent-bv-relayer-edge",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that proxies the claim relayer and sets edge location headers.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

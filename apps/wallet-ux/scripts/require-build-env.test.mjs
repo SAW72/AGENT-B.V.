@@ -15,7 +15,8 @@ import {
 } from "./require-build-env.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
-const RELAYER_URL = "https://bot-verifier-claim-relayer.onrender.com"
+const RELAYER_URL = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev"
+const RENDER_ORIGIN = "https://bot-verifier-claim-relayer.onrender.com"
 const RPC_URL = "https://sepolia.base.org"
 const OTHER_RELAYER = "https://relayer.example.test"
 const RELAYER_URL_ERROR = `VITE_CLAIM_RELAYER_URL must be exactly ${ALLOWED_RELAYER_URLS.join(", ")}.`
@@ -158,23 +159,26 @@ describe("resolve required build env", () => {
   })
 
   it.each([
-    "https://evil-onrender.com",
-    "https://bot-verifier-claim-relayer.onrender.com.evil.com",
-    "https://other.onrender.com",
-    "https://BOT-VERIFIER-CLAIM-RELAYER.ONRENDER.COM",
-    "https://bot-verifier-claim-relayer.onrender.com./v1/claims",
-    "https://bot-verifier-claim-relayer.onrender.com/v1/claims/",
-    "https://bot-verifier-claim-relayer.onrender.com//v1/claims",
-    "https://bot-verifier-claim-relayer.onrender.com:443",
-    "https://bot-verifier-claim-relayer.onrender.com?",
-    "https://bot-verifier-claim-relayer.onrender.com#",
-    "http://bot-verifier-claim-relayer.onrender.com",
-    "https://bot-verifier-claim-relayer.onrender.com/v1/./claims",
-    "https://bot-verifier-claim-relayer.onrender.com/x/../v1/claims",
-    "https://bot-verifier-claim-relayer.onrender.com/%2e/v1/claims",
-    "https://bot-verifier-claim-relayer.onrender.com/v1/%2e%2e/v1/claims",
-    "https://bot-verifier-claim-relayer.onrender.com\\v1\\claims",
-    "https://bot-verifier-claim-relayer.onrender.com/v1\\claims",
+    "https://evil-workers.dev",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev.evil.com",
+    "https://other.workers.dev",
+    "https://AGENT-BV-RELAYER-EDGE.S-A-WIGHT72.WORKERS.DEV",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev./v1/claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1/claims/",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev//v1/claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev:443",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev?",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev#",
+    "http://agent-bv-relayer-edge.s-a-wight72.workers.dev",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1/./claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/x/../v1/claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/%2e/v1/claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1/%2e%2e/v1/claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev\\v1\\claims",
+    "https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1\\claims",
+    RENDER_ORIGIN,
+    `${RENDER_ORIGIN}/`,
+    `${RENDER_ORIGIN}/v1/claims`,
   ])("rejects relayer URL %s", async (url) => {
     await expect(
       applyRequiredBuildEnv({
@@ -398,7 +402,7 @@ describe("resolve required build env", () => {
   it("refuses a relayer URL with credentials", async () => {
     await expect(
       applyRequiredBuildEnv({
-        VITE_CLAIM_RELAYER_URL: "https://user:secret@bot-verifier-claim-relayer.onrender.com",
+        VITE_CLAIM_RELAYER_URL: "https://user:secret@agent-bv-relayer-edge.s-a-wight72.workers.dev",
         VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
       }),
     ).rejects.toThrow(/VITE_CLAIM_RELAYER_URL must not include credentials/)

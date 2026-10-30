@@ -75,7 +75,7 @@ const id = `0x${"ab".repeat(32)}` as const
 const other = `0x${"cd".repeat(32)}` as const
 const payee = "0x0000000000000000000000000000000000000002" as const
 const txHash = `0x${"ef".repeat(32)}` as const
-const relayerUrl = "https://bot-verifier-claim-relayer.onrender.com"
+const relayerUrl = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev"
 const TEST_MNEMONIC = "test test test test test test test test test test test junk"
 const payerAccount = mnemonicToAccount(TEST_MNEMONIC)
 const CLAIM_INTENT_TYPEHASH = "0x1f13fdcc6f1390de5e43ffa26909f5e100cb78aaa1cf33d9abdf7d71a4cde0d2"
@@ -286,7 +286,7 @@ describe("postLiveClaim", () => {
     let fetches = 0
     await expect(
       postLiveClaim({
-        url: "https://user:secret@bot-verifier-claim-relayer.onrender.com",
+        url: "https://user:secret@agent-bv-relayer-edge.s-a-wight72.workers.dev",
         body: liveBody(releasePreview),
         fetchImpl: async () => {
           fetches += 1
