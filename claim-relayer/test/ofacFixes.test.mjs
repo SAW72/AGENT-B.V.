@@ -25,6 +25,7 @@ import {
   listWithinMaxAge,
   normalizeSanctionsAddress,
   parseSdnAdvancedXml,
+  walletHashHex,
   screenFromAddressList,
   screenFromStored,
 } from "../sanctions.mjs";
@@ -207,6 +208,20 @@ describe("account wallet screen", () => {
     assert.equal(unlinkChecks.length, 1);
     assert.equal(unlinkChecks[0].result, "match");
     assert.equal((await fresh.signup({ accountId: "acct-4", wallet: "0x6666666666666666666666666666666666666666" })).http, 403);
+  });
+
+  it("stores the matched wallet when unlink is the screen that finds it", async () => {
+    const open = gate();
+    assert.equal((await open.signup({ accountId: "acct-8", wallet: CLEAR })).http, 200);
+    assert.equal(open.data.state.wallets.some((row) => row.wallet === CLEAR), false);
+    open.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "acct" }));
+    const caught = await open.unlink({ accountId: "acct-8", wallet: CLEAR });
+    assert.equal(caught.http, 403);
+    const stored = open.data.state.wallets.find((row) => row.wallet === CLEAR);
+    assert.equal(stored.reason, "sanctions_match");
+    const unlinkCheck = open.data.state.checks.find((row) => row.decision_point === "unlink" && row.result === "match");
+    assert.equal(stored.wallet_hash, walletHashHex(TEST_PEPPER, CLEAR));
+    assert.equal(unlinkCheck.wallet_hash, stored.wallet_hash);
   });
 
   it("fails closed when the list is down and still denies a stored match", async () => {

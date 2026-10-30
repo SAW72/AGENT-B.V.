@@ -344,19 +344,28 @@ export function buildOp(op, body) {
     if (!body.check || body.check.decisionPoint !== "unlink") return bad();
     const checkParams = checkRow(body.check);
     if (!checkParams) return bad();
-    const statements = [
-      { sql: CHECK_INSERT, params: checkParams },
-      {
-        sql: `UPDATE sanctions_account_wallets SET unlinked_at = ? WHERE account_id = ? AND wallet_hash = ?`,
-        params: [body.unlinkedAt, body.accountId, body.walletHash],
-      },
-      ...accountBlockedSelects(body.accountId),
-      ...blockedSelects(wallet, body.walletHash),
-    ];
+    const statements = [{ sql: CHECK_INSERT, params: checkParams }];
+    if (body.check.result === "match") {
+      const stored = walletRow({
+        wallet,
+        walletHash: body.walletHash,
+        reason: body.check.reason,
+        checkedAt: body.check.checkedAt,
+        listVersion: body.check.listVersion,
+      });
+      if (!stored) return bad();
+      statements.push({ sql: WALLET_INSERT, params: stored });
+    }
+    statements.push({
+      sql: `UPDATE sanctions_account_wallets SET unlinked_at = ? WHERE account_id = ? AND wallet_hash = ?`,
+      params: [body.unlinkedAt, body.accountId, body.walletHash],
+    });
+    const selectAt = statements.length;
+    statements.push(...accountBlockedSelects(body.accountId), ...blockedSelects(wallet, body.walletHash));
     return {
       statements,
       read(results) {
-        return { blocked: results.slice(2).some((result) => hit(result)) };
+        return { blocked: results.slice(selectAt).some((result) => hit(result)) };
       },
     };
   }

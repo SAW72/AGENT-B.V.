@@ -18,6 +18,8 @@ main = "src/index.mjs"
 # Same date the points Worker pins for Wrangler 4.124.0.
 compatibility_date = "2026-08-22"
 workers_dev = true
+# Versioned preview hostnames stay off. The pinned workers.dev route is the only one.
+preview_urls = false
 
 [observability]
 enabled = true
@@ -31,7 +33,8 @@ invocation_logs = false
 enabled = false
 head_sampling_rate = 0
 
-# Empty D1 database Spencer created 2026-10-30. The id is not a secret.
+# D1 database agent-bv-sanctions. The id is not a secret.
+# Creation, the 2026-10-30 deploy, and migration 0001 are recorded in SPENCER-SETUP.md.
 # Agents do not create this database and do not apply migrations remotely.
 [[d1_databases]]
 binding = "SANCTIONS_DB"

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { ORIGIN, edgeSecret, handle, reservedAdminPath, reservedSanctionsPath } from "../src/index.mjs";
 
@@ -523,5 +524,10 @@ describe("relayer edge proxy", () => {
     assert.equal(edgeSecret({}), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: "  " }), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: SECRET }), SECRET);
+  });
+
+  it("sets preview_urls to false", () => {
+    const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+    assert.match(toml, /^preview_urls = false$/m);
   });
 });

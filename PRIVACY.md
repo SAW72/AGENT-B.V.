@@ -1,4 +1,4 @@
-# Agent-BV — Privacy Notice (MVP)
+# Agent-BV Privacy Notice (MVP)
 
 **Last updated:** 2026-10-29
 
@@ -51,7 +51,7 @@ We **do not sell** personal information and we **do not share** it for cross-con
 We may share information with:
 
 - **Processors** (hosting and database (Render, Cloudflare), CI, email, model APIs such as xAI) under their terms;
-- **Public blockchains and RPCs** when you or the protocol write data on-chain — those writes are typically **worldwide and irreversible**;
+- **Public blockchains and RPCs** when you or the protocol write data on-chain. Those writes are typically **worldwide and irreversible**;
 - **Professional advisors** and dispute/arbitration participants in a documented process;
 - **Authorities** when required by law, valid legal process, or to protect rights, safety, or the Service; and
 - a successor, if the experimental project is transferred, subject to this notice or equivalent.
@@ -78,10 +78,9 @@ Screening records are kept apart from ordinary application logs:
 
 - A clear row and an unavailable row are kept for 90 days, then deleted.
 - A match, a block, and a dispute are kept for 10 years. That period cites 31 CFR 501.601.
+- A release of a false positive is appended to an audit table. That table is not deleted on this schedule.
 
 For a match, the wallet address itself is kept so the record can be reported. Other screening rows store only a keyed hash. A released false positive keeps only its audit row.
-
-- A release of a false positive is appended to an audit table. That table is not deleted on this schedule.
 
 The denial a person sees does not say why access was refused. Appeals are described in [docs/SANCTIONS-APPEALS.md](docs/SANCTIONS-APPEALS.md).
 

@@ -143,7 +143,22 @@ export function createMemorySanctionsData() {
         error.status = 400;
         throw error;
       }
+      if (body.check.result === "match" && (!body.wallet || !body.walletHash)) {
+        const error = new Error("bad_request");
+        error.code = "bad_request";
+        error.status = 400;
+        throw error;
+      }
       pushCheck(state, body.check);
+      if (body.check.result === "match") {
+        pushWallet(state, {
+          wallet: body.wallet,
+          walletHash: body.walletHash,
+          reason: body.check.reason,
+          checkedAt: body.check.checkedAt,
+          listVersion: body.check.listVersion,
+        });
+      }
       const row = state.links.find((item) => item.account_id === body.accountId && item.wallet_hash === body.walletHash);
       if (row) row.unlinked_at = body.unlinkedAt;
       const blocked = accountBlocked(state, body.accountId) || walletBlocked(state, body.wallet || "", body.walletHash);

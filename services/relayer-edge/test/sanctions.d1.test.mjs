@@ -494,6 +494,62 @@ describe("D1 sanctions migration", () => {
       "SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet_hash = ? AND decision_point = ?",
     ).bind(hash, "unlink").first();
     expect(Number(extra.n)).toBe(1);
+    const clearWallet = await env.SANCTIONS_DB.prepare(
+      "SELECT wallet FROM sanctions_wallets WHERE wallet = ?",
+    ).bind(`0x${"55".repeat(20)}`).first();
+    expect(clearWallet).toBeNull();
+  });
+
+  it("stores a matched unlink wallet in the same batch as the check", async () => {
+    const hash = "67".repeat(32);
+    const wallet = `0x${"89".repeat(20)}`;
+    const accountId = `unlink-match-${nonce()}`;
+    const matched = { ...check(hash, "match"), decisionPoint: "unlink", checkedAt: 51, reason: "sanctions_match" };
+    const built = buildOp("account.unlink", {
+      accountId,
+      walletHash: hash,
+      unlinkedAt: 51,
+      wallet,
+      check: matched,
+    });
+    const sql = built.statements.map((statement) => statement.sql);
+    const checkAt = sql.findIndex((item) => item.startsWith("INSERT INTO sanctions_checks"));
+    const walletAt = sql.findIndex((item) => item.startsWith("INSERT INTO sanctions_wallets"));
+    expect(checkAt).toBeGreaterThanOrEqual(0);
+    expect(walletAt).toBe(checkAt + 1);
+
+    const missing = buildOp("account.unlink", {
+      accountId,
+      walletHash: hash,
+      unlinkedAt: 51,
+      check: matched,
+    });
+    expect(missing.statements).toBeUndefined();
+
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO sanctions_account_wallets(account_id, wallet_hash, wallet_sealed, linked_at) VALUES(?, ?, ?, ?)",
+    ).bind(accountId, hash, "v1.linked", 50).run();
+    const unlinked = await call("account.unlink", {
+      accountId,
+      walletHash: hash,
+      unlinkedAt: 51,
+      wallet,
+      check: matched,
+    });
+    expect(unlinked.status).toBe(200);
+    expect(unlinked.json.result.blocked).toBe(true);
+    const stored = await env.SANCTIONS_DB.prepare(
+      "SELECT wallet, wallet_hash, reason, checked_at FROM sanctions_wallets WHERE wallet = ?",
+    ).bind(wallet).first();
+    expect(stored).toEqual({ wallet, wallet_hash: hash, reason: "sanctions_match", checked_at: 51 });
+    const row = await env.SANCTIONS_DB.prepare(
+      "SELECT decision_point, result FROM sanctions_checks WHERE wallet_hash = ? AND decision_point = ?",
+    ).bind(hash, "unlink").first();
+    expect(row).toEqual({ decision_point: "unlink", result: "match" });
+    const link = await env.SANCTIONS_DB.prepare(
+      "SELECT unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
+    ).bind(accountId).first();
+    expect(link.unlinked_at).toBe(51);
   });
 
   it("purges expired screen nonces and sessions and records revoke_refused", async () => {
