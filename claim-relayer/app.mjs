@@ -111,7 +111,7 @@ function sendJson(res, req, status, body, corsHeaders) {
  * prepend spoofed addresses. Only the rightmost hop is trusted.
  * Missing header (local tests, or a request that did not pass that proxy)
  * falls back to the socket address. X-Real-IP is not read.
- * CF-Connecting-IP is used only by rateLimitKey when x-relayer-edge-auth matches.
+ * x-edge-client-ip is used only by rateLimitKey when x-relayer-edge-auth matches.
  */
 function clientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "");
@@ -275,12 +275,13 @@ export function createClaimRelayer(deps) {
     return value == null ? "" : String(value);
   }
 
-  // A valid edge secret means the proxy set CF-Connecting-IP. Otherwise the
+  // A valid edge secret means the proxy set x-edge-client-ip. Otherwise the
   // caller can forge that header, so the existing key is kept.
+  // cf-connecting-ip is not read.
   function edgeSetClientIp(req) {
     const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
     if (!secret || !secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret)) return "";
-    return headerValue(req, "cf-connecting-ip").trim();
+    return headerValue(req, "x-edge-client-ip").trim();
   }
 
   function rateLimitKey(req) {
@@ -299,9 +300,9 @@ export function createClaimRelayer(deps) {
       }
       return {
         edge: true,
-        country: headerValue(req, "cf-ipcountry"),
-        regionCode: headerValue(req, "cf-region-code"),
-        region: headerValue(req, "cf-region"),
+        country: headerValue(req, "x-edge-country"),
+        regionCode: headerValue(req, "x-edge-region-code"),
+        region: headerValue(req, "x-edge-region"),
       };
     }
     const country = typeof deps.edgeCountry === "string" ? deps.edgeCountry.trim() : "";

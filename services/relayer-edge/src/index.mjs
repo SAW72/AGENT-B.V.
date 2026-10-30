@@ -7,8 +7,15 @@ export const ORIGIN = "https://bot-verifier-claim-relayer.onrender.com";
 
 const CLAIM_CORS = new Set([
   "https://agent-bv.pages.dev",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+]);
+
+const DROPPED_HEADERS = new Set([
+  "x-relayer-edge-auth",
+  "x-forwarded-for",
+  "x-real-ip",
+  "forwarded",
+  "host",
+  "content-length",
 ]);
 
 export function edgeSecret(env) {
@@ -17,29 +24,72 @@ export function edgeSecret(env) {
   return value.trim();
 }
 
+function normalizePath(pathname) {
+  let current = String(pathname || "");
+  for (let i = 0; i < 5; i += 1) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(current);
+    } catch {
+      break;
+    }
+    if (decoded === current) break;
+    current = decoded;
+  }
+  const noQuery = current.split("?")[0].split("#")[0];
+  const pieces = [];
+  for (const raw of noQuery.split(/[/\\]/)) {
+    const segment = raw.split("\0")[0];
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      pieces.pop();
+      continue;
+    }
+    pieces.push(segment);
+  }
+  return `/${pieces.join("/")}`.toLowerCase();
+}
+
+function pathUnder(pathname, root) {
+  const path = normalizePath(pathname);
+  return path === root || path.startsWith(`${root}/`);
+}
+
 export function reservedSanctionsPath(pathname) {
-  return pathname === "/internal/sanctions" || pathname.startsWith("/internal/sanctions/");
+  return pathUnder(pathname, "/internal/sanctions");
+}
+
+export function reservedAdminPath(pathname) {
+  return pathUnder(pathname, "/v1/admin");
 }
 
 function textField(value) {
   return typeof value === "string" ? value : "";
 }
 
+function dropClientHeader(name) {
+  const lower = String(name || "").toLowerCase();
+  if (DROPPED_HEADERS.has(lower)) return true;
+  if (lower.startsWith("cf-")) return true;
+  if (lower.startsWith("x-edge-")) return true;
+  return false;
+}
+
 export function forwardedHeaders(request, secret) {
+  // CF-Connecting-IP is the platform address on this Worker.
+  // The origin trusts x-edge-client-ip, not the Cloudflare header name.
   const clientIp = (request.headers.get("CF-Connecting-IP") || "").trim();
   const cf = request.cf && typeof request.cf === "object" ? request.cf : {};
   const headers = new Headers();
   for (const [name, value] of request.headers) {
-    const lower = name.toLowerCase();
-    if (lower === "x-relayer-edge-auth" || lower.startsWith("cf-")) continue;
-    if (lower === "host" || lower === "content-length") continue;
+    if (dropClientHeader(name)) continue;
     headers.append(name, value);
   }
   headers.set("x-relayer-edge-auth", secret);
-  headers.set("cf-ipcountry", textField(cf.country));
-  headers.set("cf-region-code", textField(cf.regionCode));
-  headers.set("cf-region", textField(cf.region));
-  headers.set("CF-Connecting-IP", clientIp);
+  headers.set("x-edge-country", textField(cf.country));
+  headers.set("x-edge-region-code", textField(cf.regionCode));
+  headers.set("x-edge-region", textField(cf.region));
+  headers.set("x-edge-client-ip", clientIp);
   return headers;
 }
 
@@ -72,7 +122,7 @@ function originUrl(requestUrl) {
 
 export async function handle(request, env, fetchImpl = globalThis.fetch) {
   const url = new URL(request.url);
-  if (reservedSanctionsPath(url.pathname)) {
+  if (reservedSanctionsPath(url.pathname) || reservedAdminPath(url.pathname)) {
     return json(404, { ok: false, error: "not_found" }, request);
   }
   const secret = edgeSecret(env);

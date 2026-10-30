@@ -50,7 +50,7 @@ export function startServer(env = process.env) {
       })
     : null;
   // No default country. Public routes deny until RELAYER_EDGE_AUTH matches
-  // x-relayer-edge-auth and the proxy supplies the country header.
+  // x-relayer-edge-auth and the proxy supplies x-edge-country.
   const sanctions = createSanctionsGate({
     pepper: typeof env.WALLET_HASH_PEPPER === "string" ? env.WALLET_HASH_PEPPER : "",
     db: sanctionsDb,

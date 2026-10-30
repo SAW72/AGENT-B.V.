@@ -4,7 +4,9 @@ Agents ran none of these steps. No agent logged in, deployed, or set a secret. N
 
 `wrangler` is a devDependency at 4.124.0. It is not installed globally. `npm test` runs the proxy tests, then `npx wrangler deploy --dry-run`. That dry-run compiles the Worker and does not upload it. There is no D1 database on this Worker, so there is no migration to apply.
 
-The Worker name is `agent-bv-relayer-edge`. It proxies to `https://bot-verifier-claim-relayer.onrender.com`. Wallet UX calls `https://agent-bv-relayer-edge.s-a-wight72.workers.dev`. The origin must be reachable only through this proxy. A direct caller can forge location headers and `CF-Connecting-IP`.
+A direct caller who has RELAYER_EDGE_AUTH could forge location headers and x-edge-client-ip. Without it, the origin treats the request as off-edge and denies.
+
+The Worker name is `agent-bv-relayer-edge`. It proxies to `https://bot-verifier-claim-relayer.onrender.com`. Wallet UX calls `https://agent-bv-relayer-edge.s-a-wight72.workers.dev`. The origin must be reachable only through this proxy.
 
 Do this on your Mac, from a checkout of this branch. The working directory is `services/relayer-edge`.
 

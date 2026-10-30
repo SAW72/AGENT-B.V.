@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ORIGIN, edgeSecret, handle, reservedSanctionsPath } from "../src/index.mjs";
+import { ORIGIN, edgeSecret, handle, reservedAdminPath, reservedSanctionsPath } from "../src/index.mjs";
 
 const SECRET = "test-edge-auth";
 const PAGES = "https://agent-bv.pages.dev";
@@ -46,6 +46,8 @@ describe("relayer edge proxy", () => {
     headers.set("CF-Region", "California");
     headers.set("CF-Ray", "injected-ray");
     headers.set("CF-Connecting-IP", "203.0.113.10");
+    headers.set("X-Edge-Country", "US");
+    headers.set("X-Edge-Client-IP", "198.51.100.7");
     headers.set("content-type", "application/json");
     const response = await handle(
       incoming({
@@ -64,6 +66,10 @@ describe("relayer edge proxy", () => {
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(headerValues(calls[0].init.headers, "x-relayer-edge-auth"), [SECRET]);
     assert.equal(headerValues(calls[0].init.headers, "cf-ray").length, 0);
+    assert.equal(headerValues(calls[0].init.headers, "cf-connecting-ip").length, 0);
+    assert.equal(calls[0].init.headers.get("x-edge-country"), "DE");
+    assert.equal(calls[0].init.headers.get("x-edge-client-ip"), "203.0.113.10");
+    assert.equal(JSON.stringify([...calls[0].init.headers]).includes("198.51.100.7"), false);
     const forwarded = Buffer.from(calls[0].init.body).toString("utf8");
     assert.equal(forwarded, JSON.stringify({ claimId: "1" }));
     assert.equal(calls[0].init.headers.get("content-type"), "application/json");
@@ -78,6 +84,9 @@ describe("relayer edge proxy", () => {
           "CF-Region-Code": "CA",
           "CF-Region": "California",
           "cf-visitor": "{\"scheme\":\"https\"}",
+          "x-edge-country": "US",
+          "x-edge-region-code": "CA",
+          "x-edge-region": "California",
           "x-relayer-edge-auth": "not-the-proxy",
           Origin: PAGES,
         },
@@ -88,9 +97,12 @@ describe("relayer edge proxy", () => {
     );
     assert.equal(calls.length, 1);
     const headers = calls[0].init.headers;
-    assert.equal(headers.get("cf-ipcountry"), "UA");
-    assert.equal(headers.get("cf-region-code"), "40");
-    assert.equal(headers.get("cf-region"), "Sevastopol");
+    assert.equal(headers.get("x-edge-country"), "UA");
+    assert.equal(headers.get("x-edge-region-code"), "40");
+    assert.equal(headers.get("x-edge-region"), "Sevastopol");
+    assert.equal(headers.get("cf-ipcountry"), null);
+    assert.equal(headers.get("cf-region-code"), null);
+    assert.equal(headers.get("cf-region"), null);
     assert.equal(headers.get("cf-visitor"), null);
     assert.equal(headers.get("x-relayer-edge-auth"), SECRET);
     assert.equal(headers.get("origin"), PAGES);
@@ -106,9 +118,10 @@ describe("relayer edge proxy", () => {
       { RELAYER_EDGE_AUTH: SECRET },
       emptyCf.fetchImpl,
     );
-    assert.equal(emptyCf.calls[0].init.headers.get("cf-ipcountry"), "");
-    assert.equal(emptyCf.calls[0].init.headers.get("cf-region-code"), "");
-    assert.equal(emptyCf.calls[0].init.headers.get("cf-region"), "");
+    assert.equal(emptyCf.calls[0].init.headers.get("x-edge-country"), "");
+    assert.equal(emptyCf.calls[0].init.headers.get("x-edge-region-code"), "");
+    assert.equal(emptyCf.calls[0].init.headers.get("x-edge-region"), "");
+    assert.equal(emptyCf.calls[0].init.headers.get("cf-ipcountry"), null);
   });
 
   it("returns 503 and forwards nothing when the secret is missing", async () => {
@@ -150,18 +163,22 @@ describe("relayer edge proxy", () => {
       fetchImpl,
     );
     const headers = calls[0].init.headers;
-    assert.equal(headers.get("cf-ipcountry"), "DE");
-    assert.equal(headers.get("cf-region-code"), "BE");
-    assert.equal(headers.get("cf-region"), "Berlin");
+    assert.equal(headers.get("x-edge-country"), "DE");
+    assert.equal(headers.get("x-edge-region-code"), "BE");
+    assert.equal(headers.get("x-edge-region"), "Berlin");
+    assert.equal(headers.get("cf-ipcountry"), null);
   });
 
-  it("sets CF-Connecting-IP from the platform header, not from X-Forwarded-For", async () => {
+  it("sets x-edge-client-ip from the platform header and strips forwarded client addresses", async () => {
     const { calls, fetchImpl } = recorder();
     await handle(
       incoming({
         headers: {
           "CF-Connecting-IP": "203.0.113.10",
           "X-Forwarded-For": "198.51.100.9, 203.0.113.10",
+          "X-Real-IP": "198.51.100.8",
+          Forwarded: "for=198.51.100.8",
+          "X-Edge-Client-IP": "198.51.100.7",
           "True-Client-IP": "198.51.100.8",
         },
         cf: { country: "DE", regionCode: "BE", region: "Berlin" },
@@ -169,9 +186,15 @@ describe("relayer edge proxy", () => {
       { RELAYER_EDGE_AUTH: SECRET },
       fetchImpl,
     );
-    assert.equal(calls[0].init.headers.get("cf-connecting-ip"), "203.0.113.10");
-    assert.equal(calls[0].init.headers.get("x-forwarded-for"), "198.51.100.9, 203.0.113.10");
-    assert.notEqual(calls[0].init.headers.get("cf-connecting-ip"), "198.51.100.9");
+    const headers = calls[0].init.headers;
+    assert.equal(headers.get("x-edge-client-ip"), "203.0.113.10");
+    assert.equal(headers.get("cf-connecting-ip"), null);
+    assert.equal(headers.get("x-forwarded-for"), null);
+    assert.equal(headers.get("x-real-ip"), null);
+    assert.equal(headers.get("forwarded"), null);
+    assert.equal(JSON.stringify([...headers]).includes("198.51.100.9"), false);
+    assert.equal(JSON.stringify([...headers]).includes("198.51.100.7"), false);
+    assert.equal(headers.get("true-client-ip"), "198.51.100.8");
   });
 
   it("never forwards /internal/sanctions/*", async () => {
@@ -207,6 +230,10 @@ describe("relayer edge proxy", () => {
     assert.equal(blocked.status, 404);
     assert.equal(missingSecret.calls.length, 0);
     assert.equal(reservedSanctionsPath("/internal/sanctions-other"), false);
+    assert.equal(reservedSanctionsPath("/Internal/Sanctions"), true);
+    assert.equal(reservedSanctionsPath("/internal/%73anctions"), true);
+    assert.equal(reservedSanctionsPath("/%2569nternal/sanctions"), true);
+    assert.equal(reservedSanctionsPath("/internal/sanctions%00"), true);
     const allowed = recorder();
     const forwarded = await handle(
       incoming({ path: "/internal/sanctions-other" }),
@@ -261,6 +288,104 @@ describe("relayer edge proxy", () => {
     assert.equal(calls.length, 1);
     assert.equal(new URL(calls[0].url).origin, ORIGIN);
     assert.equal(response.status, 200);
+  });
+
+  it("never forwards a decoded or mixed-case sanctions path", async () => {
+    const paths = [
+      "/Internal/Sanctions",
+      "/INTERNAL/sanctions/List",
+      "/internal/%73anctions",
+      "/%2569nternal/sanctions",
+      "/internal/sanctions%00",
+    ];
+    for (const path of paths) {
+      const { calls, fetchImpl } = recorder();
+      const response = await handle(
+        incoming({ path, method: "POST", headers: { Origin: PAGES } }),
+        { RELAYER_EDGE_AUTH: SECRET },
+        fetchImpl,
+      );
+      assert.equal(response.status, 404, path);
+      assert.equal(calls.length, 0, path);
+    }
+    const missingSecret = recorder();
+    const blocked = await handle(
+      incoming({ path: "/Internal/Sanctions" }),
+      {},
+      missingSecret.fetchImpl,
+    );
+    assert.equal(blocked.status, 404);
+    assert.equal(missingSecret.calls.length, 0);
+  });
+
+  it("returns 404 for /v1/admin and does not forward", async () => {
+    const paths = [
+      "/v1/admin",
+      "/v1/admin/",
+      "/v1/admin/pause",
+      "/V1/Admin/Pause",
+      "/v1/admin%2fpause",
+      "/v1/%61dmin/unpause",
+    ];
+    for (const path of paths) {
+      const { calls, fetchImpl } = recorder();
+      const response = await handle(
+        incoming({
+          path,
+          method: "POST",
+          headers: { Origin: PAGES, "content-type": "application/json" },
+          body: "{}",
+        }),
+        { RELAYER_EDGE_AUTH: SECRET },
+        fetchImpl,
+      );
+      assert.equal(response.status, 404, path);
+      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
+      assert.equal(response.headers.get("access-control-allow-origin"), PAGES);
+      assert.equal(calls.length, 0, path);
+      assert.equal(reservedAdminPath(path), true, path);
+    }
+    const missingSecret = recorder();
+    const blocked = await handle(
+      incoming({ path: "/v1/admin/pause" }),
+      {},
+      missingSecret.fetchImpl,
+    );
+    assert.equal(blocked.status, 404);
+    assert.equal(missingSecret.calls.length, 0);
+    assert.equal(reservedAdminPath("/v1/administrator"), false);
+    assert.equal(reservedAdminPath("/v1/admin-other"), false);
+    const allowed = recorder();
+    const forwarded = await handle(
+      incoming({ path: "/v1/administrator" }),
+      { RELAYER_EDGE_AUTH: SECRET },
+      allowed.fetchImpl,
+    );
+    assert.equal(forwarded.status, 200);
+    assert.equal(allowed.calls.length, 1);
+    assert.equal(allowed.calls[0].url, `${ORIGIN}/v1/administrator`);
+  });
+
+  it("does not echo localhost on worker CORS responses", async () => {
+    for (const origin of ["http://localhost:5173", "http://127.0.0.1:5173"]) {
+      const missing = recorder();
+      const denied = await handle(
+        incoming({ path: "/health", headers: { Origin: origin } }),
+        {},
+        missing.fetchImpl,
+      );
+      assert.equal(denied.status, 503);
+      assert.equal(denied.headers.get("access-control-allow-origin"), null);
+      const admin = recorder();
+      const hidden = await handle(
+        incoming({ path: "/v1/admin/pause", headers: { Origin: origin } }),
+        { RELAYER_EDGE_AUTH: SECRET },
+        admin.fetchImpl,
+      );
+      assert.equal(hidden.status, 404);
+      assert.equal(hidden.headers.get("access-control-allow-origin"), null);
+      assert.equal(admin.calls.length, 0);
+    }
   });
 
   it("treats a blank secret as unset", () => {
