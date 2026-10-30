@@ -12,9 +12,14 @@ const cases = [
   { country: "US", edge: true },
   { country: "UA", edge: true },
   { country: "UA", regionCode: "43", edge: true },
+  { country: "UA", regionCode: "40", edge: true },
+  { country: "UA", regionCode: "UA-40", edge: true },
   { country: "UA", regionCode: "14", edge: true },
   { country: "UA", regionCode: "09", edge: true },
   { country: "UA", region: "Crimea", edge: true },
+  { country: "UA", region: "Sevastopol", edge: true },
+  { country: "UA", region: "Sevastopol City", edge: true },
+  { country: "UA", regionCode: "30", region: "Sevastopol", edge: true },
   { country: "UA", region: "Kyiv", edge: true },
   { country: "", edge: true },
   { country: "XX", edge: true },
@@ -46,5 +51,9 @@ describe("Pages geoblock matches the relayer module", () => {
     expect(pagesDecide({ country: "UA", edge: true, at }).decision).toBe("deny");
     expect(relayerDecide({ country: "UA", regionCode: "", region: "", edge: true, at }).decision).toBe("deny");
     expect(pagesDecide({ country: "UA", region: "Kyiv", edge: true, at }).decision).toBe("allow");
+    expect(pagesDecide({ country: "UA", regionCode: "40", edge: true, at }).decision).toBe("deny");
+    expect(pagesDecide({ country: "UA", regionCode: "40", edge: true, at }).country).toBe("UA-40");
+    expect(relayerDecide({ country: "UA", region: "Sevastopol", edge: true, at }).country).toBe("UA-40");
+    expect(pagesDecide({ country: "UA", regionCode: "UA-40", edge: true, at }).decision).toBe("deny");
   });
 });

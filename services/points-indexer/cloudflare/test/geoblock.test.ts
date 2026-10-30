@@ -33,6 +33,18 @@ describe("worker edge geoblock", () => {
       "?__geo=raw",
     );
     expect(crimea.status).toBe(403);
+    const sevastopol = await statusFor(
+      { country: "UA", regionCode: "40" },
+      { "CF-IPCountry": "US" },
+      "?__geo=raw",
+    );
+    expect(sevastopol.status).toBe(403);
+    const sevastopolName = await statusFor(
+      { country: "UA", region: "Sevastopol" },
+      { "CF-IPCountry": "US" },
+      "?__geo=raw",
+    );
+    expect(sevastopolName.status).toBe(403);
     const ukraine = await statusFor({ country: "UA" }, { "CF-IPCountry": "SY" }, "?__geo=raw");
     expect(ukraine.status).toBe(403);
     const blankRegion = await statusFor(

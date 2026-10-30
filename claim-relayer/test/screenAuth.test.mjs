@@ -233,6 +233,55 @@ describe("screen session and wallet proof", () => {
     }
   });
 
+  it("refuses signup after every wallet is unlinked unless that account session is present", async () => {
+    const victim = screenSigner();
+    const attacker = screenSigner();
+    const listed = screenSigner();
+    const now = Date.now();
+    const sanctions = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList([listed.address], now, { minAddresses: 1, listVersion: "unlink-takeover" }),
+    });
+    const ctx = await boot(sanctions);
+    try {
+      const signup = await postScreen(request, ctx.port, "signup", victim, "victim-unlinked");
+      assert.equal(signup.status, 200);
+      const unlinked = await postScreen(request, ctx.port, "unlink", victim, "victim-unlinked", {}, {
+        session: signup.json.session,
+      });
+      assert.equal(unlinked.status, 200);
+      const stored = sanctions.db.prepare(
+        "SELECT unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
+      ).get("victim-unlinked");
+      assert.ok(stored);
+      assert.ok(stored.unlinked_at);
+      const listedAttack = await postScreen(request, ctx.port, "signup", listed, "victim-unlinked");
+      assert.equal(listedAttack.status, 401);
+      assert.equal(listedAttack.json.error, "unproven");
+      const clearAttack = await postScreen(request, ctx.port, "signup", attacker, "victim-unlinked");
+      assert.equal(clearAttack.status, 401);
+      const listedHash = walletHashHex(TEST_PEPPER, listed.address.toLowerCase());
+      const attackerHash = walletHashHex(TEST_PEPPER, attacker.address.toLowerCase());
+      const rows = sanctions.db.prepare(
+        "SELECT wallet_hash, unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
+      ).all("victim-unlinked");
+      assert.equal(rows.some((row) => row.wallet_hash === listedHash), false);
+      assert.equal(rows.some((row) => row.wallet_hash === attackerHash), false);
+      assert.equal(rows.length, 1);
+      const withSession = await postScreen(request, ctx.port, "signup", attacker, "victim-unlinked", {}, {
+        session: signup.json.session,
+      });
+      assert.equal(withSession.status, 200);
+      const after = sanctions.db.prepare(
+        "SELECT wallet_hash FROM sanctions_account_wallets WHERE account_id = ? AND wallet_hash = ?",
+      ).get("victim-unlinked", attackerHash);
+      assert.ok(after);
+    } finally {
+      await ctx.close();
+    }
+  });
+
   it("deletes expired screen nonces and sessions when a nonce is written", () => {
     const now = 5_000_000;
     const sanctions = createSanctionsGate({
@@ -279,6 +328,8 @@ describe("screen session and wallet proof", () => {
         accountId: "acct-revoke",
       });
       assert.equal(denied.status, 401);
+      const beforeAuth = sanctions.db.prepare("SELECT COUNT(*) AS n FROM sanctions_session_audit").get();
+      assert.equal(Number(beforeAuth.n), 0);
       const revoked = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
         accountId: "acct-revoke",
       }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
@@ -307,6 +358,25 @@ describe("screen session and wallet proof", () => {
         () => sanctions.db.prepare("DELETE FROM sanctions_session_audit WHERE id = 1").run(),
         /append-only/,
       );
+      const badAccount = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
+        accountId: "bad account",
+      }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
+      assert.equal(badAccount.status, 403);
+      assert.equal(badAccount.json.error, "revoke_refused");
+      const badActor = sanctions.revokeSession("acct-revoke", "bad actor");
+      assert.equal(badActor.ok, false);
+      assert.equal(badActor.http, 403);
+      assert.equal(badActor.error, "revoke_refused");
+      const refusals = sanctions.db.prepare(
+        "SELECT account_id, outcome, actor, removed FROM sanctions_session_audit WHERE outcome = 'revoke_refused' ORDER BY id",
+      ).all();
+      assert.equal(refusals.length, 2);
+      assert.equal(refusals[0].account_id, "bad account");
+      assert.equal(refusals[0].actor, "ops-1");
+      assert.equal(Number(refusals[0].removed), 0);
+      assert.equal(refusals[1].account_id, "acct-revoke");
+      assert.equal(refusals[1].actor, "bad actor");
+      assert.equal(Number(refusals[1].removed), 0);
     } finally {
       await ctx.close();
     }

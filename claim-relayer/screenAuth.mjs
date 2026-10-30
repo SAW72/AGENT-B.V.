@@ -86,9 +86,9 @@ export function readScreenSession(sql, token, now) {
   return { accountId: String(row.account_id), walletHash: String(row.wallet_hash) };
 }
 
-function accountHasActiveWallets(sql, accountId) {
+function accountHasWallets(sql, accountId) {
   const row = sql.get(
-    "SELECT 1 AS hit FROM sanctions_account_wallets WHERE account_id = ? AND unlinked_at IS NULL LIMIT 1",
+    "SELECT 1 AS hit FROM sanctions_account_wallets WHERE account_id = ? LIMIT 1",
     String(accountId),
   );
   return Boolean(row);
@@ -97,15 +97,28 @@ function accountHasActiveWallets(sql, accountId) {
 const SESSION_AUDIT_SQL =
   "INSERT INTO sanctions_session_audit(account_id, outcome, acted_at, actor, removed) VALUES(?, ?, ?, ?, ?)";
 
+function auditLabel(value, max) {
+  return String(value || "").trim().slice(0, max);
+}
+
 /**
  * Admin removal of every session for one account. The audit insert is append-only.
- * A miss is recorded. Expired rows are deleted first.
+ * A success, a miss, and a refusal for a bad account or actor are recorded.
+ * An unauthenticated caller never reaches this function. Expired rows are deleted first.
  */
 export function revokeAccountSessions(sql, accountId, actor, now) {
   const id = String(accountId || "").trim();
   const actorId = String(actor || "").trim();
   const at = Number.isFinite(now) ? now : Date.now();
   if (!ACTOR_ID.test(actorId) || !ACCOUNT_ID.test(id)) {
+    sql.run(
+      SESSION_AUDIT_SQL,
+      auditLabel(id, 80),
+      "revoke_refused",
+      at,
+      auditLabel(actorId, 64),
+      0,
+    );
     return { ok: false, http: 403, error: "revoke_refused" };
   }
   purgeExpiredScreenAuth(sql, at);
@@ -145,7 +158,9 @@ function screenRequest(parsed, action) {
 /**
  * The account id and the wallet come from the signed message.
  * Link, change, and unlink require the signup session for that account.
- * Signup on an account that already has wallets requires that session too.
+ * Signup on an account that has ever had a wallet requires that session too,
+ * including after every wallet is unlinked.
+ * The session is checked against the account, not the wallet.
  * A matching nonce is consumed only after the signature checks.
  */
 export async function verifyScreenProof(sql, input) {
@@ -187,7 +202,8 @@ export async function verifyScreenProof(sql, input) {
     signatureOk = false;
   }
   if (!signatureOk) return { ok: false };
-  if (action !== "signup" || accountHasActiveWallets(sql, accountId)) {
+  // The session binds the account. The signed message proves the wallet.
+  if (action !== "signup" || accountHasWallets(sql, accountId)) {
     const session = readScreenSession(sql, input?.sessionToken, now);
     if (!session || session.accountId !== accountId) return { ok: false };
   }

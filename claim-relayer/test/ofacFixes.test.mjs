@@ -121,6 +121,12 @@ describe("edge geoblock", () => {
     assert.equal(decideGeoblock({ country: "UA", regionCode: " ", region: " ", edge: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "UA", regionCode: "43", edge: true, at }).country, "UA-43");
     assert.equal(decideGeoblock({ country: "UA", regionCode: "14", edge: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: "40", edge: true, at }).country, "UA-40");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: "40", edge: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: "UA-40", region: "Kyiv", edge: true, at }).country, "UA-40");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: "30", region: "Sevastopol", edge: true, at }).country, "UA-40");
+    assert.equal(decideGeoblock({ country: "UA", region: " SEVASTOPOL ", edge: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "UA", region: "Sevastopol City", edge: true, at }).country, "UA-40");
     assert.equal(decideGeoblock({ country: "UA", region: "Luhansk", edge: true, at }).country, "UA-09");
     assert.equal(decideGeoblock({ country: "UA", region: "Kyiv", edge: true, at }).decision, "allow");
     assert.equal(decideGeoblock({ country: "", edge: true, at }).decision, "deny");
@@ -692,6 +698,24 @@ describe("authenticated edge country", () => {
         "cf-region-code": "43",
       });
       assert.equal(crimea.status, 403);
+      const sevastopolCode = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-sevastopol-code",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "UA",
+        "cf-region-code": "40",
+      });
+      assert.equal(sevastopolCode.status, 403);
+      const sevastopolName = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-sevastopol-name",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "UA",
+        "cf-region": "Sevastopol",
+      });
+      assert.equal(sevastopolName.status, 403);
       const forged = await request(ctx.port, "POST", "/v1/screen/signup", {
         accountId: "edge-forged",
         wallet: CLEAR,
