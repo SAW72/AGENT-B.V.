@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { describe, it, mock } from "node:test";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH as EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { adminAuthorized, authorizeReleaseAdmin, createClaimRelayer, secretsEqual } from "../app.mjs";
 import { decideGeoblock, geoInputFromHeaders, geoLog, PROGRAM_NOTE } from "../geoblock.mjs";
 import { createMemorySanctionsData } from "../sanctionsMemory.mjs";
@@ -61,7 +62,7 @@ function request(port, method, path, body, headers = {}) {
       method,
       headers: {
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-        ...headers,
+        ...edgeRequestHeaders(headers),
       },
     }, (res) => {
       const chunks = [];
@@ -85,7 +86,10 @@ function request(port, method, path, body, headers = {}) {
 
 async function boot(sanctions) {
   const dir = await mkdtemp(join(tmpdir(), "ofac-fixes-"));
-  const config = loadConfig({ CLAIM_LOG_PATH: join(dir, "claims.jsonl") });
+  const config = loadConfig({
+    CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+    RELAYER_EDGE_AUTH: EDGE_AUTH,
+  });
   const server = createClaimRelayer({
     config,
     killSwitch: createKillSwitch({ initial: false }),
@@ -342,6 +346,7 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
       CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
       LIVE_SUBMIT: "1",
       SPENCER_RUN_AUTH: "1",
+      RELAYER_EDGE_AUTH: EDGE_AUTH,
     });
     const server = createClaimRelayer({
       config,
@@ -418,9 +423,15 @@ describe("public routes deny when location is unknown or off-edge", () => {
       const response = await request(server.address().port, "POST", "/v1/screen/signup", {
         accountId: "off-edge",
         wallet: CLEAR,
-      }, { "cf-ipcountry": "US", "x-edge-country": "US" });
-      assert.equal(response.status, 403);
-      assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
+      }, {
+        "x-relayer-edge-auth": "",
+        "cf-ipcountry": "US",
+        "x-edge-country": "US",
+      });
+      assert.equal(response.status, 404);
+      assert.deepEqual(response.json, { ok: false, error: "not_found" });
+      const cors = Object.keys(response.headers).filter((name) => name.startsWith("access-control") || name === "vary");
+      assert.deepEqual(cors, []);
       assert.equal(response.raw.toLowerCase().includes("sanction"), false);
     } finally {
       await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -430,7 +441,10 @@ describe("public routes deny when location is unknown or off-edge", () => {
   it("denies a server-side owner-policy country on a public route", async () => {
     const sanctions = clearSanctionsGate();
     const dir = await mkdtemp(join(tmpdir(), "ofac-sy-"));
-    const config = loadConfig({ CLAIM_LOG_PATH: join(dir, "claims.jsonl") });
+    const config = loadConfig({
+      CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+      RELAYER_EDGE_AUTH: EDGE_AUTH,
+    });
     const server = createClaimRelayer({
       config,
       killSwitch: createKillSwitch({ initial: false }),
@@ -438,7 +452,6 @@ describe("public routes deny when location is unknown or off-edge", () => {
       claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
       broadcaster: null,
       sanctions,
-      edgeCountry: "RU",
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -446,7 +459,7 @@ describe("public routes deny when location is unknown or off-edge", () => {
       const response = await request(server.address().port, "POST", "/v1/screen/signup", {
         accountId: "owner-policy",
         wallet: CLEAR,
-      });
+      }, { "x-edge-country": "RU" });
       assert.equal(response.status, 403);
       assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
     } finally {
@@ -507,6 +520,7 @@ describe("false-positive release", () => {
     const config = loadConfig({
       CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
       SANCTIONS_RELEASE_ADMINS: adminsJson,
+      RELAYER_EDGE_AUTH: EDGE_AUTH,
     });
     const server = createClaimRelayer({
       config,
@@ -564,7 +578,10 @@ describe("false-positive release", () => {
       assert.equal(JSON.stringify(health.json).includes(reviewSecret), false);
       assert.equal(JSON.stringify(health.json).includes(sha256Hex(opsSecret)), false);
       const closedDir = await mkdtemp(join(tmpdir(), "ofac-release-closed-"));
-      const closedConfig = loadConfig({ CLAIM_LOG_PATH: join(closedDir, "claims.jsonl") });
+      const closedConfig = loadConfig({
+        CLAIM_LOG_PATH: join(closedDir, "claims.jsonl"),
+        RELAYER_EDGE_AUTH: EDGE_AUTH,
+      });
       const closed = createClaimRelayer({
         config: closedConfig,
         killSwitch: createKillSwitch({ initial: false }),
@@ -591,13 +608,12 @@ describe("false-positive release", () => {
   });
 });
 
-const EDGE_AUTH = "edge-proxy-test-secret";
-
 async function bootPublic(env = {}, extra = {}) {
   const sanctions = extra.sanctions || clearSanctionsGate();
   const dir = await mkdtemp(join(tmpdir(), "ofac-edge-auth-"));
   const config = loadConfig({
     CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+    RELAYER_EDGE_AUTH: EDGE_AUTH,
     ...env,
   });
   const server = createClaimRelayer({
@@ -672,6 +688,7 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
+        "x-edge-country": "",
         "cf-ipcountry": "US",
         "cf-region-code": "CA",
         "cf-region": "California",
@@ -685,13 +702,14 @@ describe("authenticated edge country", () => {
         "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
-      assert.equal(forged.status, 403);
+      assert.equal(forged.status, 404);
+      assert.deepEqual(forged.json, { ok: false, error: "not_found" });
       const missing = await request(ctx.port, "POST", "/v1/screen/signup", {
         accountId: "edge-missing",
         wallet: CLEAR,
-      }, { "x-edge-country": "US", "cf-ipcountry": "US" });
-      assert.equal(missing.status, 403);
-      assert.equal(missing.json.message, PUBLIC_DENIAL_MESSAGE);
+      }, { "x-relayer-edge-auth": "", "x-edge-country": "US", "cf-ipcountry": "US" });
+      assert.equal(missing.status, 404);
+      assert.deepEqual(missing.json, { ok: false, error: "not_found" });
     } finally {
       await ctx.close();
     }
@@ -708,7 +726,8 @@ describe("authenticated edge country", () => {
         "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
-      assert.equal(response.status, 403);
+      assert.equal(response.status, 404);
+      assert.deepEqual(response.json, { ok: false, error: "not_found" });
     } finally {
       await ctx.close();
     }
@@ -806,23 +825,28 @@ describe("admin compare and rate limit", () => {
         "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
-      assert.equal(forged.status, 403);
+      assert.equal(forged.status, 404);
+      assert.deepEqual(forged.json, { ok: false, error: "not_found" });
       const otherHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "x-relayer-edge-auth": "",
         "x-edge-client-ip": "203.0.113.50",
         "cf-connecting-ip": "203.0.113.50",
         "x-forwarded-for": "198.51.100.10",
         "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
-      assert.equal(otherHop.status, 403);
+      assert.equal(otherHop.status, 404);
+      assert.deepEqual(otherHop.json, { ok: false, error: "not_found" });
       const sameHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "x-relayer-edge-auth": "",
         "x-edge-client-ip": "203.0.113.77",
         "cf-connecting-ip": "203.0.113.77",
         "x-forwarded-for": "1.1.1.1, 198.51.100.9",
         "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
-      assert.equal(sameHop.status, 429);
+      assert.equal(sameHop.status, 404);
+      assert.deepEqual(sameHop.json, { ok: false, error: "not_found" });
     } finally {
       await plain.close();
     }

@@ -15,6 +15,7 @@ import { startServer } from "../server.mjs";
 import { createSepoliaBroadcaster } from "../broadcast.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { createMemoryIntentNonceStore } from "../intentNonceStore.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
@@ -894,6 +895,7 @@ describe("claim relayer HTTP", () => {
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
           SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
           RELAYER_DATA_AUTH: randomBytes(32).toString("hex"),
+          RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
           SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
@@ -953,6 +955,7 @@ describe("claim relayer HTTP", () => {
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
           SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
           RELAYER_DATA_AUTH: randomBytes(32).toString("hex"),
+          RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
           SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
@@ -1018,6 +1021,103 @@ describe("claim relayer HTTP", () => {
       }
     }
   });
+
+  it("serves a public health shape of ok, chainId, and mode", async () => {
+    const ctx = await boot({ ADMIN_SECRET: "admin-test" });
+    try {
+      const health = await request(ctx.port, "GET", "/health", undefined, { "x-relayer-edge-auth": "" });
+      assert.deepEqual(health.json, { ok: true, chainId: 84532, mode: "fixture" });
+      const versioned = await request(ctx.port, "GET", "/v1/health", undefined, { "x-relayer-edge-auth": "" });
+      assert.deepEqual(versioned.json, { ok: true, chainId: 84532, mode: "fixture" });
+      const wrongAdmin = await request(ctx.port, "GET", "/health", undefined, {
+        "x-relayer-edge-auth": "",
+        "x-admin-secret": "nope",
+      });
+      assert.deepEqual(wrongAdmin.json, { ok: true, chainId: 84532, mode: "fixture" });
+      const asAdmin = await request(ctx.port, "GET", "/health", undefined, {
+        "x-relayer-edge-auth": "",
+        "x-admin-secret": "admin-test",
+      });
+      assert.equal(asAdmin.json.relayerAddress, "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861");
+      assert.equal(asAdmin.json.mode, "fixture");
+      assert.equal("liveSubmitBlockers" in asAdmin.json, true);
+      const asEdge = await request(ctx.port, "GET", "/health");
+      assert.equal(asEdge.json.relayerAddress, "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861");
+      assert.equal("build" in asEdge.json, true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("refuses every gated route for a missing, short, or wrong edge secret", async () => {
+    const routes = [
+      ["GET", "/v1/reputation/config", undefined],
+      ["OPTIONS", "/v1/reputation/config", undefined],
+      ["OPTIONS", "/v1/claims", undefined],
+      ["GET", "/", undefined],
+      ["HEAD", "/", undefined],
+      ["POST", "/v1/admin/pause", {}],
+      ["POST", "/v1/screen/nonce", {}],
+      ["POST", "/v1/claims", { claimId: "gated" }],
+      ["GET", "/not-a-route", undefined],
+    ];
+    const cases = [
+      ["missing", { "x-relayer-edge-auth": "" }],
+      ["short", { "x-relayer-edge-auth": "short" }],
+      ["wrong", { "x-relayer-edge-auth": "b".repeat(64) }],
+    ];
+    const ctx = await boot();
+    try {
+      for (const [label, auth] of cases) {
+        for (const [method, path, body] of routes) {
+          const res = await request(ctx.port, method, path, body, {
+            ...auth,
+            origin: "https://agent-bv.pages.dev",
+          });
+          assert.equal(res.status, 404, `${label} ${method} ${path}`);
+          if (method === "HEAD") {
+            assert.equal(res.raw, "", `${label} ${method} ${path}`);
+          } else {
+            assert.deepEqual(res.json, { ok: false, error: "not_found" });
+          }
+          const cors = Object.keys(res.headers).filter((name) => name.startsWith("access-control") || name === "vary");
+          assert.deepEqual(cors, [], `${label} ${method} ${path}`);
+        }
+      }
+    } finally {
+      await ctx.close();
+    }
+
+    const closed = await boot({ RELAYER_EDGE_AUTH: "short" });
+    try {
+      for (const [method, path, body] of routes) {
+        const res = await request(closed.port, method, path, body, {
+          "x-relayer-edge-auth": "short",
+          origin: "https://agent-bv.pages.dev",
+        });
+        assert.equal(res.status, 404, `configured short ${method} ${path}`);
+        if (method === "HEAD") {
+          assert.equal(res.raw, "", `configured short ${method} ${path}`);
+        } else {
+          assert.deepEqual(res.json, { ok: false, error: "not_found" });
+        }
+      }
+    } finally {
+      await closed.close();
+    }
+
+    const same = "d".repeat(64);
+    const equal = await boot({ RELAYER_EDGE_AUTH: same, RELAYER_DATA_AUTH: same });
+    try {
+      const res = await request(equal.port, "POST", "/v1/claims", { claimId: "same-secret" }, {
+        "x-relayer-edge-auth": same,
+      });
+      assert.equal(res.status, 404);
+      assert.deepEqual(res.json, { ok: false, error: "not_found" });
+    } finally {
+      await equal.close();
+    }
+  });
 });
 
 function stubHealthFetch() {
@@ -1075,6 +1175,7 @@ async function boot(env = {}, extra = {}) {
     CLAIM_LOG_PATH: logPath,
     QUOTE_TTL_MS: "60000",
     RELAYER_PRIVATE_KEY: SECRET,
+    RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     ...env,
   });
   const server = createClaimRelayer({
@@ -1114,7 +1215,7 @@ function request(port, method, path, body, headers = {}) {
         method,
         headers: {
           ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-          ...headers,
+          ...edgeRequestHeaders(headers),
         },
       },
       (res) => {

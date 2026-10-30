@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { openWallet } from "../accountScreen.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { createClaimRelayer } from "../app.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
@@ -30,7 +31,7 @@ function request(port, method, path, body, headers = {}) {
       method,
       headers: {
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-        ...headers,
+        ...edgeRequestHeaders(headers),
       },
     }, (res) => {
       const chunks = [];
@@ -56,6 +57,7 @@ async function boot(sanctions, extra = {}) {
   const dir = await mkdtemp(join(tmpdir(), "screen-auth-"));
   const config = loadConfig({
     CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+    RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     ...extra.env,
   });
   const server = createClaimRelayer({

@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { healthPayload, httpError, isSha256Hex, retiredEscrowError } from "./config.mjs";
+import { healthPayload, httpError, isSha256Hex, retiredEscrowError, validEdgeAuth } from "./config.mjs";
 import { KILL_SWITCH } from "./killSwitch.mjs";
 import {
   assertBaseSepolia,
@@ -270,6 +270,16 @@ export function createClaimRelayer(deps) {
     return true;
   }
 
+  function refuseEdge(res) {
+    const payload = JSON.stringify({ ok: false, error: "not_found" });
+    res.writeHead(404, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "content-length": Buffer.byteLength(payload),
+    });
+    res.end(payload);
+  }
+
   function headerValue(req, name) {
     const value = req.headers[String(name || "").toLowerCase()];
     if (Array.isArray(value)) return String(value[0] || "");
@@ -281,9 +291,18 @@ export function createClaimRelayer(deps) {
   // When the secret matches and x-edge-client-ip is empty, the key is the
   // fixed string edge-unknown, not the X-Forwarded-For hop.
   // cf-connecting-ip is not read.
+  function configuredEdgeSecret() {
+    return validEdgeAuth(config.relayerEdgeAuth, config.relayerDataAuth);
+  }
+
   function edgeAuthMatches(req) {
-    const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
-    return Boolean(secret) && secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret);
+    const header = headerValue(req, "x-relayer-edge-auth");
+    const secret = configuredEdgeSecret();
+    if (!secret) {
+      secretsEqual(header, "a".repeat(64));
+      return false;
+    }
+    return secretsEqual(header, secret);
   }
 
   function edgeSetClientIp(req) {
@@ -301,7 +320,7 @@ export function createClaimRelayer(deps) {
   // There is no default country. deps.edgeCountry is a test seam and is used
   // only when that secret is unset. startServer does not set it.
   function trustedEdge(req) {
-    const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
+    const secret = configuredEdgeSecret();
     if (secret) {
       if (!secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret)) {
         return { edge: false, country: "", regionCode: "", region: "" };
@@ -384,6 +403,21 @@ export function createClaimRelayer(deps) {
       const url = new URL(req.url || "/", "http://127.0.0.1");
       const path = url.pathname.replace(/\/+$/, "") || "/";
 
+      if (req.method === "GET" && (path === "/health" || path === "/v1/health")) {
+        const open = edgeAuthMatches(req) || adminAuthorized(req, config.adminSecret);
+        const live = Boolean(config.liveSubmit?.allowed);
+        const body = open
+          ? healthPayload(config, killSwitch.isOn())
+          : { ok: true, chainId: config.chainId, mode: live ? "live" : "fixture" };
+        sendJson(res, req, 200, body, corsHeaders);
+        return;
+      }
+
+      if (!edgeAuthMatches(req)) {
+        refuseEdge(res);
+        return;
+      }
+
       if (path === "/v1/reputation" || path.startsWith("/v1/reputation/")) {
         if (req.method === "OPTIONS") {
           res.writeHead(204, reputationCorsHeaders(req));
@@ -428,11 +462,6 @@ export function createClaimRelayer(deps) {
           ...corsHeaders(req),
         });
         res.end();
-        return;
-      }
-
-      if (req.method === "GET" && (path === "/health" || path === "/v1/health")) {
-        sendJson(res, req, 200, healthPayload(config, killSwitch.isOn()), corsHeaders);
         return;
       }
 

@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { createClaimRelayer } from "./app.mjs";
 import { createSepoliaBroadcaster } from "./broadcast.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, httpError, loadConfig } from "./config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, assertRelayerEdgeAuth, httpError, loadConfig } from "./config.mjs";
 import { createAbuseGuard } from "./abuseLimits.mjs";
 import { createClaimLog } from "./claimLog.mjs";
 import { createRpcEscrowChain, httpRpcRequest } from "./escrowChain.mjs";
@@ -23,6 +23,7 @@ export { assertSanctionsDataConfig };
 export async function startServer(env = process.env) {
   const config = loadConfig(env);
   const dataConfig = assertSanctionsDataConfig(env);
+  assertRelayerEdgeAuth(env);
   const data = createSanctionsDataClient(dataConfig);
   let health;
   try {

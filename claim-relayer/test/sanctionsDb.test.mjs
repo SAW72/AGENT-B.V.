@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { createClaimRelayer } from "../app.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
@@ -30,6 +31,7 @@ function dataEnv(extra = {}) {
   return {
     SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
     RELAYER_DATA_AUTH: hexSecret(),
+    RELAYER_EDGE_AUTH: "b".repeat(64),
     ...extra,
   };
 }
@@ -78,6 +80,25 @@ describe("production sanctions data config", () => {
     } finally {
       globalThis.fetch = previous;
     }
+  });
+
+  it("refuses to start when the edge secret is short, non-hex, or the data secret", async () => {
+    const base = {
+      SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
+      RELAYER_DATA_AUTH: "c".repeat(64),
+      PORT: "18792",
+      HOST: "127.0.0.1",
+      SANCTIONS_REFRESH: "0",
+    };
+    await assert.rejects(() => startServer({ ...base, RELAYER_EDGE_AUTH: "short" }), /relayer_edge_auth_required/);
+    await assert.rejects(() => startServer({ ...base, RELAYER_EDGE_AUTH: "g".repeat(64) }), /relayer_edge_auth_required/);
+    await assert.rejects(() => startServer({ ...base, RELAYER_EDGE_AUTH: "a".repeat(65) }), /relayer_edge_auth_required/);
+    const same = "d".repeat(64);
+    await assert.rejects(() => startServer({
+      ...base,
+      RELAYER_DATA_AUTH: same,
+      RELAYER_EDGE_AUTH: same.toUpperCase(),
+    }), /relayer_edge_auth_required/);
   });
 
   it("refreshes at start and schedules the next refresh 12 hours later", async () => {
@@ -167,7 +188,10 @@ function request(port, method, path, body) {
       port,
       path,
       method,
-      headers: payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {},
+      headers: {
+        ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
+        ...edgeRequestHeaders(),
+      },
     }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
@@ -240,7 +264,10 @@ describe("sanctions data client fails closed", () => {
         screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
       });
       const dir = await mkdtemp(join(tmpdir(), "sanctions-client-"));
-      const config = loadConfig({ CLAIM_LOG_PATH: join(dir, "claims.jsonl") });
+      const config = loadConfig({
+        CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+        RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
+      });
       let broadcasts = 0;
       const app = createClaimRelayer({
         config,

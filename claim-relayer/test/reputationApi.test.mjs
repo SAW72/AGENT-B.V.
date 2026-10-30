@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { createClaimRelayer } from "../app.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig, reputationCorsFromEnv } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { allowAllEligibility, createDefaultHooks, recordingEnforcer } from "../reputation/hooks.mjs";
 import { createRateLimiter } from "../reputation/rateLimit.mjs";
 import { ARBITRATOR_LEDGER, USAGE_LEDGER } from "../reputation/reputationConfig.mjs";
@@ -42,6 +43,7 @@ async function boot(extra = {}, env = {}) {
   const config = loadConfig({
     CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
     RELAYER_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+    RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     ...env,
   });
   const server = createClaimRelayer({
@@ -62,7 +64,7 @@ async function boot(extra = {}, env = {}) {
 
 function request(port, method, path, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ hostname: "127.0.0.1", port, path, method, headers }, (res) => {
+    const req = http.request({ hostname: "127.0.0.1", port, path, method, headers: edgeRequestHeaders(headers) }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
@@ -509,7 +511,7 @@ describe("reputation read API", () => {
   });
 
   it("keys reputation on edge-unknown when edge auth matches and x-edge-client-ip is empty", async () => {
-    const EDGE_AUTH = "edge-proxy-test-secret";
+    const EDGE_AUTH = "c".repeat(64);
     const limited = await boot(
       { reputationRateLimit: createRateLimiter({ max: 1, windowMs: 60_000, clock: () => 5_000 }) },
       { RELAYER_EDGE_AUTH: EDGE_AUTH },
@@ -528,11 +530,13 @@ describe("reputation read API", () => {
       });
       assert.equal(whitespace.status, 429);
       assert.equal(whitespace.json.error, "rate_limited");
-      // Off-edge still uses the socket, so it must not share the edge-unknown bucket.
+      // A missing edge header is refused before the limiter, so it does not share edge-unknown.
       const offEdge = await request(limited.port, "GET", "/v1/reputation/config", {
+        "x-relayer-edge-auth": "",
         "x-forwarded-for": "198.51.100.1",
       });
-      assert.equal(offEdge.status, 200);
+      assert.equal(offEdge.status, 404);
+      assert.deepEqual(offEdge.json, { ok: false, error: "not_found" });
       const named = await request(limited.port, "GET", "/v1/reputation/config", {
         ...auth,
         "x-edge-client-ip": "203.0.113.50",
