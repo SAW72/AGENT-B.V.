@@ -366,6 +366,31 @@ describe("relayer edge proxy", () => {
     assert.equal(allowed.calls[0].url, `${ORIGIN}/v1/administrator`);
   });
 
+  it("blocks %2e, %2F, and a leading double slash on sanctions and admin paths", async () => {
+    const paths = [
+      "/internal/%2e/sanctions",
+      "/internal%2Fsanctions",
+      "//internal/sanctions",
+      "/v1/%2e/admin",
+      "/v1%2Fadmin",
+      "//v1/admin",
+    ];
+    for (const path of paths) {
+      const { calls, fetchImpl } = recorder();
+      const response = await handle(
+        incoming({ path, method: "POST", headers: { Origin: PAGES } }),
+        { RELAYER_EDGE_AUTH: SECRET },
+        fetchImpl,
+      );
+      assert.equal(response.status, 404, path);
+      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
+      assert.equal(calls.length, 0, path);
+      const sanctions = path.includes("sanction");
+      assert.equal(reservedSanctionsPath(path), sanctions, path);
+      assert.equal(reservedAdminPath(path), !sanctions, path);
+    }
+  });
+
   it("does not echo localhost on worker CORS responses", async () => {
     for (const origin of ["http://localhost:5173", "http://127.0.0.1:5173"]) {
       const missing = recorder();

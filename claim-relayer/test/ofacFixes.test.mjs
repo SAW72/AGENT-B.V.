@@ -878,4 +878,33 @@ describe("admin compare and rate limit", () => {
       await plain.close();
     }
   });
+
+  it("uses edge-unknown when edge auth matches and x-edge-client-ip is empty", async () => {
+    const clock = () => 5_000;
+    const limiter = createRateLimiter({ max: 1, windowMs: 60_000, clock });
+    const ctx = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, { deps: { screenRateLimit: limiter } });
+    try {
+      const auth = { "x-relayer-edge-auth": EDGE_AUTH, "x-edge-country": "US" };
+      const empty = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(empty.status, 200);
+      const whitespace = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-edge-client-ip": "   ",
+        "x-forwarded-for": "198.51.100.2",
+      });
+      assert.equal(whitespace.status, 429);
+      assert.equal(whitespace.json.error, "rate_limited");
+      const named = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-edge-client-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(named.status, 200);
+    } finally {
+      await ctx.close();
+    }
+  });
 });

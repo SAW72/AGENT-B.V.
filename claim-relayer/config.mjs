@@ -18,9 +18,14 @@ export const BASE_SEPOLIA_CHAIN_ID = 84532;
 /** Exact Pages origin. Relayer defaults allow only https://agent-bv.pages.dev. */
 export const DEFAULT_REPUTATION_CORS_ORIGINS = ["https://agent-bv.pages.dev"];
 
-/** Claim-route allowlist. Local Vite origins stay. Reputation CORS does not use this list. */
-export const DEFAULT_CORS_ORIGINS = [
-  ...DEFAULT_REPUTATION_CORS_ORIGINS,
+/** Production claim-route allowlist when CORS_ORIGINS is unset. Never includes localhost. */
+export const DEFAULT_CORS_ORIGINS = DEFAULT_REPUTATION_CORS_ORIGINS.join(",");
+
+/**
+ * Dev-only Vite origins. Not part of DEFAULT_CORS_ORIGINS or render.yaml.
+ * A local process may set CORS_ORIGINS to this list. Production must not.
+ */
+export const DEV_ONLY_CORS_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ].join(",");

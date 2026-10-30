@@ -112,6 +112,7 @@ function sendJson(res, req, status, body, corsHeaders) {
  * Missing header (local tests, or a request that did not pass that proxy)
  * falls back to the socket address. X-Real-IP is not read.
  * x-edge-client-ip is used only by rateLimitKey when x-relayer-edge-auth matches.
+ * An empty value uses the fixed key edge-unknown, not X-Forwarded-For.
  */
 function clientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "");
@@ -277,15 +278,22 @@ export function createClaimRelayer(deps) {
 
   // A valid edge secret means the proxy set x-edge-client-ip. Otherwise the
   // caller can forge that header, so the existing key is kept.
+  // When the secret matches and x-edge-client-ip is empty, the key is the
+  // fixed string edge-unknown, not the X-Forwarded-For hop.
   // cf-connecting-ip is not read.
-  function edgeSetClientIp(req) {
+  function edgeAuthMatches(req) {
     const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
-    if (!secret || !secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret)) return "";
+    return Boolean(secret) && secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret);
+  }
+
+  function edgeSetClientIp(req) {
+    if (!edgeAuthMatches(req)) return "";
     return headerValue(req, "x-edge-client-ip").trim();
   }
 
   function rateLimitKey(req) {
-    return edgeSetClientIp(req) || clientIp(req);
+    if (!edgeAuthMatches(req)) return clientIp(req);
+    return headerValue(req, "x-edge-client-ip").trim() || "edge-unknown";
   }
 
   // Production reads a country header only when x-relayer-edge-auth matches
