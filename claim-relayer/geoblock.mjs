@@ -1,8 +1,7 @@
 // Edge jurisdiction check. Wallet screening stays authoritative.
 // Country codes CU, IR, and KP are the broad jurisdiction programs named in
-// OFAC FAQ 10 (page dated October 26, 2026). Crimea, Sevastopol, the so-called
-// DNR, and the so-called LNR are on that list and are not ISO countries.
-// Sevastopol is ISO region UA-40. Cloudflare's country header is UA for those
+// OFAC FAQ 10 (page dated October 26, 2026). The Crimea region (including Sevastopol, ISO UA-40), the so-called DNR, and the so-called LNR are on that list.
+// Cloudflare's country header is UA for those
 // regions, so the region code and the region name are read as well.
 // UA with an empty or missing region denies. Those regions are not a separate
 // country code, so a missing region cannot be treated as the rest of Ukraine.

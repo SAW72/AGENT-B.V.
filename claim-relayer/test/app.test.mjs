@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, readFile } from "node:fs/promises";
 import http from "node:http";
@@ -878,9 +879,10 @@ describe("claim relayer HTTP", () => {
       };
       const dir = await mkdtemp(join(tmpdir(), "claim-relayer-retired-"));
       const port = await freePort();
+      const restoreFetch = stubHealthFetch();
       let server;
       try {
-        server = startServer({
+        server = await startServer({
           PORT: String(port),
           HOST: "127.0.0.1",
           ESCROW_ADDRESS: address,
@@ -890,7 +892,8 @@ describe("claim relayer HTTP", () => {
           RELAYER_PRIVATE_KEY: SECRET,
           CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
-          SANCTIONS_DB_PATH: join(dir, "sanctions.sqlite"),
+          SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
+          RELAYER_DATA_AUTH: randomBytes(32).toString("hex"),
           SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
@@ -919,6 +922,7 @@ describe("claim relayer HTTP", () => {
         assert.match(errors[0], /ESCROW_ADDRESS/);
       } finally {
         console.error = original;
+        restoreFetch();
         if (server) {
           await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
         }
@@ -936,9 +940,10 @@ describe("claim relayer HTTP", () => {
       };
       const dir = await mkdtemp(join(tmpdir(), "claim-relayer-retired-start-"));
       const port = await freePort();
+      const restoreFetch = stubHealthFetch();
       let server;
       try {
-        server = startServer({
+        server = await startServer({
           PORT: String(port),
           HOST: "127.0.0.1",
           ESCROW_ADDRESS: address,
@@ -946,7 +951,8 @@ describe("claim relayer HTTP", () => {
           KILL_SWITCH: "0",
           CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
           INTENT_NONCE_PATH: join(dir, "nonces.jsonl"),
-          SANCTIONS_DB_PATH: join(dir, "sanctions.sqlite"),
+          SANCTIONS_DATA_URL: "https://sanctions.test/internal/sanctions",
+          RELAYER_DATA_AUTH: randomBytes(32).toString("hex"),
           SANCTIONS_REFRESH: "0",
         });
         await once(server, "listening");
@@ -963,6 +969,7 @@ describe("claim relayer HTTP", () => {
         assert.match(errors[0], /ESCROW_ADDRESS/);
       } finally {
         console.error = original;
+        restoreFetch();
         if (server) {
           await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
         }
@@ -1012,6 +1019,22 @@ describe("claim relayer HTTP", () => {
     }
   });
 });
+
+function stubHealthFetch() {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/internal/sanctions/health")) {
+      return new Response(JSON.stringify({ ok: true, result: { applied: true, name: "0001_sanctions.sql" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("nope", { status: 503 });
+  };
+  return () => {
+    globalThis.fetch = previous;
+  };
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {

@@ -1,6 +1,9 @@
 // Account signup, wallet link, and wallet change. The server decides.
 // A clear result stays unverified. It is not an approval.
 // Full wallet addresses are sealed here and stored in the open only in sanctions_wallets.
+// The node:sqlite helpers in this file stay for the points indexer.
+// The relayer gate does not call them. It uses the edge data client.
+// A second module that imported this file back would cycle, so the split stops at that comment.
 
 import {
   PUBLIC_DENIAL_MESSAGE,

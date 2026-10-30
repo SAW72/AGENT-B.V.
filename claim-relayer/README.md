@@ -25,12 +25,14 @@ The booked escrow is source `7fe4a863e9bce0b70b629dab76ddd2728c97b536`. It expos
 ```bash
 cd claim-relayer
 cp .env.example .env
-# edit .env if you want; empty defaults are enough for fixtures
+# edit .env if you want; fixture routes still need the sanctions data URL and secret to boot
 set -a
 source .env
 set +a
 npm start
 ```
+
+`npm start` calls the edge Worker before it listens. `SANCTIONS_DATA_URL` must be `https` with pathname `/internal/sanctions`. `RELAYER_DATA_AUTH` must be at least 32 bytes of hex. The Worker must answer `health` with the `0001_sanctions.sql` migration applied. A missing value, a bad URL, or an unreachable Worker exits with `sanctions_data_config_required`. Tests inject an in-memory stand-in and do not call Cloudflare. There is no `SANCTIONS_DB_PATH` and no `DATABASE_URL`. Render does not hold a Cloudflare token, account id, or database id.
 
 Listens on `127.0.0.1:8790` unless `HOST` or Render's `PORT` is set. Render must bind `0.0.0.0`.
 

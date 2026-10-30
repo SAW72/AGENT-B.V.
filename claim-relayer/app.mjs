@@ -354,16 +354,16 @@ export function createClaimRelayer(deps) {
     return wallets;
   }
 
-  function walletsDenied(body) {
+  async function walletsDenied(body) {
     try {
       const wallets = claimWallets(body);
       // A fixture or a rejected live body may name no party. Those paths do not broadcast.
       // A named party that is not clear denies before any signature or broadcast.
       if (wallets.length === 0) return false;
       for (const wallet of wallets) {
-        const decision = sanctions.screen(wallet, "claim");
+        const decision = await sanctions.screen(wallet, "claim");
         if (!decision || decision.result !== "clear") return true;
-        if (sanctions.blocks(wallet)) return true;
+        if (await sanctions.blocks(wallet)) return true;
       }
       return false;
     } catch {
@@ -476,7 +476,7 @@ export function createClaimRelayer(deps) {
           return;
         }
         const body = await readBody(req);
-        const result = sanctions.dropTie(body.accountId, body.wallet, admin.actor);
+        const result = await sanctions.dropTie(body.accountId, body.wallet, admin.actor);
         sendJson(
           res,
           req,
@@ -494,7 +494,7 @@ export function createClaimRelayer(deps) {
           return;
         }
         const body = await readBody(req);
-        const result = sanctions.revokeSession(body.accountId, admin.actor);
+        const result = await sanctions.revokeSession(body.accountId, admin.actor);
         sendJson(
           res,
           req,
@@ -529,7 +529,7 @@ export function createClaimRelayer(deps) {
           return;
         }
         if (path === "/v1/screen/nonce") {
-          const issued = sanctions.issueNonce();
+          const issued = await sanctions.issueNonce();
           sendJson(res, req, 200, { ok: true, nonce: issued.nonce, expiresAt: issued.expiresAt }, corsHeaders);
           return;
         }
@@ -555,7 +555,7 @@ export function createClaimRelayer(deps) {
         const payload = result.ok
           ? { ok: true, status: "unverified" }
           : { ok: false, message: PUBLIC_DENIAL_MESSAGE };
-        if (op === "signup" && result.ok) payload.session = sanctions.sessionFor(auth.accountId, auth.wallet);
+        if (op === "signup" && result.ok) payload.session = await sanctions.sessionFor(auth.accountId, auth.wallet);
         sendJson(res, req, result.ok ? 200 : 403, payload, corsHeaders);
         return;
       }
@@ -565,7 +565,7 @@ export function createClaimRelayer(deps) {
         const body = await readBody(req);
         assertBaseSepolia(body);
         if (config.escrowRetired && wantsLiveSubmit(body)) throw retiredEscrowError(config);
-        if (locationDenied(req) || walletsDenied(body)) {
+        if (locationDenied(req) || await walletsDenied(body)) {
           denyScreen(res, req);
           return;
         }
@@ -587,7 +587,7 @@ export function createClaimRelayer(deps) {
         }
         const body = await readBody(req);
         assertBaseSepolia(body);
-        if (locationDenied(req) || walletsDenied(body)) {
+        if (locationDenied(req) || await walletsDenied(body)) {
           denyScreen(res, req);
           return;
         }
@@ -602,7 +602,7 @@ export function createClaimRelayer(deps) {
             nowMs: now(),
             ip: rateLimitKey(req),
           });
-          if (walletsDenied({
+          if (await walletsDenied({
             sender: prepared.sender,
             payer: prepared.payer,
             payee: prepared.payee,

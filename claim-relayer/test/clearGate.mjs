@@ -1,3 +1,4 @@
+import { createMemorySanctionsData } from "../sanctionsMemory.mjs";
 import { createSanctionsGate } from "../sanctionsGate.mjs";
 import { screenFromAddressList } from "../sanctions.mjs";
 
@@ -8,6 +9,7 @@ export function clearSanctionsGate(now = Date.now()) {
   return createSanctionsGate({
     pepper: TEST_PEPPER,
     now: () => now,
+    data: createMemorySanctionsData(),
     screen: screenFromAddressList([CLEAR_ADDRESS], now, {
       minAddresses: 1,
       listVersion: "test-clear",

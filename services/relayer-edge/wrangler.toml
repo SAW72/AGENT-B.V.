@@ -30,3 +30,11 @@ invocation_logs = false
 [observability.traces]
 enabled = false
 head_sampling_rate = 0
+
+# Empty D1 database Spencer created 2026-10-30. The id is not a secret.
+# Agents do not create this database and do not apply migrations remotely.
+[[d1_databases]]
+binding = "SANCTIONS_DB"
+database_name = "agent-bv-sanctions"
+database_id = "027bb34d-bd12-4c43-acdf-294cf40a11a2"
+migrations_dir = "migrations"

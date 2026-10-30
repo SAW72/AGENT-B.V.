@@ -7,7 +7,7 @@ The pepper is the input keying material for two keys. HKDF-SHA256 derives an HMA
 ## Before the first value
 
 1. Generate a high-entropy pepper outside this repo. Do not commit it. Do not put it in an example file.
-2. Create the database directory and set `SANCTIONS_DB_PATH` to a file path. An empty value, or `:memory:`, refuses to start the relayer. In-memory databases stay in tests.
+2. Point the relayer at the edge Worker. Set `SANCTIONS_DATA_URL` to `https://<edge-worker-host>/internal/sanctions` and set `RELAYER_DATA_AUTH` to the same hex secret stored on the Worker. An empty URL, a non-https URL, or a short secret refuses to start the relayer. Do not set `SANCTIONS_DB_PATH`. The relayer does not open a local sanctions database.
 3. Set the same pepper as `WALLET_HASH_PEPPER` on the claim relayer and on the points Worker. Leave it empty in git.
 4. Start the relayer. It refreshes the SDN publication at boot and every 12 hours.
 5. Confirm `/health` does not echo the pepper.

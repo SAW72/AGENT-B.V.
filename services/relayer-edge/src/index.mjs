@@ -2,6 +2,9 @@
 // The browser calls this Worker. This Worker is the only hop that may
 // set x-relayer-edge-auth and the location headers the origin trusts.
 // RELAYER_EDGE_AUTH is a Worker secret. It is not in wrangler.toml.
+// /internal/sanctions/* is the relayer data API. It is never forwarded.
+
+import { handleSanctions } from "./sanctionsApi.mjs";
 
 export const ORIGIN = "https://bot-verifier-claim-relayer.onrender.com";
 
@@ -72,6 +75,7 @@ function dropClientHeader(name) {
   if (DROPPED_HEADERS.has(lower)) return true;
   if (lower.startsWith("cf-")) return true;
   if (lower.startsWith("x-edge-")) return true;
+  if (lower.startsWith("x-relayer-data-")) return true;
   return false;
 }
 
@@ -122,7 +126,10 @@ function originUrl(requestUrl) {
 
 export async function handle(request, env, fetchImpl = globalThis.fetch) {
   const url = new URL(request.url);
-  if (reservedSanctionsPath(url.pathname) || reservedAdminPath(url.pathname)) {
+  if (reservedSanctionsPath(url.pathname)) {
+    return handleSanctions(request, env, url.pathname, normalizePath(url.pathname));
+  }
+  if (reservedAdminPath(url.pathname)) {
     return json(404, { ok: false, error: "not_found" }, request);
   }
   const secret = edgeSecret(env);

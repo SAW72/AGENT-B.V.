@@ -6,6 +6,8 @@ PR #46 squash-merged as `a66ef6439dec6fd2e5ad49d53fa4ce98d373d787`, from `05fe6f
 
 The Render service is `bot-verifier-claim-relayer`. Copy the hostname from the dashboard. The example below is `https://bot-verifier-claim-relayer.onrender.com`. Wallet UX's only Cloudflare Pages project is `agent-bv` (`https://agent-bv.pages.dev`). The previous project `agent-a-wallet-ux` has been deleted, and https://agent-a-wallet-ux.pages.dev no longer serves the wallet. Do not recreate it. `agent-bv` is Direct Upload. It has no git connection, and Cloudflare does not build it.
 
+Sanctions rows are not part of steps 0 through 8. They live in Cloudflare D1 and the relayer reaches them only through the edge Worker. On Render, set `SANCTIONS_DATA_URL` to `https://<edge-worker-host>/internal/sanctions`, set `RELAYER_DATA_AUTH` to the same secret as the Worker, set `SANCTIONS_DATA_TIMEOUT_MS` to `3000`, and delete `SANCTIONS_DB_PATH` if it is present. Do not put a Cloudflare token, account id, or database id on Render. Generate the secret with `openssl rand -hex 32` and do not write it into this file. Hitting the D1 free caps fails closed until the daily reset.
+
 Set this once. Later commands use `$BASE`. Do not set it again.
 
 ```bash

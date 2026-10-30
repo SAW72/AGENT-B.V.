@@ -3,16 +3,14 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, mock } from "node:test";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
 import { adminAuthorized, authorizeReleaseAdmin, createClaimRelayer, secretsEqual } from "../app.mjs";
-import { nodeSql, purgeRetention } from "../accountScreen.mjs";
 import { decideGeoblock, geoInputFromHeaders, geoLog, PROGRAM_NOTE } from "../geoblock.mjs";
-import { migrateSanctionsSchema } from "../sanctions.mjs";
+import { createMemorySanctionsData } from "../sanctionsMemory.mjs";
 import { createRateLimiter } from "../reputation/rateLimit.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
@@ -29,7 +27,6 @@ import {
   parseSdnAdvancedXml,
   screenFromAddressList,
   screenFromStored,
-  swapSanctionsCache,
 } from "../sanctions.mjs";
 import { clearSanctionsGate, TEST_PEPPER } from "./clearGate.mjs";
 
@@ -167,6 +164,7 @@ describe("account wallet screen", () => {
   function gate(addresses = [LISTED]) {
     const open = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList(addresses, now, { minAddresses: 1, listVersion: "acct" }),
     });
@@ -199,7 +197,7 @@ describe("account wallet screen", () => {
     assert.equal((await open.link({ accountId: "acct-3", wallet: LISTED })).http, 403);
     const sibling = await open.link({ accountId: "acct-3", wallet: CLEAR });
     assert.equal(sibling.http, 403);
-    assert.equal(open.blocks(CLEAR), true);
+    assert.equal(await open.blocks(CLEAR), true);
     const fresh = gate();
     assert.equal((await fresh.signup({ accountId: "acct-4", wallet: CLEAR })).http, 200);
     await fresh.link({ accountId: "acct-4", wallet: LISTED });
@@ -209,7 +207,7 @@ describe("account wallet screen", () => {
   });
 
   it("fails closed when the list is down and still denies a stored match", async () => {
-    const open = createSanctionsGate({ pepper: TEST_PEPPER, now: () => now });
+    const open = createSanctionsGate({ pepper: TEST_PEPPER, data: createMemorySanctionsData(), now: () => now });
     const down = await open.signup({ accountId: "acct-5", wallet: CLEAR, proven: true });
     assert.equal(down.http, 403);
     assert.equal(down.decision.result, "unavailable");
@@ -225,18 +223,17 @@ describe("account wallet screen", () => {
 });
 
 describe("screening record retention", () => {
-  it("keeps 90 days of clears, purges day 91, and keeps matches for 10 years", () => {
+  it("keeps 90 days of clears, purges day 91, and keeps matches for 10 years", async () => {
     const now = 2_000_000_000_000;
     const open = clearSanctionsGate(now);
-    const sql = nodeSql(open.db);
     const insert = (result, age) => {
-      sql.run(
-        `INSERT INTO sanctions_checks(wallet_hash, result, reason, checked_at, persisted) VALUES(?, ?, ?, ?, 0)`,
-        "abc",
+      open.data.state.checks.push({
+        wallet_hash: "abc",
         result,
-        result,
-        now - age,
-      );
+        reason: result,
+        checked_at: now - age,
+        persisted: 0,
+      });
     };
     insert("clear", 89 * DAY);
     insert("clear", 90 * DAY);
@@ -244,22 +241,20 @@ describe("screening record retention", () => {
     insert("unavailable", 91 * DAY);
     insert("match", 91 * DAY);
     insert("match", SANCTIONS_MATCH_RETENTION_MS + DAY);
-    sql.run(
-      `INSERT INTO sanctions_wallets(wallet, wallet_hash, reason, checked_at, list_version) VALUES(?, ?, ?, ?, ?)`,
-      CLEAR,
-      "abc",
-      "sanctions_match",
-      now - (91 * DAY),
-      "t",
-    );
-    const first = purgeRetention(sql, now);
+    open.data.state.wallets.push({
+      wallet: CLEAR,
+      wallet_hash: "abc",
+      reason: "sanctions_match",
+      checked_at: now - (91 * DAY),
+      list_version: "t",
+    });
+    const first = await open.purgeRetention(now);
     assert.equal(first.cleared, 1);
     assert.equal(first.unavailable, 1);
     assert.equal(first.matches, 1);
-    const left = sql.all("SELECT result, checked_at FROM sanctions_checks ORDER BY checked_at");
-    assert.equal(left.length, 3);
-    assert.equal(sql.get("SELECT wallet FROM sanctions_wallets")?.wallet, CLEAR);
-    const second = purgeRetention(sql, now);
+    assert.equal(open.data.state.checks.length, 3);
+    assert.equal(open.data.state.wallets[0]?.wallet, CLEAR);
+    const second = await open.purgeRetention(now);
     assert.equal(second.cleared, 0);
     assert.equal(second.matches, 0);
     assert.equal(SANCTIONS_CLEAR_RETENTION_MS, 90 * DAY);
@@ -312,36 +307,6 @@ describe("strict address and list integrity", () => {
     assert.equal(corrupt.listReady, false);
   });
 
-  it("rolls back a cache swap that throws and leaves the previous row", () => {
-    const open = clearSanctionsGate(now);
-    swapSanctionsCache(open.db, {
-      fetchedAt: now,
-      source: "test",
-      listVersion: "good",
-      addressesJson: JSON.stringify([CLEAR]),
-      addressesSha256: addressListSha256([CLEAR]),
-      rawSha256: "abc",
-    });
-    const before = open.db.prepare("SELECT addresses_json FROM sanctions_cache WHERE id = 1").get();
-    const throwing = {
-      exec(sql) {
-        open.db.exec(sql);
-      },
-      prepare() {
-        throw new Error("interrupted");
-      },
-    };
-    assert.throws(() => swapSanctionsCache(throwing, {
-      fetchedAt: now,
-      source: "test",
-      listVersion: "bad",
-      addressesJson: "[\"0x1111111111111111111111111111111111111111\"]",
-      addressesSha256: "abc",
-      rawSha256: "def",
-    }));
-    const after = open.db.prepare("SELECT addresses_json, list_version FROM sanctions_cache WHERE id = 1").get();
-    assert.equal(after.addresses_json, before?.addresses_json ?? null);
-  });
 });
 
 describe("claim relayer refuses a screened wallet before broadcast", () => {
@@ -349,6 +314,7 @@ describe("claim relayer refuses a screened wallet before broadcast", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([LISTED], now, { minAddresses: 1 }),
     });
@@ -487,66 +453,35 @@ describe("false-positive release", () => {
   it("keeps a true match blocked, releases a false positive, and keeps the audit row", async () => {
     const open = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
     });
     await open.signup({ accountId: "acct-fp", wallet: LISTED, proven: true });
-    assert.equal(open.release(LISTED, "ops-1").error, "release_refused");
-    assert.equal(open.blocks(LISTED), true);
+    assert.equal((await open.release(LISTED, "ops-1")).error, "release_refused");
+    assert.equal(await open.blocks(LISTED), true);
     open.replace(screenFromAddressList([], now, { minAddresses: 1, listVersion: "down" }));
-    assert.equal(open.release(LISTED, "ops-1").error, "release_refused");
-    assert.equal(open.blocks(LISTED), true);
+    assert.equal((await open.release(LISTED, "ops-1")).error, "release_refused");
+    assert.equal(await open.blocks(LISTED), true);
     open.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
-    assert.equal(open.release(LISTED, "review-2").ok, true);
-    assert.equal(open.blocks(LISTED), false);
-    const sql = nodeSql(open.db);
-    const rows = sql.all("SELECT outcome, actor FROM sanctions_release_audit ORDER BY id");
+    assert.equal((await open.release(LISTED, "review-2")).ok, true);
+    assert.equal(await open.blocks(LISTED), false);
+    const rows = open.data.state.releaseAudit;
     assert.deepEqual(rows.map((row) => ({ outcome: row.outcome, actor: row.actor })), [
       { outcome: "refused_match", actor: "ops-1" },
       { outcome: "refused_unavailable", actor: "ops-1" },
       { outcome: "released", actor: "review-2" },
     ]);
-    assert.throws(() => sql.run("UPDATE sanctions_release_audit SET actor = ? WHERE id = 1", "tampered"));
-    assert.throws(() => sql.run("DELETE FROM sanctions_release_audit WHERE id = 1"));
-    assert.equal(sql.get("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").actor, "ops-1");
-    assert.equal(JSON.stringify(sql.all("SELECT * FROM sanctions_release_audit")).includes(LISTED), false);
-    purgeRetention(sql, now + SANCTIONS_MATCH_RETENTION_MS + DAY);
-    assert.equal(sql.all("SELECT id FROM sanctions_release_audit").length, 3);
-  });
-
-  it("aborts update and delete after migrating an audit table that had no actor column", () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec(`CREATE TABLE sanctions_release_audit (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      wallet_hash TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      list_version TEXT,
-      released_at INTEGER NOT NULL
-    )`);
-    db.prepare(
-      "INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)",
-    ).run("abc", "released", "v", 1);
-    migrateSanctionsSchema(db);
-    const migrated = db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
-    assert.equal(migrated.outcome, "released");
-    assert.equal(migrated.actor, "");
-    assert.throws(
-      () => db.prepare("UPDATE sanctions_release_audit SET outcome = ? WHERE id = 1").run("tampered"),
-      (err) => /append-only/.test(String(err && err.message)),
-    );
-    assert.throws(
-      () => db.prepare("DELETE FROM sanctions_release_audit WHERE id = 1").run(),
-      (err) => /append-only/.test(String(err && err.message)),
-    );
-    const after = db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
-    assert.equal(after.outcome, "released");
-    assert.equal(after.actor, "");
-    db.close();
+    assert.equal(rows[0].actor, "ops-1");
+    assert.equal(JSON.stringify(rows).includes(LISTED), false);
+    await open.purgeRetention(now + SANCTIONS_MATCH_RETENTION_MS + DAY);
+    assert.equal(open.data.state.releaseAudit.length, 3);
   });
 
   it("requires the env secret and does not echo it", async () => {
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([LISTED], now, { minAddresses: 1, listVersion: "live" }),
     });
@@ -583,7 +518,7 @@ describe("false-positive release", () => {
         "x-admin-secret": opsSecret,
       });
       assert.equal(otherAdmin.status, 401);
-      assert.equal(sanctions.blocks(LISTED), true);
+      assert.equal(await sanctions.blocks(LISTED), true);
       const refused = await request(port, "POST", "/v1/admin/sanctions/release", { wallet: LISTED, actor: "spoofed" }, {
         "x-sanctions-actor": "ops-1",
         "x-admin-secret": opsSecret,
@@ -591,9 +526,7 @@ describe("false-positive release", () => {
       assert.equal(refused.status, 403);
       assert.equal(refused.json.error, "release_refused");
       assert.equal(JSON.stringify(refused.json).includes(opsSecret), false);
-      const refusedRow = nodeSql(sanctions.db).get(
-        "SELECT actor, outcome FROM sanctions_release_audit ORDER BY id DESC LIMIT 1",
-      );
+      const refusedRow = sanctions.data.state.releaseAudit[sanctions.data.state.releaseAudit.length - 1];
       assert.equal(refusedRow.actor, "ops-1");
       assert.equal(refusedRow.outcome, "refused_match");
       sanctions.replace(screenFromAddressList([CLEAR], now, { minAddresses: 1, listVersion: "next" }));
@@ -604,10 +537,8 @@ describe("false-positive release", () => {
       assert.equal(released.status, 200);
       assert.equal(released.json.ok, true);
       assert.equal(JSON.stringify(released.json).includes(reviewSecret), false);
-      assert.equal(sanctions.blocks(LISTED), false);
-      const releasedRow = nodeSql(sanctions.db).get(
-        "SELECT actor, outcome FROM sanctions_release_audit ORDER BY id DESC LIMIT 1",
-      );
+      assert.equal(await sanctions.blocks(LISTED), false);
+      const releasedRow = sanctions.data.state.releaseAudit[sanctions.data.state.releaseAudit.length - 1];
       assert.equal(releasedRow.actor, "review-2");
       assert.equal(releasedRow.outcome, "released");
       const health = await request(port, "GET", "/health");

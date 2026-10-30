@@ -4,7 +4,7 @@
 // Owner policy (Spencer 2026-10-28) also blocks SY, RU, and VE.
 // Unknown location denies. An off-edge request on a public route denies.
 // UA with an empty or missing region denies.
-// Sevastopol is ISO region UA-40 and is denied with Crimea, the so-called DNR, and the so-called LNR.
+// The Crimea region (including Sevastopol, ISO UA-40), the so-called DNR, and the so-called LNR are on that list.
 
 export const PUBLIC_DENIAL_MESSAGE = "Agent-B.V. isn't available for this wallet or location. If you think this is a mistake, contact hello@stewardoftheking.com.";
 

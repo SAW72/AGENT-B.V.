@@ -163,10 +163,10 @@ function screenRequest(parsed, action) {
  * The session is checked against the account, not the wallet.
  * A matching nonce is consumed only after the signature checks.
  */
-export async function verifyScreenProof(sql, input) {
+export async function verifyScreenProof(io, input) {
   const action = String(input?.action || "");
   const now = Number(input?.now);
-  if (Number.isFinite(now)) purgeExpiredScreenAuth(sql, now);
+  if (Number.isFinite(now)) await io.purge(now);
   const domain = String(input?.domain || "");
   const chainId = Number(input?.chainId);
   const message = String(input?.message || "");
@@ -203,10 +203,10 @@ export async function verifyScreenProof(sql, input) {
   }
   if (!signatureOk) return { ok: false };
   // The session binds the account. The signed message proves the wallet.
-  if (action !== "signup" || accountHasWallets(sql, accountId)) {
-    const session = readScreenSession(sql, input?.sessionToken, now);
+  if (action !== "signup" || await io.accountHasWallets(accountId)) {
+    const session = await io.readSession(input?.sessionToken, now);
     if (!session || session.accountId !== accountId) return { ok: false };
   }
-  if (!consumeScreenNonce(sql, parsed.nonce, now)) return { ok: false };
+  if (!await io.consumeNonce(parsed.nonce, now)) return { ok: false };
   return { ok: true, accountId, wallet };
 }

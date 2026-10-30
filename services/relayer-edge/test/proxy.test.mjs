@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac, createHash, randomBytes } from "node:crypto";
 import { describe, it } from "node:test";
 import { ORIGIN, edgeSecret, handle, reservedAdminPath, reservedSanctionsPath } from "../src/index.mjs";
 
@@ -216,9 +217,9 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
-      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
-      assert.equal(response.headers.get("access-control-allow-origin"), PAGES);
+      assert.equal(response.status, 503, path);
+      assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
       assert.equal(calls.length, 0, path);
     }
     const missingSecret = recorder();
@@ -227,7 +228,7 @@ describe("relayer edge proxy", () => {
       {},
       missingSecret.fetchImpl,
     );
-    assert.equal(blocked.status, 404);
+    assert.equal(blocked.status, 503);
     assert.equal(missingSecret.calls.length, 0);
     assert.equal(reservedSanctionsPath("/internal/sanctions-other"), false);
     assert.equal(reservedSanctionsPath("/Internal/Sanctions"), true);
@@ -305,7 +306,8 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
+      assert.equal(response.status, 503, path);
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
       assert.equal(calls.length, 0, path);
     }
     const missingSecret = recorder();
@@ -314,7 +316,7 @@ describe("relayer edge proxy", () => {
       {},
       missingSecret.fetchImpl,
     );
-    assert.equal(blocked.status, 404);
+    assert.equal(blocked.status, 503);
     assert.equal(missingSecret.calls.length, 0);
   });
 
@@ -386,6 +388,74 @@ describe("relayer edge proxy", () => {
       assert.equal(hidden.headers.get("access-control-allow-origin"), null);
       assert.equal(admin.calls.length, 0);
     }
+  });
+
+  it("strips spoofed x-relayer-data headers and never proxies an internal path", async () => {
+    const { calls, fetchImpl } = recorder();
+    const response = await handle(
+      incoming({
+        path: "/health",
+        headers: {
+          "x-relayer-data-sig": "spoofed-sig",
+          "x-relayer-data-extra": "spoofed-extra",
+          "x-relayer-ts": "1",
+          "content-type": "application/json",
+        },
+      }),
+      { RELAYER_EDGE_AUTH: SECRET },
+      fetchImpl,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.headers.get("x-relayer-data-sig"), null);
+    assert.equal(calls[0].init.headers.get("x-relayer-data-extra"), null);
+    assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-sig"), false);
+    assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-extra"), false);
+    const dataSecret = "test-relayer-data-auth";
+    const body = JSON.stringify({});
+    const ts = String(Date.now());
+    const nonce = randomBytes(16).toString("base64url");
+    const path = "/internal/sanctions/not-an-op";
+    const hash = createHash("sha256").update(body).digest("hex");
+    const sig = createHmac("sha256", dataSecret).update(`POST\n${path}\n${ts}\n${nonce}\n${hash}`).digest("hex");
+    const internal = recorder();
+    const hidden = await handle(
+      incoming({
+        path,
+        method: "POST",
+        headers: {
+          Origin: PAGES,
+          "content-type": "application/json",
+          "x-relayer-ts": ts,
+          "x-relayer-nonce": nonce,
+          "x-relayer-data-sig": sig,
+        },
+        body,
+      }),
+      { RELAYER_EDGE_AUTH: SECRET, RELAYER_DATA_AUTH: dataSecret },
+      internal.fetchImpl,
+    );
+    assert.equal(hidden.status, 404);
+    assert.deepEqual(await hidden.json(), { ok: false, error: "not_found" });
+    assert.equal(hidden.headers.get("access-control-allow-origin"), null);
+    assert.equal(internal.calls.length, 0);
+    const wrong = recorder();
+    const rejected = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: {
+          "x-relayer-ts": ts,
+          "x-relayer-nonce": nonce,
+          "x-relayer-data-sig": "ab".repeat(32),
+        },
+        body,
+      }),
+      { RELAYER_DATA_AUTH: dataSecret },
+      wrong.fetchImpl,
+    );
+    assert.equal(rejected.status, 401);
+    assert.equal(wrong.calls.length, 0);
   });
 
   it("treats a blank secret as unset", () => {
