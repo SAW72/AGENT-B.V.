@@ -508,6 +508,42 @@ describe("reputation read API", () => {
     }
   });
 
+  it("keys reputation on edge-unknown when edge auth matches and x-edge-client-ip is empty", async () => {
+    const EDGE_AUTH = "edge-proxy-test-secret";
+    const limited = await boot(
+      { reputationRateLimit: createRateLimiter({ max: 1, windowMs: 60_000, clock: () => 5_000 }) },
+      { RELAYER_EDGE_AUTH: EDGE_AUTH },
+    );
+    try {
+      const auth = { "x-relayer-edge-auth": EDGE_AUTH };
+      const empty = await request(limited.port, "GET", "/v1/reputation/config", {
+        ...auth,
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(empty.status, 200);
+      const whitespace = await request(limited.port, "GET", "/v1/reputation/config", {
+        ...auth,
+        "x-edge-client-ip": "   ",
+        "x-forwarded-for": "198.51.100.2",
+      });
+      assert.equal(whitespace.status, 429);
+      assert.equal(whitespace.json.error, "rate_limited");
+      // Off-edge still uses the socket, so it must not share the edge-unknown bucket.
+      const offEdge = await request(limited.port, "GET", "/v1/reputation/config", {
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(offEdge.status, 200);
+      const named = await request(limited.port, "GET", "/v1/reputation/config", {
+        ...auth,
+        "x-edge-client-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(named.status, 200);
+    } finally {
+      await limited.close();
+    }
+  });
+
   it("rate limits reads and leaves the default ledger at zero", async () => {
     const limited = await boot({ reputationRateLimit: createRateLimiter({ max: 2 }) });
     try {

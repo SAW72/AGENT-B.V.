@@ -394,7 +394,11 @@ export function createClaimRelayer(deps) {
           sendJson(res, req, 405, { ok: false, error: "method_not_allowed" }, reputationCorsHeaders);
           return;
         }
-        const ip = edgeSetClientIp(req) || req.socket?.remoteAddress || "unknown";
+        // A matching edge secret with an empty x-edge-client-ip uses edge-unknown,
+        // the same key as rateLimitKey. A missing secret still uses the socket.
+        const ip = edgeAuthMatches(req)
+          ? rateLimitKey(req)
+          : (req.socket?.remoteAddress || "unknown");
         if (!limitReputation(ip)) {
           sendJson(res, req, 429, { ok: false, error: "rate_limited" }, reputationCorsHeaders);
           return;
