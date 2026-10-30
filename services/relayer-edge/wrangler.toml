@@ -12,6 +12,7 @@
 # https://bot-verifier-claim-relayer.onrender.com and must be reachable
 # only through this Worker.
 
+"$schema" = "./node_modules/wrangler/config-schema.json"
 name = "agent-bv-relayer-edge"
 main = "src/index.mjs"
 # Same date the points Worker pins for Wrangler 4.124.0.

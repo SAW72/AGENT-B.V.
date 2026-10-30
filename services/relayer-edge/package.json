@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Cloudflare Worker that proxies the claim relayer and sets edge location headers.",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs && npx wrangler deploy --dry-run --outdir .wrangler/dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "4.124.0"
   }
 }
