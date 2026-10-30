@@ -14,7 +14,7 @@ export default defineConfig({
         miniflare: {
           bindings: {
             TEST_MIGRATIONS: migrations,
-            RELAYER_DATA_AUTH: "test-relayer-data-auth",
+            RELAYER_DATA_AUTH: "ab".repeat(32),
           },
         },
       };

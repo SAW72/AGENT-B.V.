@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { handle } from "../src/index.mjs";
 import { MIGRATION_NAME, buildOp, handleSanctions, runBatch } from "../src/sanctionsApi.mjs";
 
-const SECRET = "test-relayer-data-auth";
+const SECRET = "ab".repeat(32);
 
 function hex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -202,6 +202,14 @@ describe("D1 sanctions migration", () => {
     const missing = await call("health", {}, { env: { ...env, RELAYER_DATA_AUTH: "" } });
     expect(missing.status).toBe(503);
     expect(missing.json.error).toBe("unavailable");
+
+    const short = await call("health", {}, { env: { ...env, RELAYER_DATA_AUTH: "short" } });
+    expect(short.status).toBe(503);
+    expect(short.json.error).toBe("unavailable");
+    const odd = await call("health", {}, { env: { ...env, RELAYER_DATA_AUTH: `${"ab".repeat(32)}c` } });
+    expect(odd.status).toBe(503);
+    const padded = await call("health", {}, { env: { ...env, RELAYER_DATA_AUTH: `  ${SECRET}  ` } });
+    expect(padded.status).toBe(200);
 
     const body = await call("health", { extra: true }, { signedBody: "{}" });
     expect(body.status).toBe(401);
@@ -445,5 +453,119 @@ describe("D1 sanctions migration", () => {
       "SELECT token_hash FROM screen_sessions WHERE account_id = ?",
     ).bind(sessionAccount).first();
     expect(left).toBeNull();
+  });
+
+  it("writes an unlink check in the same batch as the wallet unlink", async () => {
+    const hash = "cd".repeat(32);
+    const accountId = `unlink-${nonce()}`;
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO sanctions_account_wallets(account_id, wallet_hash, wallet_sealed, linked_at) VALUES(?, ?, ?, ?)",
+    ).bind(accountId, hash, "v1.linked", 40).run();
+    const unlinked = await call("account.unlink", {
+      accountId,
+      walletHash: hash,
+      unlinkedAt: 41,
+      wallet: `0x${"55".repeat(20)}`,
+      check: { ...check(hash, "clear"), decisionPoint: "unlink", checkedAt: 41 },
+    });
+    expect(unlinked.status).toBe(200);
+    expect(unlinked.json.result.blocked).toBe(false);
+    const link = await env.SANCTIONS_DB.prepare(
+      "SELECT unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
+    ).bind(accountId).first();
+    expect(link.unlinked_at).toBe(41);
+    const row = await env.SANCTIONS_DB.prepare(
+      "SELECT decision_point, wallet_hash, checked_at FROM sanctions_checks WHERE wallet_hash = ? AND decision_point = ?",
+    ).bind(hash, "unlink").first();
+    expect(row).toEqual({ decision_point: "unlink", wallet_hash: hash, checked_at: 41 });
+
+    const wrongPoint = await call("account.unlink", {
+      accountId,
+      walletHash: hash,
+      unlinkedAt: 42,
+      check: check(hash),
+    });
+    expect(wrongPoint.status).toBe(400);
+    const unchanged = await env.SANCTIONS_DB.prepare(
+      "SELECT unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
+    ).bind(accountId).first();
+    expect(unchanged.unlinked_at).toBe(41);
+    const extra = await env.SANCTIONS_DB.prepare(
+      "SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet_hash = ? AND decision_point = ?",
+    ).bind(hash, "unlink").first();
+    expect(Number(extra.n)).toBe(1);
+  });
+
+  it("purges expired screen nonces and sessions and records revoke_refused", async () => {
+    const now = 5_000_000_000_000;
+    const hash = "9a".repeat(32);
+    const expiredAccount = `exp-${nonce()}`;
+    const keepAccount = `keep-${nonce()}`;
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES(?, ?, NULL)",
+    ).bind("expirednonce1", now).run();
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES(?, ?, NULL)",
+    ).bind("freshnonce01", now + 1).run();
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES(?, ?, ?, ?)",
+    ).bind("aa".repeat(32), expiredAccount, hash, now).run();
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES(?, ?, ?, ?)",
+    ).bind("bb".repeat(32), keepAccount, hash, now + 60_000).run();
+
+    const issued = await call("nonce.issue", {
+      nonce: "issuedNonce1",
+      expiresAt: now + 60_000,
+      now,
+    });
+    expect(issued.status).toBe(200);
+    expect(issued.json.result.nonce).toBe("issuedNonce1");
+
+    const expiredNonce = await env.SANCTIONS_DB.prepare(
+      "SELECT nonce FROM screen_nonces WHERE nonce = ?",
+    ).bind("expirednonce1").first();
+    expect(expiredNonce).toBeNull();
+    const freshNonce = await env.SANCTIONS_DB.prepare(
+      "SELECT nonce FROM screen_nonces WHERE nonce = ?",
+    ).bind("freshnonce01").first();
+    expect(freshNonce.nonce).toBe("freshnonce01");
+    const expiredSession = await env.SANCTIONS_DB.prepare(
+      "SELECT account_id FROM screen_sessions WHERE account_id = ?",
+    ).bind(expiredAccount).first();
+    expect(expiredSession).toBeNull();
+    const keptSession = await env.SANCTIONS_DB.prepare(
+      "SELECT account_id FROM screen_sessions WHERE account_id = ?",
+    ).bind(keepAccount).first();
+    expect(keptSession.account_id).toBe(keepAccount);
+
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES(?, ?, NULL)",
+    ).bind("stillExpired", now - 1).run();
+    const refused = await call("sessions.revoke", {
+      accountId: "bad id",
+      actor: "not-valid",
+      at: now,
+      refused: true,
+    });
+    expect(refused.status).toBe(200);
+    expect(refused.json.result).toEqual({ outcome: "revoke_refused", removed: 0 });
+    const audit = await env.SANCTIONS_DB.prepare(
+      "SELECT account_id, outcome, actor, removed FROM sanctions_session_audit WHERE outcome = ? AND acted_at = ?",
+    ).bind("revoke_refused", now).first();
+    expect(audit).toEqual({
+      account_id: "bad id",
+      outcome: "revoke_refused",
+      actor: "not-valid",
+      removed: 0,
+    });
+    const stillExpired = await env.SANCTIONS_DB.prepare(
+      "SELECT nonce FROM screen_nonces WHERE nonce = ?",
+    ).bind("stillExpired").first();
+    expect(stillExpired.nonce).toBe("stillExpired");
+    const stillKept = await env.SANCTIONS_DB.prepare(
+      "SELECT account_id FROM screen_sessions WHERE account_id = ?",
+    ).bind(keepAccount).first();
+    expect(stillKept.account_id).toBe(keepAccount);
   });
 });

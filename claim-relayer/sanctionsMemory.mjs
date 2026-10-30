@@ -137,6 +137,13 @@ export function createMemorySanctionsData() {
     if (op === "account.signup") return accountWrite(state, body, "if_unblocked");
     if (op === "account.link" || op === "account.change") return accountWrite(state, body, "always");
     if (op === "account.unlink") {
+      if (!body.check || body.check.decisionPoint !== "unlink") {
+        const error = new Error("bad_request");
+        error.code = "bad_request";
+        error.status = 400;
+        throw error;
+      }
+      pushCheck(state, body.check);
       const row = state.links.find((item) => item.account_id === body.accountId && item.wallet_hash === body.walletHash);
       if (row) row.unlinked_at = body.unlinkedAt;
       const blocked = accountBlocked(state, body.accountId) || walletBlocked(state, body.wallet || "", body.walletHash);

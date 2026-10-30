@@ -341,7 +341,11 @@ export function buildOp(op, body) {
     if (!isInt(body.unlinkedAt)) return bad();
     const wallet = typeof body.wallet === "string" ? body.wallet : "";
     if (wallet && !WALLET.test(wallet)) return bad();
+    if (!body.check || body.check.decisionPoint !== "unlink") return bad();
+    const checkParams = checkRow(body.check);
+    if (!checkParams) return bad();
     const statements = [
+      { sql: CHECK_INSERT, params: checkParams },
       {
         sql: `UPDATE sanctions_account_wallets SET unlinked_at = ? WHERE account_id = ? AND wallet_hash = ?`,
         params: [body.unlinkedAt, body.accountId, body.walletHash],
@@ -352,7 +356,7 @@ export function buildOp(op, body) {
     return {
       statements,
       read(results) {
-        return { blocked: results.slice(1).some((result) => hit(result)) };
+        return { blocked: results.slice(2).some((result) => hit(result)) };
       },
     };
   }

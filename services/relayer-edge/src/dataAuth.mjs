@@ -7,10 +7,15 @@ export const MAX_BODY_BYTES = 64 * 1024;
 export const MAX_SWAP_BODY_BYTES = 96 * 1024;
 export const SKEW_MS = 60_000;
 
+// Same minimum as the origin: at least 32 bytes of hex, and an even length.
+const DATA_AUTH_SECRET = /^[0-9a-fA-F]{64,}$/;
+
 export function dataSecret(env) {
   const value = env && env.RELAYER_DATA_AUTH;
   if (typeof value !== "string") return "";
-  return value.trim();
+  const secret = value.trim();
+  if (!DATA_AUTH_SECRET.test(secret) || secret.length % 2 !== 0) return "";
+  return secret;
 }
 
 export async function sha256Hex(bytes) {

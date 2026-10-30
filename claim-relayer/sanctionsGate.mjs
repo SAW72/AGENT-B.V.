@@ -324,14 +324,21 @@ export function createSanctionsGate(options = {}) {
         const normalized = normalizeSanctionsAddress(body.wallet);
         const hash = walletHashHex(pepper, normalized);
         if (!normalized || !hash) return deny(unavailable());
+        const decision = guardDecision(snapshot, normalized);
+        const params = sanctionsCheckParams(snapshot, normalized, decision, {
+          pepper,
+          chainId: 84532,
+          decisionPoint: "unlink",
+        });
+        note(snapshot, normalized, decision);
         const result = await data.call("account.unlink", {
           accountId,
           walletHash: hash,
           unlinkedAt: now(),
           wallet: normalized,
+          check: checkBody(params),
         });
         if (result?.blocked) return deny({ result: "match", reason: SANCTIONS_MATCH, persisted: true });
-        const decision = guardDecision(snapshot, normalized);
         if (decision.result !== "clear") return deny(decision);
         return allowUnverified(decision);
       } catch (error) {

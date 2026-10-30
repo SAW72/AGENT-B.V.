@@ -443,7 +443,7 @@ describe("relayer edge proxy", () => {
     assert.equal(calls[0].init.headers.get("x-relayer-data-extra"), null);
     assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-sig"), false);
     assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-extra"), false);
-    const dataSecret = "test-relayer-data-auth";
+    const dataSecret = "ab".repeat(32);
     const body = JSON.stringify({});
     const ts = String(Date.now());
     const nonce = randomBytes(16).toString("base64url");
@@ -488,6 +488,34 @@ describe("relayer edge proxy", () => {
     );
     assert.equal(rejected.status, 401);
     assert.equal(wrong.calls.length, 0);
+
+    const shortAuth = recorder();
+    const shortSecret = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      { RELAYER_DATA_AUTH: "short" },
+      shortAuth.fetchImpl,
+    );
+    assert.equal(shortSecret.status, 503);
+    assert.deepEqual(await shortSecret.json(), { ok: false, error: "unavailable" });
+    assert.equal(shortAuth.calls.length, 0);
+    const oddAuth = recorder();
+    const oddSecret = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      { RELAYER_DATA_AUTH: `${"ab".repeat(32)}c` },
+      oddAuth.fetchImpl,
+    );
+    assert.equal(oddSecret.status, 503);
+    assert.equal(oddAuth.calls.length, 0);
   });
 
   it("treats a blank secret as unset", () => {

@@ -203,6 +203,9 @@ describe("account wallet screen", () => {
     await fresh.link({ accountId: "acct-4", wallet: LISTED });
     const removed = await fresh.unlink({ accountId: "acct-4", wallet: LISTED });
     assert.equal(removed.http, 403);
+    const unlinkChecks = fresh.data.state.checks.filter((row) => row.decision_point === "unlink");
+    assert.equal(unlinkChecks.length, 1);
+    assert.equal(unlinkChecks[0].result, "match");
     assert.equal((await fresh.signup({ accountId: "acct-4", wallet: "0x6666666666666666666666666666666666666666" })).http, 403);
   });
 
