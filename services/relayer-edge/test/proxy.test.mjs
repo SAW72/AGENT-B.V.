@@ -384,12 +384,19 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
-      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
-      assert.equal(calls.length, 0, path);
       const sanctions = path.includes("sanction");
       assert.equal(reservedSanctionsPath(path), sanctions, path);
       assert.equal(reservedAdminPath(path), !sanctions, path);
+      assert.equal(calls.length, 0, path);
+      if (sanctions) {
+        // In-worker data API. No data secret means unavailable, and the path is not forwarded.
+        assert.equal(response.status, 503, path);
+        assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+        assert.equal(response.headers.get("access-control-allow-origin"), null);
+      } else {
+        assert.equal(response.status, 404, path);
+        assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
+      }
     }
   });
 
