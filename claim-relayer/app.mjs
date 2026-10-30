@@ -404,9 +404,9 @@ export function createClaimRelayer(deps) {
       const path = url.pathname.replace(/\/+$/, "") || "/";
 
       if (req.method === "GET" && (path === "/health" || path === "/v1/health")) {
-        const open = edgeAuthMatches(req) || adminAuthorized(req, config.adminSecret);
+        // The full payload needs a valid edge secret. An admin secret does not open it.
         const live = Boolean(config.liveSubmit?.allowed);
-        const body = open
+        const body = edgeAuthMatches(req)
           ? healthPayload(config, killSwitch.isOn())
           : { ok: true, chainId: config.chainId, mode: live ? "live" : "fixture" };
         sendJson(res, req, 200, body, corsHeaders);

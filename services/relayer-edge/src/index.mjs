@@ -21,10 +21,19 @@ const DROPPED_HEADERS = new Set([
   "content-length",
 ]);
 
+// Same rule as claim-relayer validEdgeAuth: at least 64 hex chars, even length.
+// A missing, short, non-hex, odd-length, or data-auth-equal value is empty.
+const EDGE_AUTH_HEX = /^[0-9a-fA-F]{64,}$/;
+
 export function edgeSecret(env) {
   const value = env && env.RELAYER_EDGE_AUTH;
   if (typeof value !== "string") return "";
-  return value.trim();
+  const secret = value.trim();
+  const dataValue = env && env.RELAYER_DATA_AUTH;
+  const data = typeof dataValue === "string" ? dataValue.trim() : "";
+  if (!EDGE_AUTH_HEX.test(secret) || secret.length % 2 !== 0) return "";
+  if (data && secret.toLowerCase() === data.toLowerCase()) return "";
+  return secret;
 }
 
 function normalizePath(pathname) {

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { ORIGIN, edgeSecret, handle, reservedAdminPath, reservedSanctionsPath } from "../src/index.mjs";
 
-const SECRET = "test-edge-auth";
+const SECRET = "a".repeat(64);
 const PAGES = "https://agent-bv.pages.dev";
 const WORKER = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev";
 
@@ -524,6 +524,43 @@ describe("relayer edge proxy", () => {
     assert.equal(edgeSecret({}), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: "  " }), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: SECRET }), SECRET);
+  });
+
+  it("refuses a short or non-hex edge secret and forwards a valid one", async () => {
+    const valid = "c".repeat(64);
+    const rejected = ["short", "g".repeat(64), `${"ab".repeat(32)}c`];
+    for (const value of rejected) {
+      const { calls, fetchImpl } = recorder();
+      const response = await handle(
+        incoming({ path: "/health", headers: { "x-relayer-edge-auth": "injected" } }),
+        { RELAYER_EDGE_AUTH: `  ${value}  ` },
+        fetchImpl,
+      );
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+      assert.equal(calls.length, 0);
+      assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: value }), "");
+    }
+    const same = "d".repeat(64);
+    const equal = recorder();
+    const blocked = await handle(
+      incoming({ path: "/health" }),
+      { RELAYER_EDGE_AUTH: same, RELAYER_DATA_AUTH: same.toUpperCase() },
+      equal.fetchImpl,
+    );
+    assert.equal(blocked.status, 503);
+    assert.equal(equal.calls.length, 0);
+    const { calls, fetchImpl } = recorder();
+    const response = await handle(
+      incoming({ path: "/v1/claims", method: "POST", body: "{}" }),
+      { RELAYER_EDGE_AUTH: `  ${valid}  `, RELAYER_DATA_AUTH: "ab".repeat(32) },
+      fetchImpl,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, `${ORIGIN}/v1/claims`);
+    assert.equal(calls[0].init.headers.get("x-relayer-edge-auth"), valid);
+    assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: `  ${valid}  ` }), valid);
   });
 
   it("sets preview_urls to false", () => {

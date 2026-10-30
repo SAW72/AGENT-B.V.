@@ -1038,12 +1038,30 @@ describe("claim relayer HTTP", () => {
         "x-relayer-edge-auth": "",
         "x-admin-secret": "admin-test",
       });
-      assert.equal(asAdmin.json.relayerAddress, "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861");
-      assert.equal(asAdmin.json.mode, "fixture");
-      assert.equal("liveSubmitBlockers" in asAdmin.json, true);
+      assert.deepEqual(asAdmin.json, { ok: true, chainId: 84532, mode: "fixture" });
       const asEdge = await request(ctx.port, "GET", "/health");
       assert.equal(asEdge.json.relayerAddress, "0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861");
       assert.equal("build" in asEdge.json, true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("returns only ok, chainId, and mode when a valid admin secret has no edge secret", async () => {
+    const ctx = await boot({ ADMIN_SECRET: "admin-test" });
+    try {
+      const health = await request(ctx.port, "GET", "/health", undefined, {
+        "x-relayer-edge-auth": "",
+        "x-admin-secret": "admin-test",
+      });
+      assert.equal(health.status, 200);
+      assert.deepEqual(health.json, { ok: true, chainId: 84532, mode: "fixture" });
+      const bearer = await request(ctx.port, "GET", "/health", undefined, {
+        "x-relayer-edge-auth": "",
+        authorization: "Bearer admin-test",
+      });
+      assert.equal(bearer.status, 200);
+      assert.deepEqual(bearer.json, { ok: true, chainId: 84532, mode: "fixture" });
     } finally {
       await ctx.close();
     }
