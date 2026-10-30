@@ -43,5 +43,8 @@ describe("Pages geoblock matches the relayer module", () => {
     }
     expect(pagesDecide({ country: "", edge: false, at }).decision).toBe("deny");
     expect(relayerDecide({ country: "US", edge: false, publicRoute: true, at }).decision).toBe("deny");
+    expect(pagesDecide({ country: "UA", edge: true, at }).decision).toBe("deny");
+    expect(relayerDecide({ country: "UA", regionCode: "", region: "", edge: true, at }).decision).toBe("deny");
+    expect(pagesDecide({ country: "UA", region: "Kyiv", edge: true, at }).decision).toBe("allow");
   });
 });

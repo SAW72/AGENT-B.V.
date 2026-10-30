@@ -110,8 +110,8 @@ function sendJson(res, req, status, body, corsHeaders) {
  * It appends the connecting client to X-Forwarded-For, so a caller can
  * prepend spoofed addresses. Only the rightmost hop is trusted.
  * Missing header (local tests, or a request that did not pass that proxy)
- * falls back to the socket address. X-Real-IP and Cloudflare headers are
- * not read. This service is not behind Cloudflare.
+ * falls back to the socket address. X-Real-IP is not read.
+ * CF-Connecting-IP is used only by rateLimitKey when x-relayer-edge-auth matches.
  */
 function clientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "");
@@ -275,6 +275,18 @@ export function createClaimRelayer(deps) {
     return value == null ? "" : String(value);
   }
 
+  // A valid edge secret means the proxy set CF-Connecting-IP. Otherwise the
+  // caller can forge that header, so the existing key is kept.
+  function edgeSetClientIp(req) {
+    const secret = typeof config.relayerEdgeAuth === "string" ? config.relayerEdgeAuth : "";
+    if (!secret || !secretsEqual(headerValue(req, "x-relayer-edge-auth"), secret)) return "";
+    return headerValue(req, "cf-connecting-ip").trim();
+  }
+
+  function rateLimitKey(req) {
+    return edgeSetClientIp(req) || clientIp(req);
+  }
+
   // Production reads a country header only when x-relayer-edge-auth matches
   // RELAYER_EDGE_AUTH. A missing or different value is off-edge, which denies.
   // There is no default country. deps.edgeCountry is a test seam and is used
@@ -373,7 +385,7 @@ export function createClaimRelayer(deps) {
           sendJson(res, req, 405, { ok: false, error: "method_not_allowed" }, reputationCorsHeaders);
           return;
         }
-        const ip = req.socket?.remoteAddress || "unknown";
+        const ip = edgeSetClientIp(req) || req.socket?.remoteAddress || "unknown";
         if (!limitReputation(ip)) {
           sendJson(res, req, 429, { ok: false, error: "rate_limited" }, reputationCorsHeaders);
           return;
@@ -412,14 +424,14 @@ export function createClaimRelayer(deps) {
       }
 
       if (path === "/v1/admin" || path.startsWith("/v1/admin/")) {
-        if (!limitAdmin(clientIp(req))) {
+        if (!limitAdmin(rateLimitKey(req))) {
           sendJson(res, req, 429, { ok: false, error: "rate_limited", retryAfter: 60 }, corsHeaders);
           return;
         }
       }
 
       if (path === "/v1/screen" || path.startsWith("/v1/screen/")) {
-        if (!limitScreen(clientIp(req))) {
+        if (!limitScreen(rateLimitKey(req))) {
           sendJson(res, req, 429, { ok: false, error: "rate_limited", retryAfter: 60 }, corsHeaders);
           return;
         }
@@ -469,6 +481,24 @@ export function createClaimRelayer(deps) {
           req,
           result.ok ? 200 : result.http,
           result.ok ? { ok: true } : { ok: false, error: result.error },
+          corsHeaders,
+        );
+        return;
+      }
+
+      if (req.method === "POST" && path === "/v1/admin/sanctions/revoke-session") {
+        const admin = authorizeReleaseAdmin(req, config.sanctionsReleaseAdmins);
+        if (!admin.ok) {
+          sendJson(res, req, 401, { ok: false, error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const body = await readBody(req);
+        const result = sanctions.revokeSession(body.accountId, admin.actor);
+        sendJson(
+          res,
+          req,
+          result.ok ? 200 : result.http,
+          result.ok ? { ok: true, removed: result.removed } : { ok: false, error: result.error },
           corsHeaders,
         );
         return;
@@ -552,7 +582,7 @@ export function createClaimRelayer(deps) {
         if (config.escrowRetired) throw retiredEscrowError(config);
         if (refuseIfKilled(res, req)) return;
         if (abuse && typeof abuse.takeIp === "function") {
-          await abuse.takeIp(clientIp(req), now());
+          await abuse.takeIp(rateLimitKey(req), now());
         }
         const body = await readBody(req);
         assertBaseSepolia(body);
@@ -569,7 +599,7 @@ export function createClaimRelayer(deps) {
             intentNonces,
             abuse,
             nowMs: now(),
-            ip: clientIp(req),
+            ip: rateLimitKey(req),
           });
           if (walletsDenied({
             sender: prepared.sender,

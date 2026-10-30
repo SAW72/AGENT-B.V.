@@ -196,4 +196,119 @@ describe("screen session and wallet proof", () => {
       await ctx.close();
     }
   });
+
+  it("refuses signup onto a victim account id with the attacker's own listed wallet", async () => {
+    const victim = screenSigner();
+    const attacker = screenSigner();
+    const listed = screenSigner();
+    const now = Date.now();
+    const sanctions = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList([listed.address], now, { minAddresses: 1, listVersion: "signup-takeover" }),
+    });
+    const ctx = await boot(sanctions);
+    try {
+      const signup = await postScreen(request, ctx.port, "signup", victim, "victim-acct");
+      assert.equal(signup.status, 200);
+      const listedAttack = await postScreen(request, ctx.port, "signup", listed, "victim-acct");
+      assert.equal(listedAttack.status, 401);
+      assert.equal(listedAttack.json.error, "unproven");
+      const clearAttack = await postScreen(request, ctx.port, "signup", attacker, "victim-acct");
+      assert.equal(clearAttack.status, 401);
+      const listedHash = walletHashHex(TEST_PEPPER, listed.address.toLowerCase());
+      const attackerHash = walletHashHex(TEST_PEPPER, attacker.address.toLowerCase());
+      const rows = sanctions.db.prepare(
+        "SELECT wallet_hash FROM sanctions_account_wallets WHERE account_id = ?",
+      ).all("victim-acct");
+      assert.equal(rows.some((row) => row.wallet_hash === listedHash), false);
+      assert.equal(rows.some((row) => row.wallet_hash === attackerHash), false);
+      assert.equal(rows.length, 1);
+      const second = await postScreen(request, ctx.port, "signup", attacker, "victim-acct", {}, {
+        session: signup.json.session,
+      });
+      assert.equal(second.status, 200);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("deletes expired screen nonces and sessions when a nonce is written", () => {
+    const now = 5_000_000;
+    const sanctions = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
+    });
+    sanctions.db.prepare(
+      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES('old-nonce', ?, NULL)",
+    ).run(now - 1);
+    sanctions.db.prepare(
+      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES('live-nonce', ?, NULL)",
+    ).run(now + 60_000);
+    sanctions.db.prepare(
+      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES('old-session', 'acct', 'hash', ?)",
+    ).run(now - 1);
+    sanctions.db.prepare(
+      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES('live-session', 'acct', 'hash', ?)",
+    ).run(now + 60_000);
+    sanctions.issueNonce();
+    const nonces = sanctions.db.prepare("SELECT nonce FROM screen_nonces").all().map((row) => row.nonce);
+    const sessions = sanctions.db.prepare("SELECT token_hash FROM screen_sessions").all().map((row) => row.token_hash);
+    assert.equal(nonces.includes("old-nonce"), false);
+    assert.equal(nonces.includes("live-nonce"), true);
+    assert.equal(sessions.includes("old-session"), false);
+    assert.equal(sessions.includes("live-session"), true);
+  });
+
+  it("revokes an account session from an audited admin route", async () => {
+    const owner = screenSigner();
+    const now = Date.now();
+    const sanctions = createSanctionsGate({
+      pepper: TEST_PEPPER,
+      now: () => now,
+      screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
+    });
+    const secret = "revoke-admin-secret";
+    const admins = JSON.stringify({ "ops-1": createHash("sha256").update(secret, "utf8").digest("hex") });
+    const ctx = await boot(sanctions, { env: { SANCTIONS_RELEASE_ADMINS: admins } });
+    try {
+      const signup = await postScreen(request, ctx.port, "signup", owner, "acct-revoke");
+      assert.equal(signup.status, 200);
+      const denied = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
+        accountId: "acct-revoke",
+      });
+      assert.equal(denied.status, 401);
+      const revoked = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
+        accountId: "acct-revoke",
+      }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
+      assert.equal(revoked.status, 200);
+      assert.equal(revoked.json.removed, 1);
+      const left = sanctions.db.prepare(
+        "SELECT 1 AS hit FROM screen_sessions WHERE account_id = ?",
+      ).get("acct-revoke");
+      assert.equal(left, undefined);
+      const again = await postScreen(request, ctx.port, "link", owner, "acct-revoke", {}, {
+        session: signup.json.session,
+      });
+      assert.equal(again.status, 401);
+      const audit = sanctions.db.prepare(
+        "SELECT outcome, actor, removed FROM sanctions_session_audit",
+      ).get();
+      assert.equal(audit.outcome, "revoked");
+      assert.equal(audit.actor, "ops-1");
+      assert.equal(Number(audit.removed), 1);
+      const miss = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
+        accountId: "acct-revoke",
+      }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
+      assert.equal(miss.status, 404);
+      assert.equal(miss.json.error, "revoke_absent");
+      assert.throws(
+        () => sanctions.db.prepare("DELETE FROM sanctions_session_audit WHERE id = 1").run(),
+        /append-only/,
+      );
+    } finally {
+      await ctx.close();
+    }
+  });
 });

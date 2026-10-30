@@ -149,6 +149,24 @@ export const SANCTIONS_SCHEMA_SQL = [
     wallet_hash TEXT NOT NULL,
     expires_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS sanctions_session_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    acted_at INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    removed INTEGER NOT NULL
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_session_audit_no_update
+   BEFORE UPDATE ON sanctions_session_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_session_audit is append-only');
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS sanctions_session_audit_no_delete
+   BEFORE DELETE ON sanctions_session_audit
+   BEGIN
+     SELECT RAISE(ABORT, 'sanctions_session_audit is append-only');
+   END`,
   `CREATE TABLE IF NOT EXISTS sanctions_tie_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id TEXT NOT NULL,

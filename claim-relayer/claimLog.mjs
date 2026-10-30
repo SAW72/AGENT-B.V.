@@ -40,9 +40,18 @@ const ALLOWED = new Set([
   "blockers",
 ]);
 
+/** Calldata in the log is the 4-byte selector. Arguments are dropped. */
+export function calldataSelector(value) {
+  const text = String(value || "").trim();
+  const match = /^0x([0-9a-fA-F]{8})([0-9a-fA-F]{2})*$/.exec(text);
+  if (!match) return "";
+  return `0x${match[1].toLowerCase()}`;
+}
+
 /**
  * Keep an allowlisted flat record. Nested objects and secret-shaped strings
  * are dropped so a request body cannot land a key in the JSONL file.
+ * Payer and payee are a pseudonymized sha256. Calldata keeps only the selector.
  */
 export function sanitizeLogRecord(record) {
   const out = {};
@@ -69,9 +78,13 @@ export function sanitizeLogRecord(record) {
         out[key] = sha256Utf8(normalized);
         continue;
       }
+      if (key === "calldata") {
+        const selector = calldataSelector(value);
+        if (selector) out[key] = selector;
+        continue;
+      }
       if (/private[_-]?key|secret|mnemonic|seed phrase/i.test(value)) continue;
-      const limit = key === "calldata" ? 4096 : 300;
-      out[key] = value.slice(0, limit);
+      out[key] = value.slice(0, 300);
     }
   }
   return out;

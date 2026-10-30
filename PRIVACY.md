@@ -77,7 +77,7 @@ We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening ma
 Screening records are kept apart from ordinary application logs:
 
 - A clear row and an unavailable row are kept for 90 days, then deleted.
-- A match, a block, and a dispute are kept for 10 years. That period cites 31 CFR 501.601, pending eCFR verification.
+- A match, a block, and a dispute are kept for 10 years. That period cites 31 CFR 501.601.
 - A release of a false positive is appended to an audit table. That table is not deleted on this schedule.
 
 The denial a person sees does not say why access was refused. Appeals are described in [docs/SANCTIONS-APPEALS.md](docs/SANCTIONS-APPEALS.md).

@@ -116,7 +116,9 @@ describe("edge geoblock", () => {
     for (const country of ["US", "DE"]) {
       assert.equal(decideGeoblock({ country, edge: true, at }).decision, "allow");
     }
-    assert.equal(decideGeoblock({ country: "UA", edge: true, at }).decision, "allow");
+    assert.equal(decideGeoblock({ country: "UA", edge: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: "", region: "", edge: true, at }).decision, "deny");
+    assert.equal(decideGeoblock({ country: "UA", regionCode: " ", region: " ", edge: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "UA", regionCode: "43", edge: true, at }).country, "UA-43");
     assert.equal(decideGeoblock({ country: "UA", regionCode: "14", edge: true, at }).decision, "deny");
     assert.equal(decideGeoblock({ country: "UA", region: "Luhansk", edge: true, at }).country, "UA-09");
@@ -769,6 +771,64 @@ describe("admin compare and rate limit", () => {
       assert.equal(health.status, 200);
     } finally {
       await ctx.close();
+    }
+  });
+
+  it("keys the screen limit on CF-Connecting-IP only when edge auth matches", async () => {
+    const clock = () => 5_000;
+    const authed = createRateLimiter({ max: 1, windowMs: 60_000, clock });
+    const ctx = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, { deps: { screenRateLimit: authed } });
+    try {
+      const auth = { "x-relayer-edge-auth": EDGE_AUTH, "cf-ipcountry": "US" };
+      const first = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "1.1.1.1, 198.51.100.9",
+      });
+      assert.equal(first.status, 200);
+      const sameEdgeIp = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "9.9.9.9, 198.51.100.8",
+      });
+      assert.equal(sameEdgeIp.status, 429);
+      assert.equal(sameEdgeIp.json.error, "rate_limited");
+      const otherEdgeIp = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "cf-connecting-ip": "203.0.113.51",
+        "x-forwarded-for": "1.1.1.1, 198.51.100.9",
+      });
+      assert.equal(otherEdgeIp.status, 200);
+    } finally {
+      await ctx.close();
+    }
+
+    const open = createRateLimiter({ max: 1, windowMs: 60_000, clock });
+    const plain = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, {
+      deps: { screenRateLimit: open, edgeCountry: "US" },
+    });
+    try {
+      const forged = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "x-relayer-edge-auth": "not-the-proxy",
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.9",
+        "cf-ipcountry": "US",
+      });
+      assert.equal(forged.status, 403);
+      const otherHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.10",
+        "cf-ipcountry": "US",
+      });
+      assert.equal(otherHop.status, 403);
+      const sameHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "cf-connecting-ip": "203.0.113.77",
+        "x-forwarded-for": "1.1.1.1, 198.51.100.9",
+        "cf-ipcountry": "US",
+      });
+      assert.equal(sameHop.status, 429);
+    } finally {
+      await plain.close();
     }
   });
 });

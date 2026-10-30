@@ -18,6 +18,7 @@ import {
 import {
   createScreenSession,
   issueScreenNonce,
+  revokeAccountSessions,
   verifyScreenProof,
 } from "./screenAuth.mjs";
 import {
@@ -188,6 +189,9 @@ export function createSanctionsGate(options = {}) {
     },
     dropTie(accountId, wallet, actor) {
       return dropAccountTie(sql, snapshot, { accountId, wallet, pepper, now: now(), actor });
+    },
+    revokeSession(accountId, actor) {
+      return revokeAccountSessions(sql, accountId, actor, now());
     },
   };
 }

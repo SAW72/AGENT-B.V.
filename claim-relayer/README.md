@@ -152,7 +152,7 @@ There is no shared browser secret. `CLAIM_API_SECRET` and the `x-claim-secret` h
 
 The live allowlist is `refund` only. `release` is **400** `release_not_relayable` as soon as the action is read, before signature recovery, domain checks, nonce claim, simulation, signing, or broadcast. A refused release does not consume an intent nonce. `ReleaseNotAuthorized` means: "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee." The relayer key is not that caller, so a relayed release would revert `ReleaseNotAuthorized` and burn gas. The payer sends an open release from their own wallet. `createEscrow`, `dispute`, `withdraw`, and `withdrawTo` are **400** `action_not_claim` before signature recovery. `createEscrow` stays on the connected wallet. `dispute` requires `msg.sender` to be a party, so a relayed dispute always reverts. `withdraw` and `withdrawTo` spend `pendingWithdrawals[msg.sender]`. The relayer key is that sender, so those calls would move the relayer's own credit, not the user's. They stay disabled.
 
-A per-IP token bucket and a global token bucket run after the kill switch and before the body is parsed. Either one returns **429** `rate_limited` with `Retry-After`. Nothing is signed or broadcast. Render's proxy appends the connecting client to `X-Forwarded-For`, so only the rightmost hop is trusted. A missing header uses the socket address. `X-Real-IP` and Cloudflare headers are not read. This service is not behind Cloudflare.
+A per-IP token bucket and a global token bucket run after the kill switch and before the body is parsed. Either one returns **429** `rate_limited` with `Retry-After`. Nothing is signed or broadcast. Render's proxy appends the connecting client to `X-Forwarded-For`, so only the rightmost hop is trusted. A missing header uses the socket address. `X-Real-IP` is not read. `CF-Connecting-IP` is the rate-limit key only when `x-relayer-edge-auth` matches `RELAYER_EDGE_AUTH`. Otherwise the rightmost `X-Forwarded-For` hop stays the key. Screen, admin, and reputation limits are in-memory and per-instance. Reputation falls back to the socket address when the edge secret does not match.
 
 ECDSA signatures must be 65 bytes with `v` in `{0, 1, 27, 28}` and low `s` (`s` at most `secp256k1n / 2`). Anything else on a 65-byte signature is **400** `invalid_signature` or **400** `high_s`, before `ecrecover`. The transaction is signed once. A timeout rebroadcasts that same raw transaction. It does not sign again with a new nonce or gas price.
 
@@ -179,7 +179,7 @@ The on-chain `msg.sender` is still the relayer key. The signature says who may a
 | Server-built calldata for that same escrow id | Relaying client bytes, a mismatched escrow id, or trailing bytes. |
 | Live allowlist of `refund` only, and `release_not_relayable` before a nonce is claimed | Relaying `release` (the relayer is not the payer), `createEscrow`, `dispute`, `withdraw`, or `withdrawTo`. |
 | Single-use `(sender, nonce)` | A second broadcast of the same approval. A replay is rejected. |
-| Per-IP and global token buckets before the body is read | A burst that would otherwise reach signature recovery. The rightmost `X-Forwarded-For` hop is the client. The global cap counts every client. |
+| Per-IP and global token buckets before the body is read | A burst that would otherwise reach signature recovery. The rightmost `X-Forwarded-For` hop is the client, unless `x-relayer-edge-auth` matches and `CF-Connecting-IP` is set. The global cap counts every client. |
 | Per-transaction gas, maxFeePerGas, and maxPriorityFeePerGas caps | A claim whose estimate or fee is above the cap. The relayer does not sign and does not broadcast. Caps are not raised automatically. |
 | Low `s` and `v` in `{0, 1, 27, 28}` | A malleable signature. |
 | Sign once, rebroadcast the same raw transaction | A timeout that would otherwise sign a second nonce. |
@@ -276,7 +276,7 @@ If `ADMIN_SECRET` is unset, those routes return HTTP 200 and do **not** change t
 
 Quote reservations live in memory for one process. Intent nonces for live claims are the file store described under Auth model. Render must run **one web instance**. Do not turn on horizontal scaling. A restart clears in-memory quote reservations. Intent nonces and abuse counters stay when their files stay. On the free plan those files are under `/tmp/claim-relayer/`. A spin-down or deploy drops them. They are not on `/var/data`.
 
-`CLAIM_LOG_PATH` is append-only JSONL (default `./data/claims.jsonl`). Records are allowlisted. Private keys, secrets, and nested objects are dropped. The wallet signature sits on the nested intent, so it is not copied into the log. The log field named signature is the escrow function signature string. On Render the disk is ephemeral, so use `/tmp/...` and expect the file to vanish on restart.
+`CLAIM_LOG_PATH` is append-only JSONL (default `./data/claims.jsonl`). Records are allowlisted. Private keys, secrets, and nested objects are dropped. The wallet signature sits on the nested intent, so it is not copied into the log. The log field named signature is the escrow function signature string. Payer and payee are stored as a pseudonymized sha256. Calldata keeps only the 4-byte selector. On Render the disk is ephemeral, so use `/tmp/...` and expect the file to vanish on restart.
 
 ## Claim calldata
 

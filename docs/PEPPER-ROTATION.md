@@ -16,12 +16,14 @@ The pepper is the input keying material for two keys. HKDF-SHA256 derives an HMA
 
 A new pepper does not open old seals and does not reproduce old wallet hashes. Points stay withheld during the window.
 
+Pause screening writes (KILL_SWITCH) during the rewrite.
+
 1. Keep the current pepper in the process.
 2. For each account wallet row, open the seal with the current pepper, the account id, and the wallet hash.
 3. Derive the next wallet hash and the next seal from the next pepper.
 4. Write the next hash and the next seal, then commit.
 5. Swap `WALLET_HASH_PEPPER` to the next pepper on the relayer and the Worker together.
 6. Restart both. Remove the previous pepper from the secret store after the rewrite is committed.
-7. Do not log a raw wallet address. The claim log stores a sha256 of a payer or payee, or drops the value when it is not an EVM address.
+7. Do not log a raw wallet address. The claim log stores a pseudonymized sha256 of a payer or payee, or drops the value when it is not an EVM address. Calldata in that log keeps only the 4-byte selector.
 
 Spencer sets the pepper. This file does not contain a pepper value.

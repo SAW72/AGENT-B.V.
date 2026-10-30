@@ -3,6 +3,7 @@
 // Wallet screening stays authoritative. Log only the matched code, decision, and time.
 // Owner policy (Spencer 2026-10-28) also blocks SY, RU, and VE.
 // Unknown location denies. An off-edge request on a public route denies.
+// UA with an empty or missing region denies.
 
 export const PUBLIC_DENIAL_MESSAGE = "Agent-B.V. isn't available for this wallet or location. If you think this is a mistake, contact hello@stewardoftheking.com.";
 
@@ -65,6 +66,9 @@ export function decideGeoblock(input = {}) {
   if (country === "UA") {
     const jurisdiction = regionJurisdiction(input.regionCode, input.region);
     if (jurisdiction) return { decision: "deny", country: jurisdiction, at };
+    const regionCode = String(input.regionCode || "").trim();
+    const regionName = String(input.region || "").trim();
+    if (!regionCode && !regionName) return { decision: "deny", country: "UA", at };
   }
   return { decision: "allow", country, at };
 }

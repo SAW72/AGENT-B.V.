@@ -3,6 +3,8 @@
 // OFAC FAQ 10 (page dated October 26, 2026). Crimea, the so-called DNR, and
 // the so-called LNR are on that list and are not ISO countries. Cloudflare's
 // country header is UA for those regions, so the region code is read as well.
+// UA with an empty or missing region denies. Those regions are not a separate
+// country code, so a missing region cannot be treated as the rest of Ukraine.
 // Owner policy (Spencer 2026-10-28) also blocks SY, RU, and VE.
 // Unknown location denies. An off-edge request on a public route denies.
 // Log only the matched code, the decision, and a timestamp. Never a raw IP.
@@ -77,6 +79,9 @@ export function decideGeoblock(input = {}) {
   if (country === "UA") {
     const jurisdiction = regionJurisdiction(input.regionCode, input.region);
     if (jurisdiction) return { decision: "deny", country: jurisdiction, at };
+    const regionCode = String(input.regionCode || "").trim();
+    const regionName = String(input.region || "").trim();
+    if (!regionCode && !regionName) return { decision: "deny", country: "UA", at };
   }
   return { decision: "allow", country, at };
 }
