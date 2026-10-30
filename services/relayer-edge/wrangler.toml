@@ -35,7 +35,7 @@ head_sampling_rate = 0
 
 # D1 database agent-bv-sanctions. The id is not a secret.
 # Creation, the 2026-10-30 deploy, and migration 0001 are recorded in SPENCER-SETUP.md.
-# Agents do not create this database and do not apply migrations remotely.
+# Agents run D1 create, remote migrations and deploys only on Spencer's explicit direction.
 [[d1_databases]]
 binding = "SANCTIONS_DB"
 database_name = "agent-bv-sanctions"
