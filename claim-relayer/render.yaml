@@ -40,8 +40,8 @@
 # The per-IP limit trusts only the rightmost X-Forwarded-For hop. Render's proxy
 # appends the connecting client. X-Real-IP and Cloudflare headers are not read.
 # ERC1271_ENABLED stays 0. Abuse-limit env vars keep the code defaults.
-# CORS_ORIGINS example (Wallet UX Pages plus local Vite):
-#   https://agent-bv.pages.dev,http://localhost:5173,http://127.0.0.1:5173
+# CORS_ORIGINS in this blueprint is the production Pages origin only.
+# Local Vite origins are dev-only. Do not add them here.
 # Preflight allow-headers are content-type, x-admin-secret, and authorization.
 
 services:
@@ -102,4 +102,4 @@ services:
       - key: SCREEN_SIWE_DOMAIN
         sync: false
       - key: CORS_ORIGINS
-        value: "https://agent-bv.pages.dev,http://localhost:5173,http://127.0.0.1:5173"
+        value: "https://agent-bv.pages.dev"

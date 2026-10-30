@@ -696,7 +696,7 @@ describe("claim relayer HTTP", () => {
       const local = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
         origin: "http://127.0.0.1:5173",
       });
-      assert.equal(local.headers["access-control-allow-origin"], "http://127.0.0.1:5173");
+      assert.equal(local.headers["access-control-allow-origin"], undefined);
 
       const otherPages = await request(ctx.port, "OPTIONS", "/v1/claims", undefined, {
         origin: "https://other.pages.dev",
