@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { handle } from "../src/index.mjs";
-import { MIGRATION_NAME, handleSanctions, runBatch } from "../src/sanctionsApi.mjs";
+import { MIGRATION_NAME, buildOp, handleSanctions, runBatch } from "../src/sanctionsApi.mjs";
 
 const SECRET = "test-relayer-data-auth";
 
@@ -109,6 +109,83 @@ describe("D1 sanctions migration", () => {
       await expect(env.SANCTIONS_DB.prepare(`DELETE FROM ${table} WHERE id = 1`).run())
         .rejects.toThrow(/append-only/);
     }
+
+    const release = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1",
+    ).first();
+    expect(release).toEqual({ outcome: "released", actor: "ops" });
+    const session = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor, removed FROM sanctions_session_audit WHERE id = 1",
+    ).first();
+    expect(session).toEqual({ outcome: "revoked", actor: "ops", removed: 1 });
+    const tie = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_tie_audit WHERE id = 1",
+    ).first();
+    expect(tie).toEqual({ outcome: "untied", actor: "ops" });
+  });
+
+  it("aborts update and delete after adding actor to a legacy audit table", async () => {
+    const ddl = [
+      "DROP TABLE IF EXISTS sanctions_release_audit_legacy",
+      `CREATE TABLE sanctions_release_audit_legacy (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wallet_hash TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        list_version TEXT,
+        released_at INTEGER NOT NULL
+      )`,
+      "ALTER TABLE sanctions_release_audit_legacy ADD COLUMN actor TEXT NOT NULL DEFAULT ''",
+      `CREATE TRIGGER sanctions_release_audit_legacy_no_update
+      BEFORE UPDATE ON sanctions_release_audit_legacy
+      BEGIN
+        SELECT RAISE(ABORT, 'sanctions_release_audit is append-only');
+      END`,
+      `CREATE TRIGGER sanctions_release_audit_legacy_no_delete
+      BEFORE DELETE ON sanctions_release_audit_legacy
+      BEGIN
+        SELECT RAISE(ABORT, 'sanctions_release_audit is append-only');
+      END`,
+    ];
+    await env.SANCTIONS_DB.prepare(ddl[0]).run();
+    await env.SANCTIONS_DB.prepare(ddl[1]).run();
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO sanctions_release_audit_legacy(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)",
+    ).bind("abc", "released", "v", 1).run();
+    await env.SANCTIONS_DB.prepare(ddl[3]).run();
+    await env.SANCTIONS_DB.prepare(ddl[4]).run();
+    await env.SANCTIONS_DB.prepare(ddl[2]).run();
+    const migrated = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_release_audit_legacy WHERE id = 1",
+    ).first();
+    expect(migrated).toEqual({ outcome: "released", actor: "" });
+    await expect(env.SANCTIONS_DB.prepare(
+      "UPDATE sanctions_release_audit_legacy SET outcome = ? WHERE id = 1",
+    ).bind("tampered").run()).rejects.toThrow(/append-only/);
+    await expect(env.SANCTIONS_DB.prepare(
+      "DELETE FROM sanctions_release_audit_legacy WHERE id = 1",
+    ).run()).rejects.toThrow(/append-only/);
+    const afterLegacy = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_release_audit_legacy WHERE id = 1",
+    ).first();
+    expect(afterLegacy).toEqual({ outcome: "released", actor: "" });
+
+    await env.SANCTIONS_DB.prepare(
+      "INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at) VALUES(?, ?, ?, ?)",
+    ).bind("default-actor", "released", "v", 1).run();
+    const shipped = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_release_audit WHERE wallet_hash = ?",
+    ).bind("default-actor").first();
+    expect(shipped).toEqual({ outcome: "released", actor: "" });
+    await expect(env.SANCTIONS_DB.prepare(
+      "UPDATE sanctions_release_audit SET outcome = ? WHERE wallet_hash = ?",
+    ).bind("tampered", "default-actor").run()).rejects.toThrow(/append-only/);
+    await expect(env.SANCTIONS_DB.prepare(
+      "DELETE FROM sanctions_release_audit WHERE wallet_hash = ?",
+    ).bind("default-actor").run()).rejects.toThrow(/append-only/);
+    const afterShipped = await env.SANCTIONS_DB.prepare(
+      "SELECT outcome, actor FROM sanctions_release_audit WHERE wallet_hash = ?",
+    ).bind("default-actor").first();
+    expect(afterShipped).toEqual({ outcome: "released", actor: "" });
   });
 
   it("rejects a bad signature, a stale timestamp, a replay, a missing secret, and a tampered request", async () => {
@@ -235,6 +312,53 @@ describe("D1 sanctions migration", () => {
     expect(matched.status).toBe(200);
     const storedWallet = await env.SANCTIONS_DB.prepare("SELECT wallet FROM sanctions_wallets WHERE wallet = ?").bind(wallet).first();
     expect(storedWallet.wallet).toBe(wallet);
+  });
+
+  it("leaves the previous cache row when a later swap batch fails", async () => {
+    const sha = "ab".repeat(32);
+    const raw = "cd".repeat(32);
+    const addresses = JSON.stringify([`0x${"11".repeat(20)}`]);
+    const good = await call("cache.swap", {
+      fetchedAt: 30,
+      source: "test",
+      listVersion: "good",
+      addressesJson: addresses,
+      addressesSha256: sha,
+      rawSha256: raw,
+    });
+    expect(good.status).toBe(200);
+    expect(good.json.result.stored).toBe("full");
+    const before = await env.SANCTIONS_DB.prepare(
+      "SELECT addresses_json, list_version FROM sanctions_cache WHERE id = 1",
+    ).first();
+    const built = buildOp("cache.swap", {
+      fetchedAt: 31,
+      source: "test",
+      listVersion: "bad",
+      addressesJson: JSON.stringify([`0x${"22".repeat(20)}`]),
+      addressesSha256: "ef".repeat(32),
+      rawSha256: "12".repeat(32),
+    });
+    expect(built.statements).toHaveLength(1);
+    const marker = `swap-fail-${nonce()}`;
+    const outcome = await runBatch(env.SANCTIONS_DB, [
+      ...built.statements,
+      {
+        sql: "INSERT INTO sanctions_checks(wallet_hash, result, reason, checked_at, persisted) VALUES(?, ?, ?, ?, ?)",
+        params: [null, "clear", marker, 1, 0],
+      },
+    ], { nonce: marker, now: Date.now() });
+    expect(outcome.error).toBe("unavailable");
+    expect(outcome.status).toBe(500);
+    const after = await env.SANCTIONS_DB.prepare(
+      "SELECT addresses_json, list_version FROM sanctions_cache WHERE id = 1",
+    ).first();
+    expect(after.addresses_json).toBe(before.addresses_json);
+    expect(after.list_version).toBe(before.list_version);
+    const storedNonce = await env.SANCTIONS_DB.prepare(
+      "SELECT nonce FROM relayer_data_nonces WHERE nonce = ?",
+    ).bind(marker).first();
+    expect(storedNonce).toBeNull();
   });
 
   it("stores only the sha and count when addresses_json is over the statement budget", async () => {
