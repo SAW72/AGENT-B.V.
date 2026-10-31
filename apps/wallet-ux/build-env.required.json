@@ -1,4 +1,4 @@
 {
-  "VITE_CLAIM_RELAYER_URL": "https://bot-verifier-claim-relayer.onrender.com",
+  "VITE_CLAIM_RELAYER_URL": "https://agent-bv-relayer-edge.s-a-wight72.workers.dev",
   "VITE_BASE_SEPOLIA_RPC_URL": "https://sepolia.base.org"
 }

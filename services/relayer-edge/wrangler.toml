@@ -1,0 +1,32 @@
+# Agent-B.V. relayer edge. Placeholders only.
+# Spencer deploys this himself. Nothing in this file is an account id,
+# a secret, or an RPC URL.
+#
+# RELAYER_EDGE_AUTH is intentionally absent. A plain var is wiped by the
+# next `wrangler deploy`. Spencer sets it only with
+# `npx wrangler secret put RELAYER_EDGE_AUTH`.
+# While it is unset, this Worker returns 503 and does not call the origin.
+# The workers.dev route after deploy on the s-a-wight72 account is
+# https://agent-bv-relayer-edge.s-a-wight72.workers.dev
+# Wallet UX pins that URL. The Render origin stays
+# https://bot-verifier-claim-relayer.onrender.com and must be reachable
+# only through this Worker.
+
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "agent-bv-relayer-edge"
+main = "src/index.mjs"
+# Same date the points Worker pins for Wrangler 4.124.0.
+compatibility_date = "2026-08-22"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+head_sampling_rate = 0

@@ -434,7 +434,7 @@ describe("public routes deny when location is unknown or off-edge", () => {
       const response = await request(server.address().port, "POST", "/v1/screen/signup", {
         accountId: "off-edge",
         wallet: CLEAR,
-      }, { "cf-ipcountry": "US" });
+      }, { "cf-ipcountry": "US", "x-edge-country": "US" });
       assert.equal(response.status, 403);
       assert.equal(response.json.message, PUBLIC_DENIAL_MESSAGE);
       assert.equal(response.raw.toLowerCase().includes("sanction"), false);
@@ -676,7 +676,8 @@ describe("authenticated edge country", () => {
     try {
       const allowed = await postScreen(request, ctx.port, "signup", screenSigner(), "edge-us", {
         "x-relayer-edge-auth": EDGE_AUTH,
-        "cf-ipcountry": "US",
+        "X-Edge-Country": "US",
+        "cf-ipcountry": "SY",
       });
       assert.equal(allowed.status, 200);
       assert.equal(allowed.json.status, "unverified");
@@ -685,7 +686,8 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
-        "cf-ipcountry": "SY",
+        "x-edge-country": "SY",
+        "cf-ipcountry": "US",
       });
       assert.equal(syria.status, 403);
       assert.equal(syria.json.message, PUBLIC_DENIAL_MESSAGE);
@@ -694,8 +696,8 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
-        "cf-ipcountry": "UA",
-        "cf-region-code": "43",
+        "x-edge-country": "UA",
+        "x-edge-region-code": "43",
       });
       assert.equal(crimea.status, 403);
       const sevastopolCode = await request(ctx.port, "POST", "/v1/screen/signup", {
@@ -703,8 +705,8 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
-        "cf-ipcountry": "UA",
-        "cf-region-code": "40",
+        "x-edge-country": "UA",
+        "x-edge-region-code": "40",
       });
       assert.equal(sevastopolCode.status, 403);
       const sevastopolName = await request(ctx.port, "POST", "/v1/screen/signup", {
@@ -712,22 +714,33 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
-        "cf-ipcountry": "UA",
-        "cf-region": "Sevastopol",
+        "x-edge-country": "UA",
+        "x-edge-region": "Sevastopol",
       });
       assert.equal(sevastopolName.status, 403);
+      const legacyNames = await request(ctx.port, "POST", "/v1/screen/signup", {
+        accountId: "edge-legacy-names",
+        wallet: CLEAR,
+      }, {
+        "x-relayer-edge-auth": EDGE_AUTH,
+        "cf-ipcountry": "US",
+        "cf-region-code": "CA",
+        "cf-region": "California",
+      });
+      assert.equal(legacyNames.status, 403);
       const forged = await request(ctx.port, "POST", "/v1/screen/signup", {
         accountId: "edge-forged",
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": "not-the-proxy",
+        "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
       assert.equal(forged.status, 403);
       const missing = await request(ctx.port, "POST", "/v1/screen/signup", {
         accountId: "edge-missing",
         wallet: CLEAR,
-      }, { "cf-ipcountry": "US" });
+      }, { "x-edge-country": "US", "cf-ipcountry": "US" });
       assert.equal(missing.status, 403);
       assert.equal(missing.json.message, PUBLIC_DENIAL_MESSAGE);
     } finally {
@@ -743,6 +756,7 @@ describe("authenticated edge country", () => {
         wallet: CLEAR,
       }, {
         "x-relayer-edge-auth": EDGE_AUTH,
+        "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
       assert.equal(response.status, 403);
@@ -798,28 +812,31 @@ describe("admin compare and rate limit", () => {
     }
   });
 
-  it("keys the screen limit on CF-Connecting-IP only when edge auth matches", async () => {
+  it("keys the screen limit on x-edge-client-ip only when edge auth matches", async () => {
     const clock = () => 5_000;
     const authed = createRateLimiter({ max: 1, windowMs: 60_000, clock });
     const ctx = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, { deps: { screenRateLimit: authed } });
     try {
-      const auth = { "x-relayer-edge-auth": EDGE_AUTH, "cf-ipcountry": "US" };
+      const auth = { "x-relayer-edge-auth": EDGE_AUTH, "x-edge-country": "US" };
       const first = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
         ...auth,
-        "cf-connecting-ip": "203.0.113.50",
+        "x-edge-client-ip": "203.0.113.50",
+        "cf-connecting-ip": "203.0.113.99",
         "x-forwarded-for": "1.1.1.1, 198.51.100.9",
       });
       assert.equal(first.status, 200);
       const sameEdgeIp = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
         ...auth,
-        "cf-connecting-ip": "203.0.113.50",
+        "x-edge-client-ip": "203.0.113.50",
+        "cf-connecting-ip": "203.0.113.51",
         "x-forwarded-for": "9.9.9.9, 198.51.100.8",
       });
       assert.equal(sameEdgeIp.status, 429);
       assert.equal(sameEdgeIp.json.error, "rate_limited");
       const otherEdgeIp = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
         ...auth,
-        "cf-connecting-ip": "203.0.113.51",
+        "x-edge-client-ip": "203.0.113.51",
+        "cf-connecting-ip": "203.0.113.50",
         "x-forwarded-for": "1.1.1.1, 198.51.100.9",
       });
       assert.equal(otherEdgeIp.status, 200);
@@ -834,25 +851,60 @@ describe("admin compare and rate limit", () => {
     try {
       const forged = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
         "x-relayer-edge-auth": "not-the-proxy",
+        "x-edge-client-ip": "203.0.113.50",
         "cf-connecting-ip": "203.0.113.50",
         "x-forwarded-for": "198.51.100.9",
+        "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
       assert.equal(forged.status, 403);
       const otherHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "x-edge-client-ip": "203.0.113.50",
         "cf-connecting-ip": "203.0.113.50",
         "x-forwarded-for": "198.51.100.10",
+        "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
       assert.equal(otherHop.status, 403);
       const sameHop = await request(plain.port, "POST", "/v1/screen/nonce", {}, {
+        "x-edge-client-ip": "203.0.113.77",
         "cf-connecting-ip": "203.0.113.77",
         "x-forwarded-for": "1.1.1.1, 198.51.100.9",
+        "x-edge-country": "US",
         "cf-ipcountry": "US",
       });
       assert.equal(sameHop.status, 429);
     } finally {
       await plain.close();
+    }
+  });
+
+  it("uses edge-unknown when edge auth matches and x-edge-client-ip is empty", async () => {
+    const clock = () => 5_000;
+    const limiter = createRateLimiter({ max: 1, windowMs: 60_000, clock });
+    const ctx = await bootPublic({ RELAYER_EDGE_AUTH: EDGE_AUTH }, { deps: { screenRateLimit: limiter } });
+    try {
+      const auth = { "x-relayer-edge-auth": EDGE_AUTH, "x-edge-country": "US" };
+      const empty = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(empty.status, 200);
+      const whitespace = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-edge-client-ip": "   ",
+        "x-forwarded-for": "198.51.100.2",
+      });
+      assert.equal(whitespace.status, 429);
+      assert.equal(whitespace.json.error, "rate_limited");
+      const named = await request(ctx.port, "POST", "/v1/screen/nonce", {}, {
+        ...auth,
+        "x-edge-client-ip": "203.0.113.50",
+        "x-forwarded-for": "198.51.100.1",
+      });
+      assert.equal(named.status, 200);
+    } finally {
+      await ctx.close();
     }
   });
 });

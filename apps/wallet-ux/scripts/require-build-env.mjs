@@ -7,15 +7,16 @@ import { fileURLToPath } from "node:url"
 // This list is the default. A non-empty environment value overrides it.
 // An empty environment value does not fall through to the file: that is how an
 // empty GitHub variable used to wipe the URL. The relayer value must be one
-// exact allowlist entry. The build inlines that entry, not the raw string.
+// exact allowlist entry. That entry is the edge Worker. The Render origin is
+// not an allowlist entry. The build inlines that entry, not the raw string.
 // An RPC host is allowlisted or must answer eth_chainId with 84532. Anything
 // else fails closed. Secrets never belong in this list.
 export const REQUIRED_BUILD_ENV_FILE = "build-env.required.json"
 // A test sets this to a per-run file. Unset, the build reads the checked-in file.
 export const REQUIRED_BUILD_ENV_PATH_KEY = "WALLET_UX_REQUIRED_BUILD_ENV_FILE"
 export const REQUIRED_BUILD_ENV_KEYS = ["VITE_CLAIM_RELAYER_URL", "VITE_BASE_SEPOLIA_RPC_URL"]
-export const PINNED_RELAYER_HOST = "bot-verifier-claim-relayer.onrender.com"
-export const PINNED_RELAYER_ORIGIN = "https://bot-verifier-claim-relayer.onrender.com"
+export const PINNED_RELAYER_HOST = "agent-bv-relayer-edge.s-a-wight72.workers.dev"
+export const PINNED_RELAYER_ORIGIN = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev"
 export const ALLOWED_RELAYER_URLS = [
   PINNED_RELAYER_ORIGIN,
   `${PINNED_RELAYER_ORIGIN}/`,
