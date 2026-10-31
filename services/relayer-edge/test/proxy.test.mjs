@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { createHmac, createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { ORIGIN, edgeSecret, handle, reservedAdminPath, reservedSanctionsPath } from "../src/index.mjs";
 
-const SECRET = "test-edge-auth";
+const SECRET = "a".repeat(64);
 const PAGES = "https://agent-bv.pages.dev";
 const WORKER = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev";
 
@@ -216,9 +218,9 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
-      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
-      assert.equal(response.headers.get("access-control-allow-origin"), PAGES);
+      assert.equal(response.status, 503, path);
+      assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
       assert.equal(calls.length, 0, path);
     }
     const missingSecret = recorder();
@@ -227,7 +229,7 @@ describe("relayer edge proxy", () => {
       {},
       missingSecret.fetchImpl,
     );
-    assert.equal(blocked.status, 404);
+    assert.equal(blocked.status, 503);
     assert.equal(missingSecret.calls.length, 0);
     assert.equal(reservedSanctionsPath("/internal/sanctions-other"), false);
     assert.equal(reservedSanctionsPath("/Internal/Sanctions"), true);
@@ -305,7 +307,8 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
+      assert.equal(response.status, 503, path);
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
       assert.equal(calls.length, 0, path);
     }
     const missingSecret = recorder();
@@ -314,7 +317,7 @@ describe("relayer edge proxy", () => {
       {},
       missingSecret.fetchImpl,
     );
-    assert.equal(blocked.status, 404);
+    assert.equal(blocked.status, 503);
     assert.equal(missingSecret.calls.length, 0);
   });
 
@@ -382,12 +385,19 @@ describe("relayer edge proxy", () => {
         { RELAYER_EDGE_AUTH: SECRET },
         fetchImpl,
       );
-      assert.equal(response.status, 404, path);
-      assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
-      assert.equal(calls.length, 0, path);
       const sanctions = path.includes("sanction");
       assert.equal(reservedSanctionsPath(path), sanctions, path);
       assert.equal(reservedAdminPath(path), !sanctions, path);
+      assert.equal(calls.length, 0, path);
+      if (sanctions) {
+        // In-worker data API. No data secret means unavailable, and the path is not forwarded.
+        assert.equal(response.status, 503, path);
+        assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+        assert.equal(response.headers.get("access-control-allow-origin"), null);
+      } else {
+        assert.equal(response.status, 404, path);
+        assert.deepEqual(await response.json(), { ok: false, error: "not_found" });
+      }
     }
   });
 
@@ -413,10 +423,148 @@ describe("relayer edge proxy", () => {
     }
   });
 
+  it("strips spoofed x-relayer-data headers and never proxies an internal path", async () => {
+    const { calls, fetchImpl } = recorder();
+    const response = await handle(
+      incoming({
+        path: "/health",
+        headers: {
+          "x-relayer-data-sig": "spoofed-sig",
+          "x-relayer-data-extra": "spoofed-extra",
+          "x-relayer-ts": "1",
+          "content-type": "application/json",
+        },
+      }),
+      { RELAYER_EDGE_AUTH: SECRET },
+      fetchImpl,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.headers.get("x-relayer-data-sig"), null);
+    assert.equal(calls[0].init.headers.get("x-relayer-data-extra"), null);
+    assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-sig"), false);
+    assert.equal(JSON.stringify([...calls[0].init.headers]).includes("spoofed-extra"), false);
+    const dataSecret = "ab".repeat(32);
+    const body = JSON.stringify({});
+    const ts = String(Date.now());
+    const nonce = randomBytes(16).toString("base64url");
+    const path = "/internal/sanctions/not-an-op";
+    const hash = createHash("sha256").update(body).digest("hex");
+    const sig = createHmac("sha256", dataSecret).update(`POST\n${path}\n${ts}\n${nonce}\n${hash}`).digest("hex");
+    const internal = recorder();
+    const hidden = await handle(
+      incoming({
+        path,
+        method: "POST",
+        headers: {
+          Origin: PAGES,
+          "content-type": "application/json",
+          "x-relayer-ts": ts,
+          "x-relayer-nonce": nonce,
+          "x-relayer-data-sig": sig,
+        },
+        body,
+      }),
+      { RELAYER_EDGE_AUTH: SECRET, RELAYER_DATA_AUTH: dataSecret },
+      internal.fetchImpl,
+    );
+    assert.equal(hidden.status, 404);
+    assert.deepEqual(await hidden.json(), { ok: false, error: "not_found" });
+    assert.equal(hidden.headers.get("access-control-allow-origin"), null);
+    assert.equal(internal.calls.length, 0);
+    const wrong = recorder();
+    const rejected = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: {
+          "x-relayer-ts": ts,
+          "x-relayer-nonce": nonce,
+          "x-relayer-data-sig": "ab".repeat(32),
+        },
+        body,
+      }),
+      { RELAYER_DATA_AUTH: dataSecret },
+      wrong.fetchImpl,
+    );
+    assert.equal(rejected.status, 401);
+    assert.equal(wrong.calls.length, 0);
+
+    const shortAuth = recorder();
+    const shortSecret = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      { RELAYER_DATA_AUTH: "short" },
+      shortAuth.fetchImpl,
+    );
+    assert.equal(shortSecret.status, 503);
+    assert.deepEqual(await shortSecret.json(), { ok: false, error: "unavailable" });
+    assert.equal(shortAuth.calls.length, 0);
+    const oddAuth = recorder();
+    const oddSecret = await handle(
+      incoming({
+        path: "/internal/sanctions/health",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      { RELAYER_DATA_AUTH: `${"ab".repeat(32)}c` },
+      oddAuth.fetchImpl,
+    );
+    assert.equal(oddSecret.status, 503);
+    assert.equal(oddAuth.calls.length, 0);
+  });
+
   it("treats a blank secret as unset", () => {
     assert.equal(edgeSecret(undefined), "");
     assert.equal(edgeSecret({}), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: "  " }), "");
     assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: SECRET }), SECRET);
+  });
+
+  it("refuses a short or non-hex edge secret and forwards a valid one", async () => {
+    const valid = "c".repeat(64);
+    const rejected = ["short", "g".repeat(64), `${"ab".repeat(32)}c`];
+    for (const value of rejected) {
+      const { calls, fetchImpl } = recorder();
+      const response = await handle(
+        incoming({ path: "/health", headers: { "x-relayer-edge-auth": "injected" } }),
+        { RELAYER_EDGE_AUTH: `  ${value}  ` },
+        fetchImpl,
+      );
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { ok: false, error: "unavailable" });
+      assert.equal(calls.length, 0);
+      assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: value }), "");
+    }
+    const same = "d".repeat(64);
+    const equal = recorder();
+    const blocked = await handle(
+      incoming({ path: "/health" }),
+      { RELAYER_EDGE_AUTH: same, RELAYER_DATA_AUTH: same.toUpperCase() },
+      equal.fetchImpl,
+    );
+    assert.equal(blocked.status, 503);
+    assert.equal(equal.calls.length, 0);
+    const { calls, fetchImpl } = recorder();
+    const response = await handle(
+      incoming({ path: "/v1/claims", method: "POST", body: "{}" }),
+      { RELAYER_EDGE_AUTH: `  ${valid}  `, RELAYER_DATA_AUTH: "ab".repeat(32) },
+      fetchImpl,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, `${ORIGIN}/v1/claims`);
+    assert.equal(calls[0].init.headers.get("x-relayer-edge-auth"), valid);
+    assert.equal(edgeSecret({ RELAYER_EDGE_AUTH: `  ${valid}  ` }), valid);
+  });
+
+  it("sets preview_urls to false", () => {
+    const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+    assert.match(toml, /^preview_urls = false$/m);
   });
 });

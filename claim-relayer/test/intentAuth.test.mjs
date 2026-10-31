@@ -12,6 +12,7 @@ import { clearSanctionsGate } from "./clearGate.mjs";
 import { RETIRED_ESCROW, nonceKey } from "../claimIntent.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { encodeEscrowAction } from "../escrowCalldata.mjs";
 import { createMemoryIntentNonceStore } from "../intentNonceStore.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
@@ -31,7 +32,7 @@ function request(port, method, path, body, headers = {}) {
         method,
         headers: {
           ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-          ...headers,
+          ...edgeRequestHeaders(headers),
         },
       },
       (res) => {
@@ -61,6 +62,7 @@ async function boot(env = {}, extra = {}) {
     CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
     LIVE_SUBMIT: "1",
     SPENCER_RUN_AUTH: "1",
+    RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     ...env,
   });
   const sent = [];
@@ -550,6 +552,7 @@ describe("signed claim intent auth", () => {
       LIVE_SUBMIT: "1",
       SPENCER_RUN_AUTH: "1",
       KILL_SWITCH: "1",
+      RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     });
     const sent = [];
     const server = createClaimRelayer({
@@ -730,7 +733,7 @@ describe("signed claim intent auth", () => {
     }
   });
 
-  it("counts only the rightmost X-Forwarded-For hop", async () => {
+  it("keys an authenticated claim on x-edge-client-ip and ignores X-Forwarded-For", async () => {
     const chain = trackingChain({ payer: accounts.payer.address, payee: accounts.payee.address });
     const ctx = await boot({ CLAIM_RATE_IP: "1" }, { chain });
     try {
@@ -739,7 +742,10 @@ describe("signed claim intent auth", () => {
         "POST",
         "/v1/claims",
         await releaseBody(accounts.payer, { nonce: "801" }),
-        { "x-forwarded-for": "1.1.1.1, 203.0.113.9" },
+        {
+          "x-edge-client-ip": "203.0.113.9",
+          "x-forwarded-for": "1.1.1.1, 198.51.100.1",
+        },
       );
       assert.equal(first.status, 200);
       const spoofed = await request(
@@ -747,7 +753,10 @@ describe("signed claim intent auth", () => {
         "POST",
         "/v1/claims",
         await releaseBody(accounts.payer, { nonce: "802" }),
-        { "x-forwarded-for": "203.0.113.9" },
+        {
+          "x-edge-client-ip": "203.0.113.9",
+          "x-forwarded-for": "203.0.113.9",
+        },
       );
       assert.equal(spoofed.status, 429);
       assert.equal(spoofed.json.error, "rate_limited");
@@ -756,9 +765,18 @@ describe("signed claim intent auth", () => {
         "POST",
         "/v1/claims",
         await releaseBody(accounts.payer, { nonce: "803" }),
-        { "x-forwarded-for": "1.1.1.1, 203.0.113.10" },
+        {
+          "x-edge-client-ip": "203.0.113.10",
+          "x-forwarded-for": "1.1.1.1, 198.51.100.1",
+        },
       );
       assert.equal(other.status, 200);
+      const unsigned = await request(ctx.port, "POST", "/v1/claims", { claimId: "no-edge" }, {
+        "x-relayer-edge-auth": "",
+        "x-forwarded-for": "198.51.100.50",
+      });
+      assert.equal(unsigned.status, 404);
+      assert.deepEqual(unsigned.json, { ok: false, error: "not_found" });
       assert.equal(ctx.sent.length, 2);
     } finally {
       await ctx.close();

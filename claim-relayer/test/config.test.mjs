@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAddressBook, parseStartBlock } from "../addressBook.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_CORS_ORIGINS, DEFAULT_RELAYER_ADDRESS, DEFAULT_REPUTATION_CORS_ORIGINS, DEV_ONLY_CORS_ORIGINS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, buildMetadata, healthPayload, liveSubmitStatus, loadConfig, reputationCorsFromEnv } from "../config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_CORS_ORIGINS, DEFAULT_RELAYER_ADDRESS, DEFAULT_REPUTATION_CORS_ORIGINS, DEV_ONLY_CORS_ORIGINS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, assertRelayerEdgeAuth, buildMetadata, healthPayload, liveSubmitStatus, loadConfig, validEdgeAuth, reputationCorsFromEnv } from "../config.mjs";
 
 const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c";
 const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
@@ -515,6 +515,31 @@ describe("start block parsing", () => {
     });
     const config = loadConfig({ RENDER_GIT_COMMIT: "deff214" });
     assert.equal(healthPayload(config, false).build.commit, "deff214");
+  });
+
+  it("rejects a short, non-hex, odd, or data-auth edge secret and keeps loadConfig from throwing", () => {
+    assert.throws(() => assertRelayerEdgeAuth({}), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "short" }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "g".repeat(64) }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "a".repeat(65) }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "  " }), /relayer_edge_auth_required/);
+    const same = "d".repeat(64);
+    assert.throws(() => assertRelayerEdgeAuth({
+      RELAYER_EDGE_AUTH: same,
+      RELAYER_DATA_AUTH: same.toUpperCase(),
+    }), /relayer_edge_auth_required/);
+    assert.equal(validEdgeAuth("short"), "");
+    assert.equal(validEdgeAuth("g".repeat(64)), "");
+    assert.equal(validEdgeAuth("a".repeat(65)), "");
+    assert.equal(validEdgeAuth(same, same.toUpperCase()), "");
+    const padded = `  ${"a".repeat(64)}  `;
+    assert.equal(assertRelayerEdgeAuth({
+      RELAYER_EDGE_AUTH: padded,
+      RELAYER_DATA_AUTH: "b".repeat(64),
+    }), "a".repeat(64));
+    assert.equal(loadConfig({ RELAYER_EDGE_AUTH: "short" }).relayerEdgeAuth, "short");
+    assert.equal(loadConfig({ RELAYER_EDGE_AUTH: "  " }).relayerEdgeAuth, "");
+    assert.equal(loadConfig({}).relayerEdgeAuth, "");
   });
 
 });

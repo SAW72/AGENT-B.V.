@@ -9,10 +9,12 @@ import { createHash } from "node:crypto";
 import { openWallet } from "../accountScreen.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { createClaimRelayer } from "../app.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
 import { createRateLimiter } from "../reputation/rateLimit.mjs";
+import { createMemorySanctionsData } from "../sanctionsMemory.mjs";
 import { createSanctionsGate } from "../sanctionsGate.mjs";
 import { screenFromAddressList, walletHashHex } from "../sanctions.mjs";
 import { walletAesKey, walletHmacKey } from "../sha256.mjs";
@@ -29,7 +31,7 @@ function request(port, method, path, body, headers = {}) {
       method,
       headers: {
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-        ...headers,
+        ...edgeRequestHeaders(headers),
       },
     }, (res) => {
       const chunks = [];
@@ -55,6 +57,7 @@ async function boot(sanctions, extra = {}) {
   const dir = await mkdtemp(join(tmpdir(), "screen-auth-"));
   const config = loadConfig({
     CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
+    RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     ...extra.env,
   });
   const server = createClaimRelayer({
@@ -80,6 +83,7 @@ describe("screen session and wallet proof", () => {
     const now = 1_800_000_000_000;
     const open = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
     });
@@ -89,9 +93,7 @@ describe("screen session and wallet proof", () => {
     const changed = await open.change({ accountId: "acct-c", nextWallet: next, proven: true });
     assert.equal(changed.http, 200);
     const hash = walletHashHex(TEST_PEPPER, next);
-    const row = open.db.prepare(
-      "SELECT wallet_sealed FROM sanctions_account_wallets WHERE account_id = ? AND wallet_hash = ?",
-    ).get("acct-c", hash);
+    const row = open.data.state.links.find((item) => item.account_id === "acct-c" && item.wallet_hash === hash);
     assert.equal(await openWallet(TEST_PEPPER, row.wallet_sealed, { accountId: "acct-c", walletHash: hash }), next);
     await assert.rejects(
       () => openWallet(TEST_PEPPER, row.wallet_sealed, { accountId: "other", walletHash: hash }),
@@ -107,6 +109,7 @@ describe("screen session and wallet proof", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([listed.address], now, { minAddresses: 1, listVersion: "attack" }),
     });
@@ -135,10 +138,10 @@ describe("screen session and wallet proof", () => {
       });
       assert.equal(spoofAccount.status, 401);
       const victimHash = walletHashHex(TEST_PEPPER, victim.address.toLowerCase());
-      const rows = sanctions.db.prepare("SELECT account_id, wallet_hash FROM sanctions_account_wallets").all();
+      const rows = sanctions.data.state.links;
       assert.equal(rows.some((row) => row.wallet_hash === victimHash), false);
       assert.equal(rows.some((row) => row.account_id === "victim"), false);
-      assert.equal(sanctions.blocks(victim.address), false);
+      assert.equal(await sanctions.blocks(victim.address), false);
       assert.equal(rows.some((row) => row.account_id === "attacker"), true);
     } finally {
       await ctx.close();
@@ -150,6 +153,7 @@ describe("screen session and wallet proof", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
     });
@@ -164,9 +168,7 @@ describe("screen session and wallet proof", () => {
       const signup = await postScreen(request, ctx.port, "signup", owner, "acct-drop");
       assert.equal(signup.status, 200);
       const hash = walletHashHex(TEST_PEPPER, owner.address.toLowerCase());
-      const before = sanctions.db.prepare(
-        "SELECT 1 AS hit FROM sanctions_account_wallets WHERE account_id = ? AND wallet_hash = ?",
-      ).get("acct-drop", hash);
+      const before = sanctions.data.state.links.find((row) => row.account_id === "acct-drop" && row.wallet_hash === hash);
       assert.ok(before);
       const denied = await request(ctx.port, "POST", "/v1/admin/sanctions/untie", {
         accountId: "acct-drop",
@@ -178,17 +180,11 @@ describe("screen session and wallet proof", () => {
         wallet: owner.address,
       }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
       assert.equal(dropped.status, 200);
-      const after = sanctions.db.prepare(
-        "SELECT 1 AS hit FROM sanctions_account_wallets WHERE account_id = ?",
-      ).get("acct-drop");
+      const after = sanctions.data.state.links.find((row) => row.account_id === "acct-drop");
       assert.equal(after, undefined);
-      const audit = sanctions.db.prepare("SELECT outcome, actor FROM sanctions_tie_audit").get();
+      const audit = sanctions.data.state.tieAudit[0];
       assert.equal(audit.outcome, "untied");
       assert.equal(audit.actor, "ops-1");
-      assert.throws(
-        () => sanctions.db.prepare("DELETE FROM sanctions_tie_audit WHERE id = 1").run(),
-        /append-only/,
-      );
       const limited = await request(ctx.port, "POST", "/v1/screen/nonce", {});
       assert.equal(limited.status, 429);
       assert.equal(limited.json.error, "rate_limited");
@@ -204,6 +200,7 @@ describe("screen session and wallet proof", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([listed.address], now, { minAddresses: 1, listVersion: "signup-takeover" }),
     });
@@ -218,9 +215,7 @@ describe("screen session and wallet proof", () => {
       assert.equal(clearAttack.status, 401);
       const listedHash = walletHashHex(TEST_PEPPER, listed.address.toLowerCase());
       const attackerHash = walletHashHex(TEST_PEPPER, attacker.address.toLowerCase());
-      const rows = sanctions.db.prepare(
-        "SELECT wallet_hash FROM sanctions_account_wallets WHERE account_id = ?",
-      ).all("victim-acct");
+      const rows = sanctions.data.state.links.filter((row) => row.account_id === "victim-acct");
       assert.equal(rows.some((row) => row.wallet_hash === listedHash), false);
       assert.equal(rows.some((row) => row.wallet_hash === attackerHash), false);
       assert.equal(rows.length, 1);
@@ -240,6 +235,7 @@ describe("screen session and wallet proof", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList([listed.address], now, { minAddresses: 1, listVersion: "unlink-takeover" }),
     });
@@ -251,9 +247,7 @@ describe("screen session and wallet proof", () => {
         session: signup.json.session,
       });
       assert.equal(unlinked.status, 200);
-      const stored = sanctions.db.prepare(
-        "SELECT unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
-      ).get("victim-unlinked");
+      const stored = sanctions.data.state.links.find((row) => row.account_id === "victim-unlinked");
       assert.ok(stored);
       assert.ok(stored.unlinked_at);
       const listedAttack = await postScreen(request, ctx.port, "signup", listed, "victim-unlinked");
@@ -263,9 +257,7 @@ describe("screen session and wallet proof", () => {
       assert.equal(clearAttack.status, 401);
       const listedHash = walletHashHex(TEST_PEPPER, listed.address.toLowerCase());
       const attackerHash = walletHashHex(TEST_PEPPER, attacker.address.toLowerCase());
-      const rows = sanctions.db.prepare(
-        "SELECT wallet_hash, unlinked_at FROM sanctions_account_wallets WHERE account_id = ?",
-      ).all("victim-unlinked");
+      const rows = sanctions.data.state.links.filter((row) => row.account_id === "victim-unlinked");
       assert.equal(rows.some((row) => row.wallet_hash === listedHash), false);
       assert.equal(rows.some((row) => row.wallet_hash === attackerHash), false);
       assert.equal(rows.length, 1);
@@ -273,37 +265,32 @@ describe("screen session and wallet proof", () => {
         session: signup.json.session,
       });
       assert.equal(withSession.status, 200);
-      const after = sanctions.db.prepare(
-        "SELECT wallet_hash FROM sanctions_account_wallets WHERE account_id = ? AND wallet_hash = ?",
-      ).get("victim-unlinked", attackerHash);
+      const after = sanctions.data.state.links.find((row) => row.account_id === "victim-unlinked" && row.wallet_hash === attackerHash);
       assert.ok(after);
     } finally {
       await ctx.close();
     }
   });
 
-  it("deletes expired screen nonces and sessions when a nonce is written", () => {
+  it("deletes expired screen nonces and sessions when a nonce is written", async () => {
     const now = 5_000_000;
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
     });
-    sanctions.db.prepare(
-      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES('old-nonce', ?, NULL)",
-    ).run(now - 1);
-    sanctions.db.prepare(
-      "INSERT INTO screen_nonces(nonce, expires_at, used_at) VALUES('live-nonce', ?, NULL)",
-    ).run(now + 60_000);
-    sanctions.db.prepare(
-      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES('old-session', 'acct', 'hash', ?)",
-    ).run(now - 1);
-    sanctions.db.prepare(
-      "INSERT INTO screen_sessions(token_hash, account_id, wallet_hash, expires_at) VALUES('live-session', 'acct', 'hash', ?)",
-    ).run(now + 60_000);
-    sanctions.issueNonce();
-    const nonces = sanctions.db.prepare("SELECT nonce FROM screen_nonces").all().map((row) => row.nonce);
-    const sessions = sanctions.db.prepare("SELECT token_hash FROM screen_sessions").all().map((row) => row.token_hash);
+    sanctions.data.state.nonces.push(
+      { nonce: "old-nonce", expires_at: now - 1, used_at: null },
+      { nonce: "live-nonce", expires_at: now + 60_000, used_at: null },
+    );
+    sanctions.data.state.sessions.push(
+      { token_hash: "old-session", account_id: "acct", wallet_hash: "hash", expires_at: now - 1 },
+      { token_hash: "live-session", account_id: "acct", wallet_hash: "hash", expires_at: now + 60_000 },
+    );
+    await sanctions.issueNonce();
+    const nonces = sanctions.data.state.nonces.map((row) => row.nonce);
+    const sessions = sanctions.data.state.sessions.map((row) => row.token_hash);
     assert.equal(nonces.includes("old-nonce"), false);
     assert.equal(nonces.includes("live-nonce"), true);
     assert.equal(sessions.includes("old-session"), false);
@@ -315,6 +302,7 @@ describe("screen session and wallet proof", () => {
     const now = Date.now();
     const sanctions = createSanctionsGate({
       pepper: TEST_PEPPER,
+      data: createMemorySanctionsData(),
       now: () => now,
       screen: screenFromAddressList(["0x3333333333333333333333333333333333333333"], now, { minAddresses: 1 }),
     });
@@ -328,24 +316,19 @@ describe("screen session and wallet proof", () => {
         accountId: "acct-revoke",
       });
       assert.equal(denied.status, 401);
-      const beforeAuth = sanctions.db.prepare("SELECT COUNT(*) AS n FROM sanctions_session_audit").get();
-      assert.equal(Number(beforeAuth.n), 0);
+      assert.equal(sanctions.data.state.sessionAudit.length, 0);
       const revoked = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
         accountId: "acct-revoke",
       }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
       assert.equal(revoked.status, 200);
       assert.equal(revoked.json.removed, 1);
-      const left = sanctions.db.prepare(
-        "SELECT 1 AS hit FROM screen_sessions WHERE account_id = ?",
-      ).get("acct-revoke");
+      const left = sanctions.data.state.sessions.find((row) => row.account_id === "acct-revoke");
       assert.equal(left, undefined);
       const again = await postScreen(request, ctx.port, "link", owner, "acct-revoke", {}, {
         session: signup.json.session,
       });
       assert.equal(again.status, 401);
-      const audit = sanctions.db.prepare(
-        "SELECT outcome, actor, removed FROM sanctions_session_audit",
-      ).get();
+      const audit = sanctions.data.state.sessionAudit[0];
       assert.equal(audit.outcome, "revoked");
       assert.equal(audit.actor, "ops-1");
       assert.equal(Number(audit.removed), 1);
@@ -354,22 +337,16 @@ describe("screen session and wallet proof", () => {
       }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
       assert.equal(miss.status, 404);
       assert.equal(miss.json.error, "revoke_absent");
-      assert.throws(
-        () => sanctions.db.prepare("DELETE FROM sanctions_session_audit WHERE id = 1").run(),
-        /append-only/,
-      );
       const badAccount = await request(ctx.port, "POST", "/v1/admin/sanctions/revoke-session", {
         accountId: "bad account",
       }, { "x-sanctions-actor": "ops-1", "x-admin-secret": secret });
       assert.equal(badAccount.status, 403);
       assert.equal(badAccount.json.error, "revoke_refused");
-      const badActor = sanctions.revokeSession("acct-revoke", "bad actor");
+      const badActor = await sanctions.revokeSession("acct-revoke", "bad actor");
       assert.equal(badActor.ok, false);
       assert.equal(badActor.http, 403);
       assert.equal(badActor.error, "revoke_refused");
-      const refusals = sanctions.db.prepare(
-        "SELECT account_id, outcome, actor, removed FROM sanctions_session_audit WHERE outcome = 'revoke_refused' ORDER BY id",
-      ).all();
+      const refusals = sanctions.data.state.sessionAudit.filter((row) => row.outcome === "revoke_refused");
       assert.equal(refusals.length, 2);
       assert.equal(refusals[0].account_id, "bad account");
       assert.equal(refusals[0].actor, "ops-1");

@@ -93,8 +93,12 @@ services:
         sync: false
       - key: SANCTIONS_RELEASE_ADMINS
         sync: false
-      - key: SANCTIONS_DB_PATH
+      - key: SANCTIONS_DATA_URL
         sync: false
+      - key: RELAYER_DATA_AUTH
+        sync: false
+      - key: SANCTIONS_DATA_TIMEOUT_MS
+        value: "3000"
       - key: SCREEN_SIWE_DOMAIN
         sync: false
       - key: CORS_ORIGINS

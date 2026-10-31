@@ -25,12 +25,14 @@ The booked escrow is source `7fe4a863e9bce0b70b629dab76ddd2728c97b536`. It expos
 ```bash
 cd claim-relayer
 cp .env.example .env
-# edit .env if you want; empty defaults are enough for fixtures
+# edit .env if you want; fixture routes still need the sanctions data URL and secret to boot
 set -a
 source .env
 set +a
 npm start
 ```
+
+`npm start` calls the edge Worker before it listens. `SANCTIONS_DATA_URL` must be `https` with pathname `/internal/sanctions`. `RELAYER_DATA_AUTH` must be at least 32 bytes of hex. The Worker must answer `health` with the `0001_sanctions.sql` migration applied. A missing value, a bad URL, or an unreachable Worker exits with `sanctions_data_config_required`. Tests inject an in-memory stand-in and do not call Cloudflare. There is no `SANCTIONS_DB_PATH` and no `DATABASE_URL`. Render does not hold a Cloudflare token, account id, or database id.
 
 Listens on `127.0.0.1:8790` unless `HOST` or Render's `PORT` is set. Render must bind `0.0.0.0`.
 
@@ -153,6 +155,7 @@ There is no shared browser secret. `CLAIM_API_SECRET` and the `x-claim-secret` h
 The live allowlist is `refund` only. `release` is **400** `release_not_relayable` as soon as the action is read, before signature recovery, domain checks, nonce claim, simulation, signing, or broadcast. A refused release does not consume an intent nonce. `ReleaseNotAuthorized` means: "Only the payer can release an open escrow; after an upheld dispute, the payer or the payee." The relayer key is not that caller, so a relayed release would revert `ReleaseNotAuthorized` and burn gas. The payer sends an open release from their own wallet. `createEscrow`, `dispute`, `withdraw`, and `withdrawTo` are **400** `action_not_claim` before signature recovery. `createEscrow` stays on the connected wallet. `dispute` requires `msg.sender` to be a party, so a relayed dispute always reverts. `withdraw` and `withdrawTo` spend `pendingWithdrawals[msg.sender]`. The relayer key is that sender, so those calls would move the relayer's own credit, not the user's. They stay disabled.
 
 A per-IP token bucket and a global token bucket run after the kill switch and before the body is parsed. Either one returns **429** `rate_limited` with `Retry-After`. Nothing is signed or broadcast. Render's proxy appends the connecting client to `X-Forwarded-For`, so only the rightmost hop is trusted. A missing header uses the socket address. `X-Real-IP` is not read. `x-edge-client-ip` is the rate-limit key only when `x-relayer-edge-auth` matches `RELAYER_EDGE_AUTH`. When that secret matches and `x-edge-client-ip` is empty, the key is the fixed string `edge-unknown`, not the `X-Forwarded-For` hop. Otherwise the rightmost `X-Forwarded-For` hop stays the key. `CF-Connecting-IP` is not read. Screen, admin, and reputation limits are in-memory and per-instance. Reputation falls back to the socket address when the edge secret does not match.
+When `x-relayer-edge-auth` matches and `x-edge-client-ip` is empty, reputation is keyed on `edge-unknown`, the same as the claim rate-limit key.
 
 ECDSA signatures must be 65 bytes with `v` in `{0, 1, 27, 28}` and low `s` (`s` at most `secp256k1n / 2`). Anything else on a 65-byte signature is **400** `invalid_signature` or **400** `high_s`, before `ecrecover`. The transaction is signed once. A timeout rebroadcasts that same raw transaction. It does not sign again with a new nonce or gas price.
 

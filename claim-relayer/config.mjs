@@ -84,6 +84,25 @@ export function httpError(status, error, extra = {}) {
   return Object.assign(new Error(error), { status, error, ...extra });
 }
 
+// Same minimum as RELAYER_DATA_AUTH: at least 32 bytes of hex, even length.
+const EDGE_AUTH_HEX = /^[0-9a-fA-F]{64,}$/;
+
+// Empty when the edge secret is missing, short, non-hex, odd-length, or the same as the data secret.
+export function validEdgeAuth(edgeAuth, dataAuth = "") {
+  const secret = String(edgeAuth ?? "").trim();
+  const data = String(dataAuth ?? "").trim();
+  if (!EDGE_AUTH_HEX.test(secret) || secret.length % 2 !== 0) return "";
+  if (data && secret.toLowerCase() === data.toLowerCase()) return "";
+  return secret;
+}
+
+// Production start calls this. A bad value refuses to start.
+export function assertRelayerEdgeAuth(env = process.env) {
+  const secret = validEdgeAuth(env?.RELAYER_EDGE_AUTH, env?.RELAYER_DATA_AUTH);
+  if (!secret) throw httpError(500, "relayer_edge_auth_required");
+  return secret;
+}
+
 function sameAddress(left, right) {
   return String(left || "").toLowerCase() === String(right || "").toLowerCase();
 }
@@ -358,6 +377,7 @@ export function loadConfig(env = process.env) {
     adminSecret: String(env.ADMIN_SECRET || "").trim(),
     sanctionsReleaseAdmins: parseReleaseAdmins(env.SANCTIONS_RELEASE_ADMINS),
     relayerEdgeAuth: String(env.RELAYER_EDGE_AUTH || "").trim(),
+    relayerDataAuth: String(env.RELAYER_DATA_AUTH || "").trim(),
     screenSiweDomain: String(env.SCREEN_SIWE_DOMAIN || "").trim() || "agent-bv.pages.dev",
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),

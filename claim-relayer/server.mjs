@@ -1,10 +1,7 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { createClaimRelayer } from "./app.mjs";
 import { createSepoliaBroadcaster } from "./broadcast.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, httpError, loadConfig } from "./config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, assertRelayerEdgeAuth, httpError, loadConfig } from "./config.mjs";
 import { createAbuseGuard } from "./abuseLimits.mjs";
 import { createClaimLog } from "./claimLog.mjs";
 import { createRpcEscrowChain, httpRpcRequest } from "./escrowChain.mjs";
@@ -12,25 +9,31 @@ import { createFileIntentNonceStore } from "./intentNonceStore.mjs";
 import { createKillSwitch } from "./killSwitch.mjs";
 import { createNonceStore } from "./nonceStore.mjs";
 import { createSanctionsGate } from "./sanctionsGate.mjs";
+import { assertSanctionsDataConfig, createSanctionsDataClient } from "./sanctionsData.mjs";
 import { startSanctionsRefresh } from "./sanctionsRefresh.mjs";
 
-export function assertFileSanctionsDb(value) {
-  const dbPath = String(value || "").trim();
-  if (!dbPath || dbPath === ":memory:" || dbPath.includes("mode=memory")) {
-    throw httpError(500, "sanctions_db_path_required");
-  }
-  return dbPath;
-}
+export { assertSanctionsDataConfig };
 
 /**
  * Process entry. The relayer key is passed into the broadcaster only when live
  * submit is allowed. It is not logged. Fixture mode does not read it.
+ * Persisted sanctions rows are reached through the edge Worker. This process
+ * does not open a local database.
  */
-export function startServer(env = process.env) {
+export async function startServer(env = process.env) {
   const config = loadConfig(env);
-  const dbPath = assertFileSanctionsDb(env.SANCTIONS_DB_PATH);
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const sanctionsDb = new DatabaseSync(dbPath);
+  const dataConfig = assertSanctionsDataConfig(env);
+  assertRelayerEdgeAuth(env);
+  const data = createSanctionsDataClient(dataConfig);
+  let health;
+  try {
+    health = await data.call("health", {});
+  } catch {
+    throw httpError(500, "sanctions_data_config_required");
+  }
+  if (!health || health.applied !== true) {
+    throw httpError(500, "sanctions_data_config_required");
+  }
   const killSwitch = createKillSwitch({ initial: config.killSwitchInitial });
   const nonceStore = createNonceStore();
   const claimLog = createClaimLog({ filePath: config.claimLogPath });
@@ -53,7 +56,7 @@ export function startServer(env = process.env) {
   // x-relayer-edge-auth and the proxy supplies x-edge-country.
   const sanctions = createSanctionsGate({
     pepper: typeof env.WALLET_HASH_PEPPER === "string" ? env.WALLET_HASH_PEPPER : "",
-    db: sanctionsDb,
+    data,
     siweDomain: config.screenSiweDomain,
     chainId: config.chainId,
   });
@@ -96,12 +99,10 @@ export function startServer(env = process.env) {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  try {
-    startServer();
-  } catch (err) {
+  startServer().catch((err) => {
     const code = err && err.error;
     const message = err && err.message;
     console.error(code && message && message !== code ? `${code}: ${message}` : code || message || "claim_relayer_config_error");
     process.exit(1);
-  }
+  });
 }

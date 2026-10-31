@@ -1,5 +1,5 @@
 # Agent-B.V. relayer edge. Placeholders only.
-# Spencer deploys this himself. Nothing in this file is an account id,
+# Deploys run only on Spencer's explicit direction. Nothing in this file is an account id,
 # a secret, or an RPC URL.
 #
 # RELAYER_EDGE_AUTH is intentionally absent. A plain var is wiped by the
@@ -18,6 +18,8 @@ main = "src/index.mjs"
 # Same date the points Worker pins for Wrangler 4.124.0.
 compatibility_date = "2026-08-22"
 workers_dev = true
+# Versioned preview hostnames stay off. The pinned workers.dev route is the only one.
+preview_urls = false
 
 [observability]
 enabled = true
@@ -30,3 +32,12 @@ invocation_logs = false
 [observability.traces]
 enabled = false
 head_sampling_rate = 0
+
+# Steward of the King LLC created the agent-bv-sanctions D1 database in its Cloudflare account on 2026-10-30. The id is not a secret.
+# Creation, the 2026-10-30 deploy, and migration 0001 are recorded in SPENCER-SETUP.md.
+# Agents run D1 create, remote migrations and deploys only on Spencer's explicit direction.
+[[d1_databases]]
+binding = "SANCTIONS_DB"
+database_name = "agent-bv-sanctions"
+database_id = "027bb34d-bd12-4c43-acdf-294cf40a11a2"
+migrations_dir = "migrations"
