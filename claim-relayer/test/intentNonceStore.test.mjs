@@ -9,9 +9,11 @@ import { createAbuseGuard } from "../abuseLimits.mjs";
 import { createClaimRelayer } from "../app.mjs";
 import { createClaimLog } from "../claimLog.mjs";
 import { loadConfig } from "../config.mjs";
+import { TEST_EDGE_AUTH, edgeRequestHeaders } from "./edgeHeader.mjs";
 import { createFileIntentNonceStore, createMemoryIntentNonceStore } from "../intentNonceStore.mjs";
 import { createKillSwitch } from "../killSwitch.mjs";
 import { createNonceStore } from "../nonceStore.mjs";
+import { clearSanctionsGate } from "./clearGate.mjs";
 import { NOW_MS, deadlineAt, signedLiveBody, testAccounts, trackingChain } from "./liveIntent.mjs";
 
 function request(port, method, path, body) {
@@ -26,6 +28,7 @@ function request(port, method, path, body) {
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(payload),
+          ...edgeRequestHeaders(),
         },
       },
       (res) => {
@@ -112,6 +115,7 @@ describe("intent nonce store", () => {
       CLAIM_LOG_PATH: join(dir, "claims.jsonl"),
       LIVE_SUBMIT: "1",
       SPENCER_RUN_AUTH: "1",
+      RELAYER_EDGE_AUTH: TEST_EDGE_AUTH,
     });
     const server = createClaimRelayer({
       config,
@@ -123,6 +127,8 @@ describe("intent nonce store", () => {
       claimLog: createClaimLog({ filePath: join(dir, "claims.jsonl") }),
       broadcaster,
       now: () => NOW_MS,
+      sanctions: clearSanctionsGate(NOW_MS),
+      edgeCountry: "US",
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

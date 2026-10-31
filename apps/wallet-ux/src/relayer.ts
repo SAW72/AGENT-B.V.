@@ -599,10 +599,14 @@ function withLink(presentation: ErrorPresentation, href: string, label: string):
   return { ...presentation, link: { href, label } }
 }
 
+const SCREEN_DENIAL =
+  "Agent-B.V. isn't available for this wallet or location. If you think this is a mistake, contact hello@stewardoftheking.com."
+
 /** User-facing relayer failure. Raw status and codes stay in the details line. */
 export function presentRelayerError(error: unknown): ErrorPresentation {
   if (!(error instanceof RelayerRequestError)) return presentError(error)
   const detail = withStatus(null, error.status, error.code)
+  if (error.body?.message === SCREEN_DENIAL) return { main: SCREEN_DENIAL, detail }
   if (error.code === "broadcast_failed") {
     const decoded = presentRevertHex(bodyRevertHex(error.body))
     if (decoded) return { main: decoded.main, detail: withStatus(decoded.detail, error.status, error.code) }

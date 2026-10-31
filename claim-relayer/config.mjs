@@ -18,9 +18,14 @@ export const BASE_SEPOLIA_CHAIN_ID = 84532;
 /** Exact Pages origin. Relayer defaults allow only https://agent-bv.pages.dev. */
 export const DEFAULT_REPUTATION_CORS_ORIGINS = ["https://agent-bv.pages.dev"];
 
-/** Claim-route allowlist. Local Vite origins stay. Reputation CORS does not use this list. */
-export const DEFAULT_CORS_ORIGINS = [
-  ...DEFAULT_REPUTATION_CORS_ORIGINS,
+/** Production claim-route allowlist when CORS_ORIGINS is unset. Never includes localhost. */
+export const DEFAULT_CORS_ORIGINS = DEFAULT_REPUTATION_CORS_ORIGINS.join(",");
+
+/**
+ * Dev-only Vite origins. Not part of DEFAULT_CORS_ORIGINS or render.yaml.
+ * A local process may set CORS_ORIGINS to this list. Production must not.
+ */
+export const DEV_ONLY_CORS_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ].join(",");
@@ -77,6 +82,25 @@ export function checkedAddress(value) {
 
 export function httpError(status, error, extra = {}) {
   return Object.assign(new Error(error), { status, error, ...extra });
+}
+
+// Same minimum as RELAYER_DATA_AUTH: at least 32 bytes of hex, even length.
+const EDGE_AUTH_HEX = /^[0-9a-fA-F]{64,}$/;
+
+// Empty when the edge secret is missing, short, non-hex, odd-length, or the same as the data secret.
+export function validEdgeAuth(edgeAuth, dataAuth = "") {
+  const secret = String(edgeAuth ?? "").trim();
+  const data = String(dataAuth ?? "").trim();
+  if (!EDGE_AUTH_HEX.test(secret) || secret.length % 2 !== 0) return "";
+  if (data && secret.toLowerCase() === data.toLowerCase()) return "";
+  return secret;
+}
+
+// Production start calls this. A bad value refuses to start.
+export function assertRelayerEdgeAuth(env = process.env) {
+  const secret = validEdgeAuth(env?.RELAYER_EDGE_AUTH, env?.RELAYER_DATA_AUTH);
+  if (!secret) throw httpError(500, "relayer_edge_auth_required");
+  return secret;
 }
 
 function sameAddress(left, right) {
@@ -262,6 +286,39 @@ export function loadAbuseLimits(env) {
   };
 }
 
+const RELEASE_ACTOR_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+export function isSha256Hex(value) {
+  if (typeof value !== "string" || value.length !== 64) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const digit = code >= 48 && code <= 57;
+    const lower = code >= 97 && code <= 102;
+    const upper = code >= 65 && code <= 70;
+    if (!digit && !lower && !upper) return false;
+  }
+  return true;
+}
+
+/** JSON map of admin id to sha256 hex. Invalid JSON, ids, and hashes are dropped. */
+export function parseReleaseAdmins(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const admins = {};
+  for (const [id, hash] of Object.entries(parsed)) {
+    if (!RELEASE_ACTOR_ID.test(id) || !isSha256Hex(hash)) continue;
+    admins[id] = String(hash).toLowerCase();
+  }
+  return admins;
+}
+
 export function loadConfig(env = process.env) {
   if (env.RELAYER_KEY_FILE || env.RELAYER_PRIVATE_KEY_FILE) {
     throw httpError(500, "key_file_forbidden");
@@ -318,6 +375,10 @@ export function loadConfig(env = process.env) {
     escrowOwner: escrow.escrowOwner,
     bvtAddress: escrow.bvtAddress,
     adminSecret: String(env.ADMIN_SECRET || "").trim(),
+    sanctionsReleaseAdmins: parseReleaseAdmins(env.SANCTIONS_RELEASE_ADMINS),
+    relayerEdgeAuth: String(env.RELAYER_EDGE_AUTH || "").trim(),
+    relayerDataAuth: String(env.RELAYER_DATA_AUTH || "").trim(),
+    screenSiweDomain: String(env.SCREEN_SIWE_DOMAIN || "").trim() || "agent-bv.pages.dev",
     killSwitchInitial: parseEnvFlag(env.KILL_SWITCH),
     claimLogPath: String(env.CLAIM_LOG_PATH || "./data/claims.jsonl"),
     intentNoncePath: String(env.INTENT_NONCE_PATH || "./data/intent-nonces.jsonl"),

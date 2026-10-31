@@ -1,6 +1,6 @@
-# Agent-BV — Privacy Notice (MVP)
+# Agent-BV Privacy Notice (MVP)
 
-**Last updated:** 2026-09-27
+**Last updated:** 2026-10-29
 
 **Controller:** Steward of the King LLC  
 **Contact:** hello@stewardoftheking.com
@@ -50,8 +50,8 @@ We **do not sell** personal information and we **do not share** it for cross-con
 
 We may share information with:
 
-- **Processors** (hosting, CI, email, model APIs such as xAI) under their terms;
-- **Public blockchains and RPCs** when you or the protocol write data on-chain — those writes are typically **worldwide and irreversible**;
+- **Processors** (hosting and database (Render, Cloudflare), CI, email, model APIs such as xAI) under their terms;
+- **Public blockchains and RPCs** when you or the protocol write data on-chain. Those writes are typically **worldwide and irreversible**;
 - **Professional advisors** and dispute/arbitration participants in a documented process;
 - **Authorities** when required by law, valid legal process, or to protect rights, safety, or the Service; and
 - a successor, if the experimental project is transferred, subject to this notice or equivalent.
@@ -69,6 +69,20 @@ We keep off-chain information only as long as we need it to provide the Service,
 - **On-chain data:** anything written to a public blockchain is **permanent and public**. We cannot edit or delete it, and neither can anyone else.
 
 You may ask us to delete off-chain records we control by emailing **hello@stewardoftheking.com**. We will honor the request unless we must keep the information for legal, security, or dispute reasons, and in that case we will tell you.
+
+## 6.1 Sanctions screening and retention
+
+We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party.
+
+Screening records are kept apart from ordinary application logs:
+
+- A clear row and an unavailable row are kept for 90 days, then deleted.
+- A match, a block, and a dispute are kept for 10 years. That period cites 31 CFR 501.601.
+- A release of a false positive is appended to an audit table. That table is not deleted on this schedule.
+
+For a match, the wallet address itself is kept so the record can be reported. Other screening rows store only a keyed hash. A released false positive keeps only its audit row.
+
+The denial a person sees does not say why access was refused. Appeals are described in [docs/SANCTIONS-APPEALS.md](docs/SANCTIONS-APPEALS.md).
 
 ## 7. Security
 

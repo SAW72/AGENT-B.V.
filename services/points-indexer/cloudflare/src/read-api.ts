@@ -1,6 +1,6 @@
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "../../src/constants.mjs";
-import { SANCTIONS_MATCH } from "../../src/sanctions.mjs";
+import { SANCTIONS_MATCH, SANCTIONS_UNAVAILABLE } from "../../src/sanctions.mjs";
 import { DISCLAIMER } from "./disclaimer.mjs";
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
@@ -31,6 +31,14 @@ const DISCLAIMER_LINK_SLOTS = [
 
 export function pointsEnabled(env: { POINTS_ENABLED?: string } | undefined) {
   return env?.POINTS_ENABLED === "true";
+}
+
+export function eligibilityView(reason: string | undefined) {
+  if (reason === SANCTIONS_MATCH) return { status: "ineligible", reason: SANCTIONS_MATCH };
+  if (reason === SANCTIONS_UNAVAILABLE || reason === "unavailable") {
+    return { status: "unverified", reason };
+  }
+  return { status: "unverified", reason: "unverified" };
 }
 
 export function parseExactHttpsOrigin(raw: unknown) {
@@ -500,9 +508,7 @@ export function createReadApi(options: {
             chainId: CHAIN_ID,
             points_total: 0,
             points_withheld: true,
-            eligibility: summary.eligibility_reason === SANCTIONS_MATCH
-              ? { status: "ineligible", reason: SANCTIONS_MATCH }
-              : { status: "unverified", reason: "ofac_unconfigured" },
+            eligibility: eligibilityView(summary.eligibility_reason),
             rows_count: Number(summary.rows_count),
             first_activity_utc_day: summary.first_activity_utc_day ?? null,
             ...sync,

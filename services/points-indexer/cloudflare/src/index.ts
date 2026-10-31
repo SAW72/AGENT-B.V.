@@ -6,6 +6,8 @@ import {
   type ReadResult,
 } from "./read-api";
 import { PointsObject } from "./points-object";
+import { PUBLIC_DENIAL_MESSAGE } from "../../src/sanctions.mjs";
+import { decideGeoblock, geoInputFromHeaders, geoLog } from "../../../../claim-relayer/geoblock.mjs";
 
 export { PointsObject };
 
@@ -180,16 +182,36 @@ async function enabledHealth(request: Request, env: Env, repeated: boolean): Pro
   return response;
 }
 
+function geoDenied(request: Request): Response | null {
+  try {
+    // The Worker is the edge. Country and region come from request.cf only.
+    // A client CF-IPCountry header is ignored. An unknown country denies.
+    const decision = decideGeoblock({
+      ...geoInputFromHeaders(request.headers, request.cf, true),
+      publicRoute: true,
+    });
+    console.info(JSON.stringify(geoLog(decision)));
+    if (decision.decision !== "deny") return null;
+    return json(403, { ok: false, message: PUBLIC_DENIAL_MESSAGE });
+  } catch {
+    return json(403, { ok: false, message: PUBLIC_DENIAL_MESSAGE });
+  }
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const repeated = duplicateQuery(url);
   if (path === "/health") {
     if (!pointsEnabled(env)) return json(503, { status: "disabled" });
+    const blocked = geoDenied(request);
+    if (blocked) return blocked;
     return enabledHealth(request, env, repeated);
   }
   if (path === "/v1/points" || path.startsWith("/v1/points/")) {
     if (!pointsEnabled(env)) return disabledResponse();
+    const blocked = geoDenied(request);
+    if (blocked) return blocked;
     const address = clientKey(request);
     if (!address) return json(400, { ok: false, error: "client_address_required" });
     const limited = await charge(limiterOf(env, "POINTS_RATE_LIMITER"), address);

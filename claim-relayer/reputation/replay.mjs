@@ -95,7 +95,7 @@ export function replayLedger(input = {}) {
     : input.versions
       ? []
       : loaded.adjustments;
-  const hooks = input.hooks || createDefaultHooks();
+  const hooks = input.hooks || createDefaultHooks(input);
   const logs = Array.isArray(input.logs) ? input.logs : [];
   const hasWork = logs.length > 0 || adjustments.length > 0;
   const head = resolveHead(input, hasWork);

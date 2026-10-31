@@ -7,7 +7,9 @@ import { compareRows } from "../../src/canonical.mjs";
 import { ACTION, CHAIN_ID, isAcceptedChain } from "../../src/constants.mjs";
 import { PointsError, isUniqueError, lowerHex } from "../../src/hex.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "../../src/signature.mjs";
+import { doSql, rescreenLinkedWallets } from "../../../../claim-relayer/accountScreen.mjs";
 import {
+  SANCTIONS_CHECKS_SQL,
   SANCTIONS_INSERT_CHECK,
   SANCTIONS_INSERT_WALLET,
   SANCTIONS_MATCH,
@@ -15,9 +17,11 @@ import {
   SANCTIONS_READ_WALLETS,
   SANCTIONS_REFRESH_MS,
   SANCTIONS_SCHEMA_SQL,
+  SANCTIONS_UNAVAILABLE,
   SANCTIONS_WRITE_CACHE,
   SDN_ADVANCED_URL,
   applySanctionsDecision,
+  decisionWithPepper,
   noteDecision,
   refreshParsedList,
   sanctionsCheckLog,
@@ -204,8 +208,26 @@ function normalizeGates(gates: { gates?: Record<string, unknown> }) {
   };
 }
 
+function migrateSanctionsTables(sql: Sql) {
+  const checks = all(sql, "PRAGMA table_info(sanctions_checks)");
+  if (checks.some((column) => String(column.name) === "wallet")) {
+    sql.exec("DROP TABLE sanctions_checks");
+    sql.exec(SANCTIONS_CHECKS_SQL);
+  }
+  const cache = new Set(all(sql, "PRAGMA table_info(sanctions_cache)").map((column) => String(column.name)));
+  if (cache.size > 0 && !cache.has("addresses_sha256")) sql.exec("ALTER TABLE sanctions_cache ADD COLUMN addresses_sha256 TEXT");
+  if (cache.size > 0 && !cache.has("raw_sha256")) sql.exec("ALTER TABLE sanctions_cache ADD COLUMN raw_sha256 TEXT");
+  const wallets = new Set(all(sql, "PRAGMA table_info(sanctions_wallets)").map((column) => String(column.name)));
+  if (wallets.size > 0 && !wallets.has("wallet_hash")) sql.exec("ALTER TABLE sanctions_wallets ADD COLUMN wallet_hash TEXT");
+  const audit = new Set(all(sql, "PRAGMA table_info(sanctions_release_audit)").map((column) => String(column.name)));
+  if (audit.size > 0 && !audit.has("actor")) {
+    sql.exec("ALTER TABLE sanctions_release_audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
+  }
+}
+
 export function ensureSchema(sql: Sql) {
   for (const statement of SCHEMA) sql.exec(statement);
+  migrateSanctionsTables(sql);
   if (!metaGet(sql, "configured")) {
     refreshBundled(sql);
     metaSet(sql, "configured", "1");
@@ -530,7 +552,7 @@ function rowFrom(candidate: {
     escrow_id: candidate.escrowId,
     points: 0,
     eligibility_status: "unverified",
-    eligibility_reason: "ofac_unconfigured",
+    eligibility_reason: SANCTIONS_UNAVAILABLE,
     points_withheld: 1,
     rule_weight: fields.ruleWeight,
     counts_for_return_day: fields.countsForReturnDay,
@@ -607,7 +629,8 @@ function linkFor(
 }
 
 export function applyFailClosed<T extends Record<string, unknown>>(row: T) {
-  if (row.eligibility_reason === SANCTIONS_MATCH) {
+  const reason = row.eligibility_reason;
+  if (reason === SANCTIONS_MATCH) {
     return {
       ...row,
       points: 0,
@@ -616,11 +639,20 @@ export function applyFailClosed<T extends Record<string, unknown>>(row: T) {
       points_withheld: 1,
     };
   }
+  if (reason === SANCTIONS_UNAVAILABLE || reason === "unavailable" || reason === "unverified") {
+    return {
+      ...row,
+      points: 0,
+      eligibility_status: "unverified",
+      eligibility_reason: reason,
+      points_withheld: 1,
+    };
+  }
   return {
     ...row,
     points: 0,
     eligibility_status: "unverified",
-    eligibility_reason: "ofac_unconfigured",
+    eligibility_reason: SANCTIONS_UNAVAILABLE,
     points_withheld: 1,
   };
 }
@@ -679,23 +711,30 @@ function loadSanctionsScreen(sql: Sql, now = Date.now()) {
   }
 }
 
-function writeSanctionsCheck(sql: Sql, screen: ReturnType<typeof screenFromStored>, wallet: string, decision: { result: string; reason: string; persisted: boolean }) {
-  const params = sanctionsCheckParams(screen, wallet, decision);
+function writeSanctionsCheck(sql: Sql, screen: ReturnType<typeof screenFromStored>, wallet: string, decision: { result: string; reason: string; persisted: boolean }, pepper = "") {
+  const params = sanctionsCheckParams(screen, wallet, decision, {
+    pepper,
+    chainId: CHAIN_ID,
+    decisionPoint: "rebuild",
+  });
   run(
     sql,
     SANCTIONS_INSERT_CHECK,
-    params.wallet,
+    params.walletHash,
     params.result,
     params.reason,
     params.checkedAt,
     params.listVersion,
+    params.listSha256,
     params.source,
     params.persisted,
+    params.chainId,
+    params.decisionPoint,
   );
   if (params.storeWallet) {
-    run(sql, SANCTIONS_INSERT_WALLET, params.wallet, SANCTIONS_MATCH, params.checkedAt, params.listVersion);
+    run(sql, SANCTIONS_INSERT_WALLET, params.wallet, params.walletHash, SANCTIONS_MATCH, params.checkedAt, params.listVersion);
   }
-  console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision)));
+  console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision, { pepper })));
 }
 
 export async function refreshSanctionsCache(sql: Sql, options: {
@@ -706,6 +745,8 @@ export async function refreshSanctionsCache(sql: Sql, options: {
   minAddresses?: number;
   timeoutMs?: number;
   byteCap?: number;
+  pepper?: string;
+  transactionSync?: <T>(closure: () => T) => T;
 }) {
   const now = options.now ?? Date.now();
   const refreshMs = options.refreshMs ?? SANCTIONS_REFRESH_MS;
@@ -728,7 +769,26 @@ export async function refreshSanctionsCache(sql: Sql, options: {
     return { refreshed: false, failed: true, listVersion: outcome.listVersion as string | null };
   }
   if (outcome.addressesJson != null) {
-    run(sql, SANCTIONS_WRITE_CACHE, outcome.fetchedAt, source, outcome.listVersion, outcome.addressesJson);
+    const write = () => run(
+      sql,
+      SANCTIONS_WRITE_CACHE,
+      outcome.fetchedAt,
+      source,
+      outcome.listVersion,
+      outcome.addressesJson,
+      outcome.addressesSha256,
+      outcome.rawSha256,
+    );
+    if (typeof options.transactionSync === "function") options.transactionSync(write);
+    else write();
+    if (options.pepper) {
+      try {
+        const loaded = loadSanctionsScreen(sql, now);
+        await rescreenLinkedWallets(doSql(sql), loaded, { pepper: options.pepper, now, chainId: CHAIN_ID });
+      } catch {
+        console.error(JSON.stringify({ message: "sanctions_refresh_failed" }));
+      }
+    }
   }
   return {
     refreshed: outcome.refreshed === true,
@@ -756,7 +816,7 @@ function settleNonceStatuses(sql: Sql, nonces: Map<string, Record<string, unknow
   }
 }
 
-export function rebuild(storage: Storage) {
+export function rebuild(storage: Storage, options: { pepper?: string } = {}) {
   const sql = storage.sql;
   const head = finalizedBlock(sql);
   if (head == null) throw new PointsError("bad_finalized");
@@ -818,10 +878,11 @@ export function rebuild(storage: Storage) {
       if (row.action === ACTION.firstActivity && firstDay.has(row.wallet)) return false;
       if (row.action === ACTION.returnDay && returnDays.has(`${row.wallet}|${row.utc_day}`)) return false;
       const noted = noteDecision(screen, row.wallet);
-      applySanctionsDecision(row, noted.decision);
+      const decision = decisionWithPepper(noted.decision, options.pepper ?? "");
+      applySanctionsDecision(row, decision);
       seq += 1;
       pending.push({ ...row });
-      if (noted.first) writeSanctionsCheck(sql, screen, row.wallet, noted.decision);
+      if (noted.first) writeSanctionsCheck(sql, screen, row.wallet, decision, options.pepper ?? "");
       daySlot.add(dayKey);
       if (row.action === ACTION.fund || row.action === ACTION.releaseOrRefund || row.action === ACTION.disputeOpenOrVote) {
         logSlot.add(logKey);

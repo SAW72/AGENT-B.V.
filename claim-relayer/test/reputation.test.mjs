@@ -731,7 +731,7 @@ describe("dedup, chain, finality, hooks, and separation", () => {
     const tier = registered(1, BLOCK0 + 1, { day: 64, offset: 1 });
     const closed = play([tier, log], { hooks: createDefaultHooks() });
     assert.equal(ofCode(closed, "O1")[0].eligible, false);
-    assert.equal(ofCode(closed, "O1")[0].eligibility_reason, "ofac_unconfigured");
+    assert.equal(ofCode(closed, "O1")[0].eligibility_reason, "sanctions_unavailable");
     assert.equal(ofCode(closed, "O1")[0].points, 0);
     assert.equal(ofCode(closed, "O1")[0].nominal_points, 10);
     assert.equal(walletPoints(closed, OPERATOR), 0);

@@ -54,7 +54,7 @@ describe("committed rows from recorded logs", () => {
       const ledger = rows(ctx.indexer);
       assert.ok(ledger.every((row) => row.points === 0));
       assert.ok(ledger.every((row) => row.eligibility_status === "unverified"));
-      assert.ok(ledger.every((row) => row.eligibility_reason === "ofac_unconfigured"));
+      assert.ok(ledger.every((row) => row.eligibility_reason === "sanctions_unavailable"));
       assert.ok(ledger.every((row) => row.points_withheld === 1));
       assert.ok(ledger.every((row) => row.log_index !== null && row.block_number !== null));
       const votes = rows(ctx.indexer, ACTION.disputeOpenOrVote).filter((row) => row.dispute_id === LIVE.dispute && row.support !== null);

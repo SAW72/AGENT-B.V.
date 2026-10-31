@@ -20,6 +20,7 @@ export default defineConfig({
     }),
   ],
   test: {
+    setupFiles: ["./test/geo-setup.ts"],
     include: ["test/budget.test.ts"],
     fileParallelism: false,
     testTimeout: 60_000,

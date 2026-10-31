@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAddressBook, parseStartBlock } from "../addressBook.mjs";
-import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_CORS_ORIGINS, DEFAULT_RELAYER_ADDRESS, DEFAULT_REPUTATION_CORS_ORIGINS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, buildMetadata, healthPayload, liveSubmitStatus, loadConfig, reputationCorsFromEnv } from "../config.mjs";
+import { BOOKED_SEPOLIA_ESCROW, BOOKED_SEPOLIA_ESCROW_START_BLOCK, DEFAULT_CORS_ORIGINS, DEFAULT_RELAYER_ADDRESS, DEFAULT_REPUTATION_CORS_ORIGINS, DEV_ONLY_CORS_ORIGINS, RETIRED_SEPOLIA_ESCROWS, acceptLegacyDomainName, assertRelayerEdgeAuth, buildMetadata, healthPayload, liveSubmitStatus, loadConfig, validEdgeAuth, reputationCorsFromEnv } from "../config.mjs";
 
 const RETIRED_ESCROW = "0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c";
 const RETIRED_ESCROW_ESC_M1 = "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d";
@@ -60,10 +60,14 @@ describe("config gates", () => {
     assert.equal(config.abuse.maxFeePerGasWei, "5000000000");
     assert.equal(config.abuse.maxPriorityFeePerGasWei, "2000000000");
     assert.equal(config.corsOrigins, DEFAULT_CORS_ORIGINS);
+    assert.equal(config.corsOrigins, "https://agent-bv.pages.dev");
+    assert.equal(config.corsOrigins.includes("localhost"), false);
+    assert.equal(config.corsOrigins.includes("127.0.0.1"), false);
     assert.equal(
-      config.corsOrigins,
-      "https://agent-bv.pages.dev,http://localhost:5173,http://127.0.0.1:5173",
+      DEV_ONLY_CORS_ORIGINS,
+      "http://localhost:5173,http://127.0.0.1:5173",
     );
+    assert.equal(DEFAULT_CORS_ORIGINS.includes(DEV_ONLY_CORS_ORIGINS), false);
     assert.equal(config.corsOrigins.includes("agent-a-wallet-ux"), false);
     assert.deepEqual(DEFAULT_REPUTATION_CORS_ORIGINS, ["https://agent-bv.pages.dev"]);
     assert.deepEqual(config.reputationCors.origins, DEFAULT_REPUTATION_CORS_ORIGINS);
@@ -73,7 +77,12 @@ describe("config gates", () => {
     const example = await readFile(new URL("../.env.example", import.meta.url), "utf8");
     assert.equal(render.includes(DEFAULT_CORS_ORIGINS), true);
     assert.equal(render.includes("agent-a-wallet-ux"), false);
+    assert.equal(render.includes("localhost"), false);
+    assert.equal(render.includes("127.0.0.1"), false);
+    const corsValue = /- key: CORS_ORIGINS\n        value: "([^"]+)"/.exec(render);
+    assert.equal(corsValue[1], "https://agent-bv.pages.dev");
     assert.equal(example.includes(DEFAULT_CORS_ORIGINS), true);
+    assert.match(example, /reads x-edge-country, x-edge-region-code, and x-edge-region/);
     assert.deepEqual(config.liveSubmit.blockers, ["spencer_run_auth_required", "live_submit_off"]);
     assert.equal(JSON.stringify(config).includes(SECRET), false);
     assert.equal(Object.hasOwn(config, "RELAYER_PRIVATE_KEY"), false);
@@ -506,6 +515,31 @@ describe("start block parsing", () => {
     });
     const config = loadConfig({ RENDER_GIT_COMMIT: "deff214" });
     assert.equal(healthPayload(config, false).build.commit, "deff214");
+  });
+
+  it("rejects a short, non-hex, odd, or data-auth edge secret and keeps loadConfig from throwing", () => {
+    assert.throws(() => assertRelayerEdgeAuth({}), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "short" }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "g".repeat(64) }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "a".repeat(65) }), /relayer_edge_auth_required/);
+    assert.throws(() => assertRelayerEdgeAuth({ RELAYER_EDGE_AUTH: "  " }), /relayer_edge_auth_required/);
+    const same = "d".repeat(64);
+    assert.throws(() => assertRelayerEdgeAuth({
+      RELAYER_EDGE_AUTH: same,
+      RELAYER_DATA_AUTH: same.toUpperCase(),
+    }), /relayer_edge_auth_required/);
+    assert.equal(validEdgeAuth("short"), "");
+    assert.equal(validEdgeAuth("g".repeat(64)), "");
+    assert.equal(validEdgeAuth("a".repeat(65)), "");
+    assert.equal(validEdgeAuth(same, same.toUpperCase()), "");
+    const padded = `  ${"a".repeat(64)}  `;
+    assert.equal(assertRelayerEdgeAuth({
+      RELAYER_EDGE_AUTH: padded,
+      RELAYER_DATA_AUTH: "b".repeat(64),
+    }), "a".repeat(64));
+    assert.equal(loadConfig({ RELAYER_EDGE_AUTH: "short" }).relayerEdgeAuth, "short");
+    assert.equal(loadConfig({ RELAYER_EDGE_AUTH: "  " }).relayerEdgeAuth, "");
+    assert.equal(loadConfig({}).relayerEdgeAuth, "");
   });
 
 });

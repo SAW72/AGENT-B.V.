@@ -322,7 +322,7 @@ A credit for one of those actions is committed only when all of the following ar
 4. The event mapping in this spec names the wallet, and the ledger constraints accept the row.
 5. The `PointsLink` for that log is signed after the transaction, its `wallet` matches the row, and it confirms under the rules above. The decision-chain approval for that same action was signed before the transaction.
 
-A matched `VoteCast` can pass these checks and still receive no numeric credit. Vote credit stays **TBD** until the human/AI arbitrator register exists. A stored vote whose points are 0 because that weight is unset does not produce a `return_day`. That exclusion is the vote-weight rule. It is independent of checklist #7. OFAC screening can zero a different row for `ofac_unconfigured`. It is not what keeps a vote at 0 here.
+A matched `VoteCast` can pass these checks and still receive no numeric credit. Vote credit stays **TBD** until the human/AI arbitrator register exists. A stored vote whose points are 0 because that weight is unset does not produce a `return_day`. That exclusion is the vote-weight rule. It is independent of checklist #7. Screening can zero a different row for `sanctions_unavailable`. It is not what keeps a vote at 0 here.
 
 If the terminal approver is `ai`, Agent-BV already blocks the action and logs the full chain. The points consequence, which is the proof on this ledger, is that no points row is committed. A decision-chain signature added after the escrow transaction is a confirmation, not prior authority, so a chain attached after the log does not make the log eligible. That rule does not apply to `PointsLink`, which is signed after the log. Both signatures, in that order, are necessary. They are not sufficient. The log still has to pass the rest of this spec, including a finalized block, a log that is not removed, a matching wallet, a low-`s` signature with nonzero `r` and `s` and a normalized `v`, an expiry inside the block-timestamp window, and the ledger gates. If the escrow was called outside that path and the log exists anyway, a missing or out-of-order signature means no credit, and so does a signature pair that fails any of those other gates.
 
@@ -342,7 +342,7 @@ The escrow contract does not read the chain. The check lives in the points write
 
 The running definition in that same doc, which this spec uses:
 
-- Default eligibility result: `{ eligible: false, status: "unverified", reason: "ofac_unconfigured" }`.
+- Default eligibility result when the list is not ready: `{ eligible: false, status: "unverified", reason: "sanctions_unavailable" }`. A wallet that is not on the list stays `{ eligible: false, status: "unverified", reason: "unverified" }`. We screen wallet addresses against the U.S. Treasury OFAC SDN list. Screening may not catch every sanctioned party.
 - The API reports `eligibility.status` `"unverified"` and `points_withheld: true`.
 - The row is still stored. `points` is 0 so a raw sum does not credit it.
 - `docs/reputation/INDEXER_SPEC.md` shows a staging stub `{ eligible: true, reason: "pending-#7" }` and says public launch is blocked until #7 closes. `docs/reputation-ledger.md` says this service does not use that stub. This spec follows the ledger doc: eligible is false until a real screen exists.

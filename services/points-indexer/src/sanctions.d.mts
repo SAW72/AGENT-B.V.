@@ -7,6 +7,11 @@ export const SANCTIONS_MIN_KEEP_NUMERATOR: number;
 export const SANCTIONS_MIN_KEEP_DENOMINATOR: number;
 export const SANCTIONS_FETCH_TIMEOUT_MS: number;
 export const SANCTIONS_MATCH: string;
+export const SANCTIONS_UNAVAILABLE: string;
+export const PUBLIC_DENIAL_MESSAGE: string;
+export const SANCTIONS_CLEAR_RETENTION_MS: number;
+export const SANCTIONS_MATCH_RETENTION_MS: number;
+export const SANCTIONS_CHECKS_SQL: string;
 export const SANCTIONS_MAX_BYTES: number;
 export const SANCTIONS_MEMORY_MAX_BYTES: number;
 export const SANCTIONS_RETAINED_MAX_BYTES: number;
@@ -35,6 +40,7 @@ export type SanctionsScreen = {
   persisted: Set<string>;
   listReady: boolean;
   listVersion: string | null;
+  listSha256: string | null;
   source: string | null;
   memo: Map<string, SanctionsDecision>;
   checkedAt: number;
@@ -63,10 +69,24 @@ export type SanctionsRefresh = {
   listVersion: string | null;
   count: number | null;
   addressesJson: string | null;
+  addressesSha256: string | null;
+  rawSha256: string | null;
   fetchedAt: number | null;
 };
 
 export function normalizeSanctionsAddress(value: unknown): string;
+export function walletHashHex(pepper: string, normalized: string): string | null;
+export function canonicalAddressList(addresses: unknown): string[];
+export function addressListSha256(addresses: unknown): string;
+export function screenFromAddressList(addresses: unknown, now?: number, options?: {
+  minAddresses?: number;
+  maxAgeMs?: number;
+  listVersion?: string;
+  source?: string;
+  rawSha256?: string;
+  wallets?: unknown[];
+}): SanctionsScreen;
+export function decisionWithPepper(decision: SanctionsDecision, pepper: string): SanctionsDecision;
 export function cacheIsFresh(fetchedAt: number, now: number, refreshMs?: number): boolean;
 export function listWithinMaxAge(fetchedAt: number, now: number, maxAgeMs?: number): boolean;
 export function parseSdnAdvancedXml(xml: string, options?: { minAddresses?: number }): { listVersion: string; addresses: string[] };
@@ -90,23 +110,34 @@ export function eligibilityFromDecision(decision: { result?: string }): {
 export function applySanctionsDecision(row: any, decision: SanctionsDecision): any;
 export function noteDecision(screen: SanctionsScreen, wallet: string): { decision: SanctionsDecision; first: boolean };
 export function forgetNotedDecision(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): void;
-export function sanctionsCheckParams(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): {
+export function sanctionsCheckParams(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision, options?: {
+  pepper?: string;
+  chainId?: number | null;
+  decisionPoint?: string | null;
+}): {
   wallet: string;
+  walletHash: string;
   result: string;
   reason: string;
   checkedAt: number;
   listVersion: string | null;
+  listSha256: string | null;
   source: string | null;
   persisted: number;
+  chainId: number | null;
+  decisionPoint: string | null;
   storeWallet: boolean;
 };
-export function sanctionsCheckLog(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision): {
+export function sanctionsCheckLog(screen: SanctionsScreen, wallet: string, decision: SanctionsDecision, options?: {
+  pepper?: string;
+}): {
   message: string;
-  wallet: string;
+  wallet_hash: string | null;
   result: string;
   reason: string;
   persisted: boolean;
-  listVersion: string | null;
+  list_version: string | null;
+  at: number;
 };
 export function fetchSdnAdvancedXml(
   fetchImpl: SanctionsFetch,
@@ -122,3 +153,18 @@ export function refreshParsedList(
   cacheRow: any,
   options?: { minAddresses?: number; timeoutMs?: number; byteCap?: number },
 ): Promise<SanctionsRefresh>;
+export function swapSanctionsCache(db: {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...params: unknown[]): unknown };
+}, params: {
+  fetchedAt: number | null;
+  source: string;
+  listVersion: string | null;
+  addressesJson: string;
+  addressesSha256: string | null;
+  rawSha256: string | null;
+}): void;
+export function migrateSanctionsSchema(db: {
+  exec(sql: string): void;
+  prepare(sql: string): { all(): Array<{ name: string }> };
+}): void;

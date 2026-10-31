@@ -27,7 +27,9 @@ import {
   listWithinMaxAge,
   normalizeSanctionsAddress,
   parseSdnAdvancedXml,
+  addressListSha256,
   screenFromStored,
+  walletHashHex,
 } from "../src/sanctions.mjs";
 import { ACTION } from "../src/constants.mjs";
 import { account, createdLog, creditCandidate, rows, tempIndexer } from "./support.mjs";
@@ -63,7 +65,7 @@ function parseFixture(xml, options = {}) {
 
 function xmlOfCount(count) {
   const eth = [];
-  for (let n = 1; n < count; n += 1) eth.push(`0x${n.toString(16).padStart(40, "0")}`);
+  for (let n = 1; n <= count; n += 1) eth.push(`0x${n.toString(16).padStart(40, "0")}`);
   return sdnXml(eth);
 }
 
@@ -71,7 +73,7 @@ function xmlWithMinimum(required = []) {
   const eth = [...required];
   const seen = new Set(eth.map((item) => String(item).toLowerCase()));
   let n = 1_000_000;
-  while (eth.length + 1 < SANCTIONS_MIN_ADDRESSES) {
+  while (eth.length < SANCTIONS_MIN_ADDRESSES) {
     const address = `0x${n.toString(16).padStart(40, "0")}`;
     n += 1;
     if (seen.has(address)) continue;
@@ -147,14 +149,13 @@ async function fund(indexer, payer, payee) {
 }
 
 describe("OFAC SDN parser", () => {
-  it("keeps ETH addresses lowercase, keeps non-EVM text, and ignores other features", () => {
+  it("keeps ETH addresses lowercase and drops non-EVM text", () => {
     const parsed = parseFixture(sdnXml(["0x00000000000000000000000000000000000000A1"]));
     assert.equal(parsed.listVersion, "2026-10-21");
     assert.deepEqual(parsed.addresses, [
       "0x00000000000000000000000000000000000000a1",
-      BTC,
     ]);
-    assert.equal(parsed.addresses.includes(BTC.toLowerCase()), false);
+    assert.equal(parsed.addresses.includes(BTC), false);
     assert.equal(parsed.addresses.includes("not-an-address"), false);
   });
 
@@ -301,7 +302,7 @@ describe("OFAC SDN parser", () => {
     assert.throws(() => parseSdnAdvancedXml(xmlOfCount(99)), /sanctions_unavailable/);
     assert.equal(parseSdnAdvancedXml(xmlOfCount(100)).addresses.length, 100);
     assert.throws(() => parseSdnAdvancedXml(sdnXml(), { minAddresses: 2 }), /sanctions_unavailable/);
-    const one = parseSdnAdvancedXml(sdnXml(), { minAddresses: 1 });
+    const one = parseSdnAdvancedXml(sdnXml(["0x00000000000000000000000000000000000000a1"]), { minAddresses: 1 });
     assert.equal(one.addresses.length, 1);
     assert.throws(() => parseSdnAdvancedXml(sdnXml(), { minAddresses: -1 }), /sanctions_unavailable/);
     const smallCache = {
@@ -311,9 +312,11 @@ describe("OFAC SDN parser", () => {
       addresses_json: JSON.stringify([BTC]),
     };
     assert.equal(screenFromStored(smallCache, [], 10_000).listReady, false);
+    const readyAddresses = parseSdnAdvancedXml(xmlOfCount(100)).addresses;
     const readyCache = {
       ...smallCache,
-      addresses_json: JSON.stringify(parseSdnAdvancedXml(xmlOfCount(100)).addresses),
+      addresses_json: JSON.stringify(readyAddresses),
+      addresses_sha256: addressListSha256(readyAddresses),
     };
     assert.equal(screenFromStored(readyCache, [], 10_000).listReady, true);
   });
@@ -440,7 +443,7 @@ describe("OFAC SDN parser", () => {
       .replace("<Feature ID=\"96530\" FeatureTypeID=\"345\">", "<Feature\nID=\"96530\" FeatureTypeID=\"345\">")
       .replace("<Feature FeatureTypeID=\"344\">", "<Feature\tFeatureTypeID=\"344\">");
     const parsed = parseFixture(xml);
-    assert.deepEqual(parsed.addresses, [address.toLowerCase(), BTC]);
+    assert.deepEqual(parsed.addresses, [address.toLowerCase()]);
     const sliced = await fetchSdnAdvancedXml(async () => streamResponse(xml, {}, 7));
     assert.deepEqual(parseFixture(sliced), parsed);
     const spaced = parseFixture(sdnXml([address]));
@@ -478,7 +481,7 @@ describe("sanctions decision", () => {
     assert.deepEqual(eligibilityFromDecision(decision), {
       points: 0,
       eligibility_status: "unverified",
-      eligibility_reason: "ofac_unconfigured",
+      eligibility_reason: "unverified",
       points_withheld: 1,
     });
   });
@@ -486,7 +489,7 @@ describe("sanctions decision", () => {
   it("does not treat a missing list as a clear, and a stored match still matches", () => {
     const missing = decideSanctions(OTHER, { addresses: new Set(), persisted: new Set(), listReady: false });
     assert.equal(missing.result, "unavailable");
-    assert.equal(missing.reason, "ofac_unconfigured");
+    assert.equal(missing.reason, "sanctions_unavailable");
     const kept = decideSanctions(wallet, { addresses: new Set(), persisted, listReady: false });
     assert.deepEqual(kept, { result: "match", reason: SANCTIONS_MATCH, persisted: true });
     assert.equal(cacheIsFresh(1_000, 1_000 + SANCTIONS_REFRESH_MS - 1), true);
@@ -494,13 +497,14 @@ describe("sanctions decision", () => {
   });
 
   it("treats a stale list as unavailable and does not grant points", () => {
-    assert.equal(SANCTIONS_MAX_AGE_MS, 48 * 60 * 60 * 1000);
+    assert.equal(SANCTIONS_MAX_AGE_MS, 24 * 60 * 60 * 1000);
     const fetchedAt = 10_000;
     const row = {
       fetched_at: fetchedAt,
       source: SDN_ADVANCED_URL,
       list_version: "2026-10-21",
       addresses_json: JSON.stringify([wallet, BTC]),
+      addresses_sha256: addressListSha256([wallet, BTC]),
     };
     const ready = screenFromStored(row, [], fetchedAt + SANCTIONS_MAX_AGE_MS, { minAddresses: 1 });
     assert.equal(ready.listReady, true);
@@ -511,11 +515,11 @@ describe("sanctions decision", () => {
     assert.equal(stale.addresses.size, 0);
     const decision = decideSanctions(OTHER, stale);
     assert.equal(decision.result, "unavailable");
-    assert.equal(decision.reason, "ofac_unconfigured");
+    assert.equal(decision.reason, "sanctions_unavailable");
     assert.deepEqual(eligibilityFromDecision(decision), {
       points: 0,
       eligibility_status: "unverified",
-      eligibility_reason: "ofac_unconfigured",
+      eligibility_reason: "sanctions_unavailable",
       points_withheld: 1,
     });
     const kept = decideSanctions(wallet, { addresses: stale.addresses, persisted, listReady: stale.listReady });
@@ -584,9 +588,10 @@ describe("sanctions screen on the indexer", () => {
       const wallet = payer.address.toLowerCase();
       const stored = ctx.indexer.db.prepare("SELECT reason FROM sanctions_wallets WHERE wallet = ?").get(wallet);
       assert.equal(stored.reason, SANCTIONS_MATCH);
-      const before = ctx.indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet = ?").get(wallet).n;
+      const hash = walletHashHex("test-wallet-hash-pepper", wallet);
+      const before = ctx.indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet_hash = ?").get(hash).n;
       ctx.indexer.rebuild();
-      const after = ctx.indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet = ?").get(wallet).n;
+      const after = ctx.indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_checks WHERE wallet_hash = ?").get(hash).n;
       assert.equal(after, before + 1);
       const dropped = await ctx.indexer.refreshSanctions({
         fetch: (url) => {
@@ -602,8 +607,8 @@ describe("sanctions screen on the indexer", () => {
       assert.ok(again.every((row) => row.eligibility_status === "ineligible"));
       assert.ok(again.every((row) => row.points === 0));
       const latest = ctx.indexer.db.prepare(
-        "SELECT result, persisted FROM sanctions_checks WHERE wallet = ? ORDER BY id DESC LIMIT 1",
-      ).get(wallet);
+        "SELECT result, persisted FROM sanctions_checks WHERE wallet_hash = ? ORDER BY id DESC LIMIT 1",
+      ).get(hash);
       assert.equal(latest.result, "match");
       assert.equal(latest.persisted, 1);
       assert.equal(calls.length, 2);
@@ -626,9 +631,9 @@ describe("sanctions screen on the indexer", () => {
       assert.ok(ledger.every((row) => row.points === 0));
       assert.ok(ledger.every((row) => row.points_withheld === 1));
       assert.ok(ledger.every((row) => row.eligibility_status === "unverified"));
-      assert.ok(ledger.every((row) => row.eligibility_reason === "ofac_unconfigured"));
+      assert.ok(ledger.every((row) => row.eligibility_reason === "unverified"));
       const wallet = payer.address.toLowerCase();
-      const checks = ctx.indexer.db.prepare("SELECT result, reason FROM sanctions_checks WHERE wallet = ?").all(wallet);
+      const checks = ctx.indexer.db.prepare("SELECT result, reason FROM sanctions_checks WHERE wallet_hash = ?").all(walletHashHex("test-wallet-hash-pepper", wallet));
       assert.ok(checks.length >= 1);
       assert.ok(checks.every((row) => row.result === "clear"));
       assert.ok(checks.every((row) => row.reason === "clear"));
@@ -645,10 +650,10 @@ describe("sanctions screen on the indexer", () => {
     const ctx = tempIndexer();
     try {
       const ledger = await fund(ctx.indexer, payer, payee);
-      assert.ok(ledger.every((row) => row.eligibility_reason === "ofac_unconfigured"));
+      assert.ok(ledger.every((row) => row.eligibility_reason === "sanctions_unavailable"));
       assert.ok(ledger.every((row) => row.points === 0));
       const wallet = payer.address.toLowerCase();
-      const checks = ctx.indexer.db.prepare("SELECT result FROM sanctions_checks WHERE wallet = ?").all(wallet);
+      const checks = ctx.indexer.db.prepare("SELECT result FROM sanctions_checks WHERE wallet_hash = ?").all(walletHashHex("test-wallet-hash-pepper", wallet));
       assert.ok(checks.length >= 1);
       assert.ok(checks.every((row) => row.result === "unavailable"));
     } finally {
@@ -751,12 +756,12 @@ describe("sanctions screen on the indexer", () => {
       assert.ok(ledger.every((row) => row.points === 0));
       assert.ok(ledger.every((row) => row.points_withheld === 1));
       assert.ok(ledger.every((row) => row.eligibility_status === "unverified"));
-      assert.ok(ledger.every((row) => row.eligibility_reason === "ofac_unconfigured"));
+      assert.ok(ledger.every((row) => row.eligibility_reason === "sanctions_unavailable"));
       const wallet = payer.address.toLowerCase();
-      const checks = ctx.indexer.db.prepare("SELECT result, reason FROM sanctions_checks WHERE wallet = ?").all(wallet);
+      const checks = ctx.indexer.db.prepare("SELECT result, reason FROM sanctions_checks WHERE wallet_hash = ?").all(walletHashHex("test-wallet-hash-pepper", wallet));
       assert.ok(checks.length >= 1);
       assert.ok(checks.every((row) => row.result === "unavailable"));
-      assert.ok(checks.every((row) => row.reason === "ofac_unconfigured"));
+      assert.ok(checks.every((row) => row.reason === "sanctions_unavailable"));
     } finally {
       ctx.close();
     }
@@ -1155,6 +1160,28 @@ describe("OFAC-shaped publication", () => {
       const parsed = parseSdnAdvancedXml(sliced);
       assert.equal(parsed.listVersion, "2026-10-20", `chunk ${size}`);
       assert.deepEqual(parsed.addresses, fixture.addresses, `chunk ${size}`);
+    }
+  });
+});
+
+describe("sanctions release audit on the indexer schema", () => {
+  it("aborts update and delete and keeps the actor", () => {
+    const ctx = tempIndexer();
+    try {
+      ctx.indexer.db.prepare(
+        "INSERT INTO sanctions_release_audit(wallet_hash, outcome, list_version, released_at, actor) VALUES(?, ?, ?, ?, ?)",
+      ).run("abc", "released", "v", 1, "ops-1");
+      assert.throws(() => {
+        ctx.indexer.db.prepare("UPDATE sanctions_release_audit SET actor = ? WHERE id = 1").run("other");
+      }, /append-only/);
+      assert.throws(() => {
+        ctx.indexer.db.prepare("DELETE FROM sanctions_release_audit WHERE id = 1").run();
+      }, /append-only/);
+      const row = ctx.indexer.db.prepare("SELECT outcome, actor FROM sanctions_release_audit WHERE id = 1").get();
+      assert.equal(row.outcome, "released");
+      assert.equal(row.actor, "ops-1");
+    } finally {
+      ctx.close();
     }
   });
 });

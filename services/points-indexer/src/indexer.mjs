@@ -7,6 +7,7 @@ import { attributeLogs, normalizeLog } from "./attribute.mjs";
 import { canonicalJson, compareRows } from "./canonical.mjs";
 import { ACTION, CHAIN_ID, DAY_SECONDS, isAcceptedChain } from "./constants.mjs";
 import { PointsError, hexInt, isUniqueError, lowerHex } from "./hex.mjs";
+import { nodeSql, rescreenLinkedWallets } from "../../../claim-relayer/accountScreen.mjs";
 import {
   SANCTIONS_INSERT_CHECK,
   SANCTIONS_INSERT_WALLET,
@@ -15,15 +16,18 @@ import {
   SANCTIONS_READ_WALLETS,
   SANCTIONS_REFRESH_MS,
   SANCTIONS_SCHEMA_SQL,
-  SANCTIONS_WRITE_CACHE,
+  SANCTIONS_UNAVAILABLE,
   SDN_ADVANCED_URL,
   applySanctionsDecision,
+  decisionWithPepper,
   forgetNotedDecision,
+  migrateSanctionsSchema,
   noteDecision,
   refreshParsedList,
   sanctionsCheckLog,
   sanctionsCheckParams,
   screenFromStored,
+  swapSanctionsCache,
 } from "./sanctions.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "./signature.mjs";
 
@@ -243,6 +247,7 @@ export class Indexer {
     if (!isAcceptedChain(chainId)) throw new PointsError("wrong_chain", { chainId });
     this.chainId = CHAIN_ID;
     this.db = new DatabaseSync(options.path ?? ":memory:");
+    this.walletHashPepper = typeof options.walletHashPepper === "string" ? options.walletHashPepper : "";
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec(SCHEMA);
@@ -662,7 +667,7 @@ export class Indexer {
   }
 
   #ensureSanctionsTables() {
-    for (const statement of SANCTIONS_SCHEMA_SQL) this.db.exec(statement);
+    migrateSanctionsSchema(this.db);
   }
 
   #loadSanctionsScreen(now = Date.now()) {
@@ -677,25 +682,33 @@ export class Indexer {
   }
 
   #writeSanctionsCheck(screen, wallet, decision) {
-    const params = sanctionsCheckParams(screen, wallet, decision);
+    const params = sanctionsCheckParams(screen, wallet, decision, {
+      pepper: this.walletHashPepper,
+      chainId: this.chainId,
+      decisionPoint: "rebuild",
+    });
     this.db.prepare(SANCTIONS_INSERT_CHECK).run(
-      params.wallet,
+      params.walletHash,
       params.result,
       params.reason,
       params.checkedAt,
       params.listVersion,
+      params.listSha256,
       params.source,
       params.persisted,
+      params.chainId,
+      params.decisionPoint,
     );
     if (params.storeWallet) {
       this.db.prepare(SANCTIONS_INSERT_WALLET).run(
         params.wallet,
+        params.walletHash,
         SANCTIONS_MATCH,
         params.checkedAt,
         params.listVersion,
       );
     }
-    console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision)));
+    console.info(JSON.stringify(sanctionsCheckLog(screen, wallet, decision, { pepper: this.walletHashPepper })));
   }
 
   async refreshSanctions(options = {}) {
@@ -722,7 +735,20 @@ export class Indexer {
       return { refreshed: false, failed: true, listVersion: outcome.listVersion };
     }
     if (outcome.addressesJson != null) {
-      this.db.prepare(SANCTIONS_WRITE_CACHE).run(outcome.fetchedAt, source, outcome.listVersion, outcome.addressesJson);
+      swapSanctionsCache(this.db, {
+        fetchedAt: outcome.fetchedAt,
+        source,
+        listVersion: outcome.listVersion,
+        addressesJson: outcome.addressesJson,
+        addressesSha256: outcome.addressesSha256,
+        rawSha256: outcome.rawSha256,
+      });
+      const screen = this.#loadSanctionsScreen(now);
+      await rescreenLinkedWallets(nodeSql(this.db), screen, {
+        pepper: this.walletHashPepper,
+        now,
+        chainId: this.chainId,
+      });
     }
     return {
       refreshed: outcome.refreshed,
@@ -794,7 +820,8 @@ export class Indexer {
         if (row.action === ACTION.firstActivity && firstDay.has(row.wallet)) return false;
         if (row.action === ACTION.returnDay && returnDays.has(`${row.wallet}|${row.utc_day}`)) return false;
         const noted = noteDecision(screen, row.wallet);
-        applySanctionsDecision(row, noted.decision);
+        const decision = decisionWithPepper(noted.decision, this.walletHashPepper);
+        applySanctionsDecision(row, decision);
         try {
           this.db.exec("SAVEPOINT row");
           seq += 1;
@@ -823,7 +850,7 @@ export class Indexer {
             row.source_tx_hash,
             row.source_log_index,
           );
-          if (noted.first) this.#writeSanctionsCheck(screen, row.wallet, noted.decision);
+          if (noted.first) this.#writeSanctionsCheck(screen, row.wallet, decision);
           this.db.exec("RELEASE row");
           daySlot.add(dayKey);
           if (row.action === ACTION.fund || row.action === ACTION.releaseOrRefund || row.action === ACTION.disputeOpenOrVote) {
@@ -1149,7 +1176,7 @@ function rowFrom(candidate, fields) {
     escrow_id: candidate.escrowId,
     points: 0,
     eligibility_status: "unverified",
-    eligibility_reason: "ofac_unconfigured",
+    eligibility_reason: SANCTIONS_UNAVAILABLE,
     points_withheld: 1,
     rule_weight: fields.ruleWeight,
     counts_for_return_day: fields.countsForReturnDay,

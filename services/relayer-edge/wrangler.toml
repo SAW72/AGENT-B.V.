@@ -1,0 +1,43 @@
+# Agent-B.V. relayer edge. Placeholders only.
+# Deploys run only on Spencer's explicit direction. Nothing in this file is an account id,
+# a secret, or an RPC URL.
+#
+# RELAYER_EDGE_AUTH is intentionally absent. A plain var is wiped by the
+# next `wrangler deploy`. Spencer sets it only with
+# `npx wrangler secret put RELAYER_EDGE_AUTH`.
+# While it is unset, this Worker returns 503 and does not call the origin.
+# The workers.dev route after deploy on the s-a-wight72 account is
+# https://agent-bv-relayer-edge.s-a-wight72.workers.dev
+# Wallet UX pins that URL. The Render origin stays
+# https://bot-verifier-claim-relayer.onrender.com and must be reachable
+# only through this Worker.
+
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "agent-bv-relayer-edge"
+main = "src/index.mjs"
+# Same date the points Worker pins for Wrangler 4.124.0.
+compatibility_date = "2026-08-22"
+workers_dev = true
+# Versioned preview hostnames stay off. The pinned workers.dev route is the only one.
+preview_urls = false
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+head_sampling_rate = 0
+
+# Steward of the King LLC created the agent-bv-sanctions D1 database in its Cloudflare account on 2026-10-30. The id is not a secret.
+# Creation, the 2026-10-30 deploy, and migration 0001 are recorded in SPENCER-SETUP.md.
+# Agents run D1 create, remote migrations and deploys only on Spencer's explicit direction.
+[[d1_databases]]
+binding = "SANCTIONS_DB"
+database_name = "agent-bv-sanctions"
+database_id = "027bb34d-bd12-4c43-acdf-294cf40a11a2"
+migrations_dir = "migrations"
