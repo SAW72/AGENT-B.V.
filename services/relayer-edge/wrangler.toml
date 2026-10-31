@@ -33,7 +33,7 @@ invocation_logs = false
 enabled = false
 head_sampling_rate = 0
 
-# Spencer created the agent-bv-sanctions D1 database in his own Cloudflare account on 2026-10-30. The id is not a secret.
+# Steward of the King LLC created the agent-bv-sanctions D1 database in its Cloudflare account on 2026-10-30. The id is not a secret.
 # Creation, the 2026-10-30 deploy, and migration 0001 are recorded in SPENCER-SETUP.md.
 # Agents run D1 create, remote migrations and deploys only on Spencer's explicit direction.
 [[d1_databases]]
