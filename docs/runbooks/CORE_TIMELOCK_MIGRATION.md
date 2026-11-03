@@ -1,12 +1,41 @@
+**STATUS: COMPLETE on Base Sepolia (2026-10-03)**
+
+Read-only on-chain check 2026-11-03 (`owner()` / `pendingOwner()` live, block 54088494), Base Sepolia chain id 84532. This file is a record of that check. It does not broadcast.
+
+`governanceTimelock` `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33` owns all ten contracts below. `getMinDelay()` is 86400 (24h). `PROPOSER_ROLE`, `EXECUTOR_ROLE`, and `CANCELLER_ROLE` are held only by the 2-of-2 Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` (owners `0xe956e5e0527B2d0434ba27335A8Cb917c2322577` and `0x2f86323245DAdb9bf5e231A73c3fDb8125B93E2F`). Only that Safe can propose, execute, or cancel. `address(0)` is not an executor. `DEFAULT_ADMIN_ROLE` is held by the timelock itself only. Hardening tx `0x71e927ff869292edb8e9c49a67333a5069c1a71a677a1376fef73b293836302f`, block 47677255.
+
+The old wallet `CORE_TIMELOCK` `0x10CC9474b45625ADfd05C209f2518023484878D9` (EOA, EIP-7702) owns nothing. Sends from it revert `not owner`. `eth_estimateGas` from that wallet: Liability `setOwner` to the timelock reverts `not owner`; superseded Denylist `transferOwnership` reverts `OwnableUnauthorizedAccount(0x10CC…78D9)`.
+
+Liability, InsuranceFund, and DisputePanel have no `pendingOwner()` (immediate `setOwner`). The other seven are Ownable2Step with `pendingOwner` 0.
+
+| Contract | Address | Pattern | Moved by |
+| --- | --- | --- | --- |
+| Liability | `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307` | immediate setOwner | tx `0xeea642b4…9661`, block 47646058, 2026-10-03 4:46 PM ET |
+| InsuranceFund | `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8` | immediate setOwner | tx `0x3f71097d…62fb`, block 47646058 |
+| DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` | immediate setOwner | tx `0x324ba3d9…d561`, block 47646058 |
+| Denylist (live) | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` | Ownable2Step | accept tx `0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949` |
+| Vault (live) | `0x1463D664fA467FBCDA4B05443434494f05e565bc` | Ownable2Step | accept tx `0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0` |
+| Escrow (live) | `0x3d660502D75f1e97b08c110255921b437A3C4C42` | Ownable2Step | accept tx `0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769` |
+| superseded Denylist | `0xF0f260967D377E07Bdd7840862508ddB23C012b8` | Ownable2Step | transferOwnership `0x9f1f2940…4014`, block 47639868, 2026-10-03; now owner = timelock (accept tx hash not recorded) |
+| superseded Vault | `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` | Ownable2Step | accept/transfer `0x4a2e122d…` / `0xae2e0038…`, block 47639870 |
+| retired escrow | `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` | Ownable2Step | transferOwnership `0x29e0b0a8…5e97`, block 47639870; now owner = timelock (`MIGRATE_ESCROWS=1` used; accept tx hash missing) |
+| retired escrow ESC-M-1 | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` | Ownable2Step | accept `0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9` |
+
+Truncated hashes above are written as given. The full hash is not in `deployments/base-sepolia.json`.
+
+**Mainnet:** no deployment exists. Mainnet needs a fresh deploy with the timelock and Safe from day one (not a migration).
+
 # CORE_TIMELOCK migration
 
-`CORE_TIMELOCK` `0x10CC9474b45625ADfd05C209f2518023484878D9` is an EOA (with EIP-7702 delegation), not a timelock; to be replaced by `TimelockController` (this runbook).
+`CORE_TIMELOCK` `0x10CC9474b45625ADfd05C209f2518023484878D9` is an EOA (with EIP-7702 delegation), not a timelock; to be replaced by `TimelockController` (this runbook). The replacement on Base Sepolia is complete (see the status banner). Do not re-run it.
 
 Chain ids `84532` (Base Sepolia) and `31337` (Anvil) are allowed. Every other chain reverts. `TIMELOCK_MIN_DELAY` must be at least 300 seconds. A shorter delay reverts.
 
-This runbook does not create a Safe. `SAFE_ADDRESS` is an existing Safe. The scripts never read `PRIVATE_KEY`. Broadcast uses a Foundry keystore (`--account` and `--sender`) and `vm.startBroadcast()` with no key. Agents do not pass `--broadcast`. The only broadcasts in this runbook are the three Spencer runs below: deploy, Ownable2Step `transfer`, and the later immediate `setOwner`.
+This runbook does not create a Safe. `SAFE_ADDRESS` is an existing Safe. The scripts never read `PRIVATE_KEY`. Broadcast uses a Foundry keystore (`--account` and `--sender`) and `vm.startBroadcast()` with no key. Agents do not pass `--broadcast`. The only broadcasts in this runbook are the three Spencer runs below: deploy, Ownable2Step `transfer`, and the later immediate `setOwner`. Each of those `--broadcast` steps is marked: DO NOT RE-RUN — migration complete; would revert or no-op.
 
-## What the book owns today
+## What the book owns today (historical, pre-migration reading)
+
+Historical (pre-migration reading). The table in this section is the reading from before the 2026-10-03 migration. It is not the current owner set. Current owners are in the status banner.
 
 `script/MigrateOwnershipToTimelock.s.sol` reads `deployments/base-sepolia.json`, then `owner()` and `pendingOwner()` on chain. The handoff is the eight contracts whose live owner is `CORE_TIMELOCK`, plus superseded Vault `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` (owner is the deployer, `pendingOwner` is `CORE_TIMELOCK`). A row whose `governance()` is `CORE_TIMELOCK` is skipped unless `MIGRATE_ESCROWS=1`. Null BVT slots are not in the nine-row set. This table is a Base Sepolia reading taken while writing the script. The script re-reads at run time.
 
@@ -69,7 +98,7 @@ forge script script/DeployTimelock.s.sol:DeployTimelock \
   --sender 0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001
 ```
 
-Spencer deploys. This is the deploy broadcast.
+Spencer deploys. This is the deploy broadcast. DO NOT RE-RUN — migration complete; would revert or no-op.
 
 ```bash
 forge script script/DeployTimelock.s.sol:DeployTimelock \
@@ -118,7 +147,7 @@ forge script script/MigrateOwnershipToTimelock.s.sol:MigrateOwnershipToTimelock 
   --rpc-url "$BASE_SEPOLIA_RPC_URL"
 ```
 
-Spencer sends step `transfer` from the `CORE_TIMELOCK` keystore. `--sender` is `0x10CC9474b45625ADfd05C209f2518023484878D9`.
+Spencer sends step `transfer` from the `CORE_TIMELOCK` keystore. `--sender` is `0x10CC9474b45625ADfd05C209f2518023484878D9`. DO NOT RE-RUN — migration complete; would revert or no-op.
 
 ```bash
 export NEW_TIMELOCK=<timelock-from-step-0>
@@ -178,7 +207,7 @@ forge script script/MigrateOwnershipToTimelock.s.sol:MigrateOwnershipToTimelock 
   --rpc-url "$BASE_SEPOLIA_RPC_URL"
 ```
 
-Spencer sends this step from the `CORE_TIMELOCK` keystore.
+Spencer sends this step from the `CORE_TIMELOCK` keystore. DO NOT RE-RUN — migration complete; would revert or no-op.
 
 ```bash
 export NEW_TIMELOCK=<timelock-from-step-0>
