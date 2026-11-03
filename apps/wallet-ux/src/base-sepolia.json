@@ -3,7 +3,7 @@
   "chainId": 84532,
   "network": "base-sepolia",
   "status": "live",
-  "notes": "PR #11 DeployDenylist surgical redeploy (Denylist + Vault only). Gate A first hop is DONE: acceptOwnershipTx on the new Denylist (0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949, block 47294619) and the new Vault (0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0, block 47294624) is the first hop (deployer → CORE_TIMELOCK). The move to governanceTimelock is timelock accept 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381. owner is governanceTimelock and pendingOwner is the zero address on both. Listing migration replay of Listed/Unlisted from the old Denylist was empty (0 Exact / 0 Signature / 0 Prompt). Previous Denylist and Vault remain on chain under superseded (old Vault still points at the old Denylist; old Denylist owner = governanceTimelock, migrated 2026-10-03, verified read-only 2026-11-03). Liability, InsuranceFund, and DisputePanel addresses are unchanged. BotAttestationEscrow is live at 0x3d660502D75f1e97b08c110255921b437A3C4C42 (pull-payment redeploy from commit 7fe4a863e9bce0b70b629dab76ddd2728c97b536). Deploy tx 0x0d39f2502956d1199bb9d264704aacab85ca7a5d54de3e1634b201c730b62b6c is block 47715415 (2026-10-05 11:18:38 UTC, indexer and relayer start block). Deployer is 0x5D467FA00eC0E92044f779e495a17db66c5964aa. transferOwnership tx 0xe7f8fed585fd148c8ca34ae57b2cc92516cf4a48a0fbd992a34fa0b381aeb5fa (same block 47715415). acceptOwnership is complete (tx 0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769, block 47760929, 2026-10-06 12:35:46 UTC, status 1). owner is governanceTimelock and pendingOwner is the zero address. Constructor governance is governanceTimelock, unlike the retired escrow 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d whose governance is CORE_TIMELOCK. That ESC-M-1 escrow is retired (pull-payment redeploy, retired 2026-10-06) under retired.BotAttestationEscrowEscM1. The previous escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c is retired (ESC-M-1 redeploy, retired 2026-09-26). Its deploy tx 0x700d9bac95e8833bd7e93721a88d689a0fb839c9e6108858c52560eae111948e and transferOwnership tx 0x00aaef315f23de346bfe63e77e0f04d3fbcadc370b0db21bb7abb8f8e12c40f2 are both block 47299930. Its acceptOwnership was complete (tx 0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983, block 47300275); owner = governanceTimelock, migrated 2026-10-03, verified read-only 2026-11-03, and pendingOwner is the zero address. Linked DisputePanel is 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb. Gate B is seated: arbitratorCount is 3. Arbitrators: 0xD5ee9fA366C3698b34204722c635989E5197B018, 0xF4253A3a3C102Ee59e38b2AA92989C3232eDcC30, 0xB87Ed5F74276AC6172ef53fE866675093F75936E. Seat txs (block 47299643): 0xa97b518ad87489ab1d45ec4bef5e548c1d4bf3b9c940552e8cba1752fed7553c, 0xf1ad4d9221b2393863d9bc6a72c1a716cf389532d2cfa63fd4df682303ed6df6, 0xa1f8f0fb6ad78dd2d9fd9d33dabf9cde5b73195a1b292869e7d96cc985cb79a3. The BVT stack is not deployed (address null). Agents do not --broadcast. Never put secrets here. SIMULATE is not live. governanceTimelock hardening is applied: getMinDelay() is 86400 and EXECUTOR_ROLE on address(0) is false. Spencer's Safe 0x12b3683A30De9845767c1f27a5D23591cA83dD54 is the only executor. Spencer delegated the executor choice to Pete. The Safe is 2-of-2, so losing either key freezes admin changes. See governanceTimelockHardening.",
+  "notes": "PR #11 DeployDenylist surgical redeploy (Denylist + Vault only). Gate A first hop is DONE: acceptOwnershipTx on the new Denylist (0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949, block 47294619) and the new Vault (0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0, block 47294624) is the first hop (deployer → CORE_TIMELOCK). The move to governanceTimelock is timelock accept 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381: Denylist OwnershipTransferred receipt log index 2 (block logIndex 2), Vault OwnershipTransferred receipt log index 4 (block logIndex 4), each previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9 and new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. owner is governanceTimelock and pendingOwner is the zero address on both. Listing migration replay of Listed/Unlisted from the old Denylist was empty (0 Exact / 0 Signature / 0 Prompt). Previous Denylist and Vault remain on chain under superseded (old Vault still points at the old Denylist; old Denylist owner = governanceTimelock via timelock accept 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5 receipt log index 8 (block logIndex 8), old Vault owner = governanceTimelock via that same transaction receipt log index 10 (block logIndex 10), migrated 2026-10-03, verified read-only 2026-11-03 at block 54107413). Liability, InsuranceFund, and DisputePanel addresses are unchanged. BotAttestationEscrow is live at 0x3d660502D75f1e97b08c110255921b437A3C4C42 (pull-payment redeploy from commit 7fe4a863e9bce0b70b629dab76ddd2728c97b536). Deploy tx 0x0d39f2502956d1199bb9d264704aacab85ca7a5d54de3e1634b201c730b62b6c is block 47715415 (2026-10-05 11:18:38 UTC, indexer and relayer start block). Deployer is 0x5D467FA00eC0E92044f779e495a17db66c5964aa. transferOwnership tx 0xe7f8fed585fd148c8ca34ae57b2cc92516cf4a48a0fbd992a34fa0b381aeb5fa (same block 47715415). acceptOwnership is complete (tx 0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769, block 47760929, 2026-10-06 12:35:46 UTC, status 1). That log is OwnershipTransferred receipt log index 2 (block logIndex 54): previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. There is no deployer → CORE_TIMELOCK hop and no log for this escrow in 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5. owner is governanceTimelock and pendingOwner is the zero address. Constructor governance is governanceTimelock, unlike the retired escrow 0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d whose governance is CORE_TIMELOCK. That ESC-M-1 escrow is retired (pull-payment redeploy, retired 2026-10-06) under retired.BotAttestationEscrowEscM1. The previous escrow 0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c is retired (ESC-M-1 redeploy, retired 2026-09-26). Its deploy tx 0x700d9bac95e8833bd7e93721a88d689a0fb839c9e6108858c52560eae111948e and transferOwnership tx 0x00aaef315f23de346bfe63e77e0f04d3fbcadc370b0db21bb7abb8f8e12c40f2 are both block 47299930. Its acceptOwnershipTx 0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983 is the first hop (deployer → CORE_TIMELOCK), block 47300275, status 1, OwnershipTransferred receipt log index 0 (block logIndex 177). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, receipt log index 12 (block logIndex 12), block 47643381, OwnershipTransferred. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. owner is governanceTimelock and pendingOwner is the zero address, migrated 2026-10-03, verified read-only 2026-11-03 at block 54107413. Linked DisputePanel is 0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb. Gate B is seated: arbitratorCount is 3. Arbitrators: 0xD5ee9fA366C3698b34204722c635989E5197B018, 0xF4253A3a3C102Ee59e38b2AA92989C3232eDcC30, 0xB87Ed5F74276AC6172ef53fE866675093F75936E. Seat txs (block 47299643): 0xa97b518ad87489ab1d45ec4bef5e548c1d4bf3b9c940552e8cba1752fed7553c, 0xf1ad4d9221b2393863d9bc6a72c1a716cf389532d2cfa63fd4df682303ed6df6, 0xa1f8f0fb6ad78dd2d9fd9d33dabf9cde5b73195a1b292869e7d96cc985cb79a3. The BVT stack is not deployed (address null). Agents do not --broadcast. Never put secrets here. SIMULATE is not live. governanceTimelock hardening is applied: getMinDelay() is 86400 and EXECUTOR_ROLE on address(0) is false. Spencer's Safe 0x12b3683A30De9845767c1f27a5D23591cA83dD54 is the only executor. Spencer delegated the executor choice to Pete. The Safe is 2-of-2, so losing either key freezes admin changes. See governanceTimelockHardening.",
   "coreTimelock": "0x10CC9474b45625ADfd05C209f2518023484878D9",
   "governanceTimelock": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
   "governanceTimelockHardening": {
@@ -33,9 +33,11 @@
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949",
     "acceptOwnershipBlock": 47294619,
+    "acceptOwnershipLogIndex": 0,
     "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
     "timelockAcceptBlock": 47643381,
-    "notes": "acceptOwnershipTx 0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949 is the first hop (deployer → CORE_TIMELOCK), block 47294619, status 1. Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33."
+    "timelockAcceptLogIndex": 2,
+    "notes": "acceptOwnershipTx 0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949 is the first hop (deployer → CORE_TIMELOCK), block 47294619, status 1, OwnershipTransferred receipt log index 0 (block logIndex 19). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 2 (block logIndex 2). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33."
   },
   "Vault": {
     "address": "0x1463D664fA467FBCDA4B05443434494f05e565bc",
@@ -47,24 +49,38 @@
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0",
     "acceptOwnershipBlock": 47294624,
+    "acceptOwnershipLogIndex": 0,
     "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
     "timelockAcceptBlock": 47643381,
-    "notes": "acceptOwnershipTx 0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0 is the first hop (deployer → CORE_TIMELOCK), block 47294624, status 1. Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33."
+    "timelockAcceptLogIndex": 4,
+    "notes": "acceptOwnershipTx 0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0 is the first hop (deployer → CORE_TIMELOCK), block 47294624, status 1, OwnershipTransferred receipt log index 0 (block logIndex 0). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 4 (block logIndex 4). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33."
   },
   "Liability": {
     "address": "0x554Caf5a214B8d70D675C09186C5EAE24FEB7307",
     "deployTx": "0x99865db9b9f4a6807b085cec8c50d22160025c4df09afc609fb52b9758fe6261",
-    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33"
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
+    "setOwnerTx": "0xeea642b49180f5ee8cd1ce03c205119f368e3c17b5ad2514d94cd9351e3d9661",
+    "setOwnerBlock": 47646058,
+    "setOwnerLogIndex": 0,
+    "notes": "No deployer → CORE_TIMELOCK hop. setOwnerTx is OwnerUpdated receipt log index 0 (block logIndex 70), block 47646058, status 1. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. pendingOwner() reverts. No timelockAcceptTx."
   },
   "InsuranceFund": {
     "address": "0x19fc26B36Cb2031062eD90C19db64b3b09753ab8",
     "deployTx": "0xa71db2c304d8e80e4043e4d093a0c102ec619624ab0500d0bc7246dc27d3edd7",
-    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33"
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
+    "setOwnerTx": "0x3f71097d1ccc1b6af4b7a67f641b00e413881d3ce6ffac6efa34ed56497f62fb",
+    "setOwnerBlock": 47646058,
+    "setOwnerLogIndex": 0,
+    "notes": "No deployer → CORE_TIMELOCK hop. setOwnerTx is OwnerUpdated receipt log index 0 (block logIndex 71), block 47646058, status 1. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. pendingOwner() reverts. No timelockAcceptTx."
   },
   "DisputePanel": {
     "address": "0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb",
     "deployTx": "0x9ecd10d67054fbf9e63ad25dd1520ed809fbf94c4ab1f19ad84e81899562b77f",
-    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33"
+    "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
+    "setOwnerTx": "0x324ba3d9945f6915a766afa615c379d74b340a2f81b43151034d963b6d3ed561",
+    "setOwnerBlock": 47646058,
+    "setOwnerLogIndex": 0,
+    "notes": "No deployer → CORE_TIMELOCK hop. setOwnerTx is OwnerUpdated receipt log index 0 (block logIndex 72), block 47646058, status 1. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. pendingOwner() reverts. No timelockAcceptTx."
   },
   "BotAttestationEscrow": {
     "address": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
@@ -85,11 +101,12 @@
     "acceptOwnership": "complete",
     "acceptOwnershipTx": "0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769",
     "acceptOwnershipBlock": 47760929,
+    "acceptOwnershipLogIndex": 2,
     "sourcify": "https://repo.sourcify.dev/84532/0x3d660502D75f1e97b08c110255921b437A3C4C42",
     "blockscout": "https://base-sepolia.blockscout.com/address/0x3d660502D75f1e97b08c110255921b437A3C4C42",
     "basescan": "unconfirmed",
     "basescanUrl": "https://sepolia.basescan.org/address/0x3d660502D75f1e97b08c110255921b437A3C4C42#code",
-    "notes": "acceptOwnership is complete. owner is governanceTimelock and pendingOwner is the zero address. accept tx 0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769, block 47760929 (2026-10-06 12:35:46 UTC), status 1. Constructor governance is governanceTimelock. Sourcify exact match (verifiedAt 2026-10-05T11:18:43Z): https://repo.sourcify.dev/84532/0x3d660502D75f1e97b08c110255921b437A3C4C42. Blockscout is_verified true. Basescan verification was not confirmed for this record."
+    "notes": "acceptOwnership is complete. owner is governanceTimelock and pendingOwner is the zero address. No deployer → CORE_TIMELOCK hop. acceptOwnershipTx 0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769, block 47760929 (2026-10-06 12:35:46 UTC), status 1, is OwnershipTransferred receipt log index 2 (block logIndex 54). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. transferOwnershipTx 0xe7f8fed585fd148c8ca34ae57b2cc92516cf4a48a0fbd992a34fa0b381aeb5fa, block 47715415, status 1, is OwnershipTransferStarted receipt log index 0 (block logIndex 80). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. This escrow has no log in 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5. Constructor governance is governanceTimelock. Sourcify exact match (verifiedAt 2026-10-05T11:18:43Z): https://repo.sourcify.dev/84532/0x3d660502D75f1e97b08c110255921b437A3C4C42. Blockscout is_verified true. Basescan verification was not confirmed for this record."
   },
   "BVT": {
     "address": null,
@@ -120,7 +137,10 @@
       "supersededBy": "0xeE76876bECcFc1B58fC06fF4E654a517d784B224",
       "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
       "pendingOwner": "0x0000000000000000000000000000000000000000",
-      "notes": "Still has code. Owner = governanceTimelock, migrated 2026-10-03, verified read-only 2026-11-03. Untouched by the redeploy."
+      "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
+      "timelockAcceptBlock": 47643381,
+      "timelockAcceptLogIndex": 8,
+      "notes": "Still has code. Untouched by the redeploy. No deployer → CORE_TIMELOCK OwnershipTransferred in the migration transactions recorded here. transferOwnership 0x9f1f29400f452a473b6c7e5eb5cb0aaedc08baedea5dfd4213035e2bdd8f4014, block 47639868, status 1, is OwnershipTransferStarted receipt log index 0 (block logIndex 43). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 8 (block logIndex 8). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. Owner = governanceTimelock, pendingOwner is the zero address, migrated 2026-10-03, verified read-only 2026-11-03 at block 54107413."
     },
     "Vault": {
       "address": "0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7",
@@ -130,7 +150,14 @@
       "denylist": "0xF0f260967D377E07Bdd7840862508ddB23C012b8",
       "owner": "0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33",
       "pendingOwner": "0x0000000000000000000000000000000000000000",
-      "notes": "Still points at the superseded Denylist. Left on chain. Owner = governanceTimelock, migrated 2026-10-03, verified read-only 2026-11-03."
+      "acceptOwnership": "complete",
+      "acceptOwnershipTx": "0x4a2e122dba503311f645a59d111cf65875b0e51568519ad296af190fa2f77faa",
+      "acceptOwnershipBlock": 47639870,
+      "acceptOwnershipLogIndex": 0,
+      "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
+      "timelockAcceptBlock": 47643381,
+      "timelockAcceptLogIndex": 10,
+      "notes": "Still points at the superseded Denylist. Left on chain. acceptOwnershipTx 0x4a2e122dba503311f645a59d111cf65875b0e51568519ad296af190fa2f77faa is the first hop (deployer → CORE_TIMELOCK), block 47639870, status 1, OwnershipTransferred receipt log index 0 (block logIndex 28). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. Migration transferOwnership 0xae2e0038b41b74105b065a64e12469a5526ab8741d1f0c244f5b5d89886fd528, same block 47639870, status 1, is OwnershipTransferStarted receipt log index 0 (block logIndex 29). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 10 (block logIndex 10). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. Owner = governanceTimelock, pendingOwner is the zero address, migrated 2026-10-03, verified read-only 2026-11-03 at block 54107413."
     }
   },
   "retired": {
@@ -144,6 +171,11 @@
       "acceptOwnership": "complete",
       "acceptOwnershipTx": "0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983",
       "acceptOwnershipBlock": 47300275,
+      "acceptOwnershipLogIndex": 0,
+      "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
+      "timelockAcceptBlock": 47643381,
+      "timelockAcceptLogIndex": 12,
+      "notes": "acceptOwnershipTx 0xd2e982568811c3706eec074d296ef7fa4c54838de714e1a5bfc8afc9fbb73983 is the first hop (deployer → CORE_TIMELOCK), block 47300275, status 1, OwnershipTransferred receipt log index 0 (block logIndex 177). Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. transferOwnershipTx 0x00aaef315f23de346bfe63e77e0f04d3fbcadc370b0db21bb7abb8f8e12c40f2, block 47299930, status 1, is the deploy-time OwnershipTransferStarted receipt log index 0 (block logIndex 276): previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. Migration transferOwnership 0x29e0b0a888d27b54efeef17676e8e220dd2315ab42dd4eb4003a9a3c14365e97, block 47639870, status 1, is OwnershipTransferStarted receipt log index 0 (block logIndex 30). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 12 (block logIndex 12). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. owner is governanceTimelock and pendingOwner is the zero address, migrated 2026-10-03, verified read-only 2026-11-03 at block 54107413.",
       "status": "retired",
       "retiredOn": "2026-09-26",
       "supersededBy": "0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
@@ -168,13 +200,15 @@
       "acceptOwnership": "complete",
       "acceptOwnershipTx": "0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9",
       "acceptOwnershipBlock": 47345442,
+      "acceptOwnershipLogIndex": 0,
       "timelockAcceptTx": "0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5",
       "timelockAcceptBlock": 47643381,
+      "timelockAcceptLogIndex": 6,
       "sourcify": "https://repo.sourcify.dev/84532/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
       "blockscout": "https://base-sepolia.blockscout.com/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d",
       "basescan": "verified",
       "basescanUrl": "https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code",
-      "notes": "acceptOwnershipTx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9 is the first hop (deployer → CORE_TIMELOCK), block 47345442, status 1, from CORE_TIMELOCK. Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381. Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. owner is governanceTimelock and pendingOwner is the zero address. Basescan is verified (Pass - Verified) via Etherscan v2, solc v0.8.20+commit.a1b79de6, standard JSON, shanghai: https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code.",
+      "notes": "acceptOwnershipTx 0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9 is the first hop (deployer → CORE_TIMELOCK), block 47345442, status 1, OwnershipTransferred receipt log index 0 (block logIndex 3). Tx sender is 0x10CC9474b45625ADfd05C209f2518023484878D9. Previous owner 0x5D467FA00eC0E92044f779e495a17db66c5964aa, new owner 0x10CC9474b45625ADfd05C209f2518023484878D9. The move to governanceTimelock is timelockAcceptTx 0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5, block 47643381, OwnershipTransferred receipt log index 6 (block logIndex 6). Previous owner 0x10CC9474b45625ADfd05C209f2518023484878D9, new owner 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33. owner is governanceTimelock and pendingOwner is the zero address. Basescan is verified (Pass - Verified) via Etherscan v2, solc v0.8.20+commit.a1b79de6, standard JSON, shanghai: https://sepolia.basescan.org/address/0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d#code.",
       "status": "retired",
       "retiredOn": "2026-10-06",
       "supersededBy": "0x3d660502D75f1e97b08c110255921b437A3C4C42",
