@@ -13,15 +13,15 @@ Liability, InsuranceFund, and DisputePanel have no `pendingOwner()` (immediate `
 | Liability | `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307` | immediate setOwner | tx `0xeea642b49180f5ee8cd1ce03c205119f368e3c17b5ad2514d94cd9351e3d9661`, block 47646058, 2026-10-03 4:46 PM ET |
 | InsuranceFund | `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8` | immediate setOwner | tx `0x3f71097d1ccc1b6af4b7a67f641b00e413881d3ce6ffac6efa34ed56497f62fb`, block 47646058 |
 | DisputePanel | `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb` | immediate setOwner | tx `0x324ba3d9945f6915a766afa615c379d74b340a2f81b43151034d963b6d3ed561`, block 47646058 |
-| Denylist (live) | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` | Ownable2Step | accept tx `0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949` |
-| Vault (live) | `0x1463D664fA467FBCDA4B05443434494f05e565bc` | Ownable2Step | accept tx `0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0` |
+| Denylist (live) | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` | Ownable2Step | first hop (deployer → CORE_TIMELOCK) `0xc8ad34d956d802b3d0d8d032178c9b6786ead6afec1bd502158f1f603b3e3949`; timelock accept `0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381 |
+| Vault (live) | `0x1463D664fA467FBCDA4B05443434494f05e565bc` | Ownable2Step | first hop (deployer → CORE_TIMELOCK) `0xb2aa7515c4c9bac0bbe3403bbd0bb6b8afa72452a4d4ed9ad626fc26944df9b0`; timelock accept `0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381 |
 | Escrow (live) | `0x3d660502D75f1e97b08c110255921b437A3C4C42` | Ownable2Step | accept tx `0xb7e819961fbe644eef1122c7da4554090a4412083a87366b21c7da09124dd769` |
 | superseded Denylist | `0xF0f260967D377E07Bdd7840862508ddB23C012b8` | Ownable2Step | transferOwnership `0x9f1f29400f452a473b6c7e5eb5cb0aaedc08baedea5dfd4213035e2bdd8f4014`, block 47639868, 2026-10-03; timelock accept `0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381 |
 | superseded Vault | `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7` | Ownable2Step | accept/transfer `0x4a2e122dba503311f645a59d111cf65875b0e51568519ad296af190fa2f77faa` / `0xae2e0038b41b74105b065a64e12469a5526ab8741d1f0c244f5b5d89886fd528`, block 47639870 |
 | retired escrow | `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` | Ownable2Step | transferOwnership `0x29e0b0a888d27b54efeef17676e8e220dd2315ab42dd4eb4003a9a3c14365e97`, block 47639870; timelock accept `0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381 (`MIGRATE_ESCROWS=1`) |
-| retired escrow ESC-M-1 | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` | Ownable2Step | accept `0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9` |
+| retired escrow ESC-M-1 | `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` | Ownable2Step | first hop (deployer → CORE_TIMELOCK) `0xe4286328ff1d177c724888255d3607187e4b4ea68d0f1e66d697e6152367e0e9`; timelock accept `0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381 |
 
-The hashes in that table are full Base Sepolia transaction hashes. `deployments/base-sepolia.json` does not store them.
+The hashes in that table are full Base Sepolia transaction hashes. Live Denylist, live Vault, and retired escrow ESC-M-1 store the first hop on `acceptOwnershipTx` and the move to governanceTimelock on `timelockAcceptTx` (`0xcc10da22b9736d148dc6750d0b3af50096ba3fa009c0bc0c0d0b779db40044d5`, block 47643381) in `deployments/base-sepolia.json`.
 
 **Mainnet:** no deployment exists. Mainnet needs a fresh deploy with the timelock and Safe from day one (not a migration).
 
