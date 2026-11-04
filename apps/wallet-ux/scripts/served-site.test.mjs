@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -54,6 +54,20 @@ function metaContent(html, selector) {
   const element = dom.window.document.querySelector(selector)
   expect(element).not.toBeNull()
   return element.getAttribute("content")
+}
+
+function pagesUnderLanding(segment) {
+  const root = join(appRoot, "landing", segment)
+  const pages = []
+  const visit = (dir, urlPath) => {
+    if (existsSync(join(dir, "index.html"))) pages.push(urlPath)
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      visit(join(dir, entry.name), `${urlPath}${entry.name}/`)
+    }
+  }
+  visit(root, `/${segment}/`)
+  return pages
 }
 
 function expectAbsoluteHttps(value) {
@@ -304,6 +318,121 @@ describe("built site", () => {
     const withQuery = await get("/app/index.html?x=1")
     expect(withQuery.status).toBe(301)
     expect(withQuery.location).toBe("/app/?x=1")
+  })
+
+  it("serves the tester page and omits it from the sitemap", async () => {
+    const page = await get("/testers/")
+    const root = await get("/")
+    expect(page.status).toBe(200)
+    expect(page.type).toContain("text/html")
+    expect(page.text).not.toBe(root.text)
+    expect(page.text).toContain("PENDING LAWYER REVIEW")
+    expect(page.text).not.toContain("An airdrop may come later")
+    expect(page.text).not.toContain("testnet activity does not earn tokens")
+    expect(page.text).not.toContain("/airdrop-interest/")
+    expect(page.text).not.toContain("airdrop-interest-terms")
+    expect(page.text).not.toContain(["future", "recognition"].join(" "))
+    expect(page.text).not.toContain(["could include a token", "distribution"].join(" "))
+    expect(page.text).not.toContain("You may lose any funds you use")
+    expect(page.text).toContain("Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.")
+    expect(page.text).toContain("Points are per task or per bug reported, never per amount or volume.")
+    expect(page.text).toContain("There are no leaderboards, ranks or prizes.")
+    expect(page.text).toContain("Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.")
+    expect(page.text).not.toContain("Use a wallet that does not hold real funds.")
+    expect(page.text).not.toContain("Use a wallet that holds no real funds.")
+    expect(page.text).toContain("Fund a testnet escrow with free Base Sepolia test ETH (no real value), then open a dispute.")
+    expect(page.text).toContain("Nothing here is an offer of tokens, value or any investment.")
+    expect(page.text).toContain("Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.")
+    expect(page.text).toContain('href="/legal/tester-terms/"')
+    expect(page.text).toContain('href="/legal/tester-privacy/"')
+    expect(page.text).toContain('href="/legal/tester-sanctions/"')
+    expect(root.text).not.toContain("/legal/tester-terms/")
+    expect(root.text).not.toContain("An airdrop may come later")
+    expect(root.text).not.toContain("/airdrop-interest/")
+    expect(existsSync(join(siteDir, "airdrop-interest"))).toBe(false)
+    expect(existsSync(join(siteDir, "legal/airdrop-interest-terms"))).toBe(false)
+    const interest = await get("/airdrop-interest/")
+    const interestIndexed = await get("/airdrop-interest/index.html")
+    const airdropTerms = await get("/legal/airdrop-interest-terms/")
+    for (const response of [interest, interestIndexed, airdropTerms]) {
+      expect(response.text).not.toContain("Airdrop interest")
+      expect(response.text).not.toContain("Airdrop Interest Terms")
+      expect(response.text).not.toContain("No airdrop is promised")
+      expect(response.text).not.toContain(["amount", "TBD"].join(" "))
+      expect(response.text).toBe(root.text)
+    }
+    for (const path of ["/legal/tester-terms/", "/legal/tester-privacy/", "/legal/tester-sanctions/"]) {
+      const draft = await get(path)
+      expect(draft.status).toBe(200)
+      expect(draft.text).toContain("PENDING LAWYER REVIEW")
+      expect(draft.text).toContain("DRAFT")
+      expect(draft.text).not.toBe(root.text)
+    }
+    expect(page.text).toContain("Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.")
+    expect(page.text).toContain("We only use this to contact you about testing. Never share private keys or seed phrases.")
+    expect(page.text).toContain("GitHub issues are public.")
+    expect(page.text).toContain("https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml")
+    expect(page.text).toContain("0x3d660502D75f1e97b08c110255921b437A3C4C42")
+    expect(page.text).toContain("0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb")
+    expect(page.text).toContain("84532")
+    expect(page.text).toContain('property="og:title"')
+    expect(page.text).toContain('property="og:description"')
+    expect(page.text).toContain('property="og:type" content="website"')
+    expect(page.text).toContain('property="og:url" content="https://agent-bv.pages.dev/testers/"')
+    expect(page.text).toContain('href="/app/fund"')
+    expect(page.text).toContain('href="/app/dispute"')
+    const indexed = await get("/testers/index.html")
+    if (indexed.status === 200) {
+      expect(indexed.text).toBe(page.text)
+    } else {
+      expect([301, 302, 307, 308]).toContain(indexed.status)
+      expect(indexed.location).toMatch(/\/testers\/?$/)
+    }
+    const map = await get("/sitemap.xml")
+    expect(map.status).toBe(200)
+    expect(map.text).not.toContain("https://agent-bv.pages.dev/testers/")
+    expect(map.text).toContain("https://agent-bv.pages.dev/")
+    expect(map.text).toContain("https://agent-bv.pages.dev/app/")
+    expect(map.text).not.toContain("airdrop-interest")
+    const terms = await get("/legal/tester-terms/")
+    expect(terms.text).toContain("<h1>Tester Terms</h1>")
+    expect(terms.text).not.toContain("Tester and Airdrop Terms")
+    expect(terms.text).not.toContain(["future", "recognition"].join(" "))
+    expect(terms.text).not.toContain(["could include a token", "distribution"].join(" "))
+    expect(terms.text).not.toContain("production smart contracts and real funds")
+    expect(terms.text).toContain("Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds.")
+    expect(terms.text).toContain("We may change, suspend or cancel this program, the points program or these terms at any time without notice or liability.")
+    expect(terms.text).not.toContain("these terms or any recognition")
+    const privacy = await get("/legal/tester-privacy/")
+    expect(privacy.text).toContain("We keep tester data while the program runs and for 12 months after it ends or you leave, then delete or anonymize it, unless law requires longer. Anonymized bug reports (handle and wallet removed) may be kept indefinitely. If any airdrop or distribution occurs, wallet and points records are kept as long as tax and sanctions record rules require.")
+    expect(privacy.text).not.toContain("any related recognition")
+    const sanctionsPage = await get("/legal/tester-sanctions/")
+    expect(sanctionsPage.text).toContain("You may not participate in, sign up for, or receive anything from this program if you are: (a) located in")
+    expect(sanctionsPage.text).toContain("We may screen wallet addresses and participants, block access by geography, and withhold or revoke points or anything else from anyone at our discretion to comply with law.")
+    expect(sanctionsPage.text).not.toContain(["withhold or revoke", "recognition"].join(" "))
+    expect(sanctionsPage.text).not.toContain("receive any recognition from")
+  })
+
+  it("noindexes every legal and tester page and hides them from the sitemap and homepage", async () => {
+    const pages = ["legal", "testers"].flatMap((segment) => pagesUnderLanding(segment))
+    expect(pages.length).toBeGreaterThan(0)
+    const map = await get("/sitemap.xml")
+    expect(map.status).toBe(200)
+    const locs = [...map.text.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/g)].map((match) => match[1])
+    const home = await get("/")
+    const homeDom = new JSDOM(home.text)
+    const hrefs = [...homeDom.window.document.querySelectorAll("header nav a, footer a")].map(
+      (anchor) => anchor.getAttribute("href") ?? "",
+    )
+    for (const path of pages) {
+      const page = await get(path)
+      expect(page.status).toBe(200)
+      const robots = new JSDOM(page.text).window.document.querySelector('head meta[name="robots"]')
+      expect(robots).not.toBeNull()
+      expect(robots.getAttribute("content")).toBe("noindex, nofollow")
+      expect(locs.some((loc) => loc.includes(path))).toBe(false)
+      expect(hrefs.some((href) => href.includes(path))).toBe(false)
+    }
   })
 
   it("pins the served inline script hash in the CSP", async () => {

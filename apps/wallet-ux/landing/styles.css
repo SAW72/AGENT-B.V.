@@ -180,6 +180,20 @@ td.a { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; 
   caption { padding: 18px 20px 4px; }
 }
 
+.review-flag { margin: 0; background: var(--sand); color: #4a3c20; text-align: center; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-size: 13px; line-height: 1.4; padding: 10px 16px; }
+.legal-doc h1 { margin-top: 14px; font-weight: 600; font-size: clamp(34px, 4.6vw, 52px); line-height: 1.1; letter-spacing: -0.02em; }
+.legal-doc p, .legal-doc li { margin-top: 14px; color: var(--gray-2); }
+.legal-doc ol, .legal-doc ul { margin-top: 18px; padding-left: 1.25rem; }
+.legal-doc strong { color: var(--white); font-weight: 600; }
+.legal-doc a { color: var(--white); }
+.tester .privacy, .tester .public-warn { max-width: 720px; margin: 14px auto 0; font-size: 15px; line-height: 1.55; color: var(--gray-2); }
+.tester .public-warn strong, .tester .privacy strong { color: var(--white); font-weight: 600; }
+.tester .section .privacy, .tester .section .public-warn, .tester .section.cta .privacy, .tester .section.cta .public-warn { margin-left: 0; margin-right: 0; }
+.tester .section.cta .privacy { margin-top: 18px; }
+.tester td.a { white-space: normal; word-break: break-all; }
+.tester td a, .tester .card a, .tester .sec-head a, .tester .note a, .tester .fine a { color: var(--white); }
+.band .sub + .sub { margin-top: 8px; }
+
 .status ul.list li .aside { display: block; margin-top: 4px; font-size: 14px; line-height: 1.55; color: var(--gray); }
 .powers { margin-top: 20px; background: var(--ink-2); border: 1px solid var(--line-dark); border-left: 3px solid var(--gray-2); border-radius: 14px; padding: 18px 24px; font-size: 15px; line-height: 1.65; color: var(--gray-2); }
 .powers strong { color: var(--white); font-weight: 600; }
