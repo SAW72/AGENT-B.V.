@@ -407,7 +407,7 @@ describe("built site", () => {
     expect(privacy.text).toContain("We keep tester data while the program runs and for 12 months after it ends or you leave, then delete or anonymize it, unless law requires longer. Anonymized bug reports (handle and wallet removed) may be kept indefinitely. If any airdrop or distribution occurs, wallet and points records are kept as long as tax and sanctions record rules require.")
     expect(privacy.text).not.toContain("any related recognition")
     const sanctionsPage = await get("/legal/tester-sanctions/")
-    expect(sanctionsPage.text).toContain("You may not participate if you are on, or owned or controlled by anyone on, the U.S. Treasury OFAC Specially Designated Nationals (SDN) List")
+    expect(sanctionsPage.text).toContain("You may not participate in, sign up for, or receive anything from this program if you are: (a) located in")
     expect(sanctionsPage.text).toContain("We may screen wallet addresses and participants, block access by geography, and withhold or revoke points or anything else from anyone at our discretion to comply with law.")
     expect(sanctionsPage.text).not.toContain(["withhold or revoke", "recognition"].join(" "))
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
