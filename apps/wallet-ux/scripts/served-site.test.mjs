@@ -313,7 +313,12 @@ describe("built site", () => {
     expect(page.type).toContain("text/html")
     expect(page.text).not.toBe(root.text)
     expect(page.text).toContain("PENDING LAWYER REVIEW")
-    expect(page.text).toContain("Test now. An airdrop may come later; amount TBD.")
+    expect(page.text).not.toContain("An airdrop may come later")
+    expect(page.text).not.toContain("testnet activity does not earn tokens")
+    expect(page.text).not.toContain("/airdrop-interest/")
+    expect(page.text).toContain("Testing is optional and at your own risk. You may lose any funds you use, and we do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.")
+    expect(page.text).toContain("Points are per task or per bug reported, never per amount or volume.")
+    expect(page.text).toContain("There are no leaderboards, ranks or prizes.")
     expect(page.text).toContain("Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.")
     expect(page.text).toContain("Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.")
     expect(page.text).toContain("Nothing here is an offer of tokens, value or any investment.")
@@ -322,6 +327,22 @@ describe("built site", () => {
     expect(page.text).toContain('href="/legal/tester-privacy/"')
     expect(page.text).toContain('href="/legal/tester-sanctions/"')
     expect(root.text).not.toContain("/legal/tester-terms/")
+    expect(root.text).not.toContain("An airdrop may come later")
+    expect(root.text).not.toContain("/airdrop-interest/")
+    const interest = await get("/airdrop-interest/")
+    expect(interest.status).toBe(200)
+    expect(interest.text).toContain("PENDING LAWYER REVIEW")
+    expect(interest.text).toContain("Test now. An airdrop may come later; amount TBD.")
+    expect(interest.text).toContain("Nothing here is an offer of tokens, value or any investment.")
+    expect(interest.text).not.toBe(root.text)
+    expect(interest.text).not.toBe(page.text)
+    const interestIndexed = await get("/airdrop-interest/index.html")
+    if (interestIndexed.status === 200) {
+      expect(interestIndexed.text).toBe(interest.text)
+    } else {
+      expect([301, 302, 307, 308]).toContain(interestIndexed.status)
+      expect(interestIndexed.location).toMatch(/\/airdrop-interest\/?$/)
+    }
     for (const path of ["/legal/tester-terms/", "/legal/tester-privacy/", "/legal/tester-sanctions/"]) {
       const draft = await get(path)
       expect(draft.status).toBe(200)
@@ -354,6 +375,7 @@ describe("built site", () => {
     expect(map.text).toContain("https://agent-bv.pages.dev/testers/")
     expect(map.text).toContain("https://agent-bv.pages.dev/")
     expect(map.text).toContain("https://agent-bv.pages.dev/app/")
+    expect(map.text).not.toContain("airdrop-interest")
   })
 
   it("pins the served inline script hash in the CSP", async () => {

@@ -125,13 +125,15 @@ See [`apps/wallet-ux/README.md`](apps/wallet-ux/README.md).
 
 **PENDING LAWYER REVIEW**
 
-Test now. An airdrop may come later; amount TBD.
-
 Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.
 
 Nothing here is an offer of tokens, value or any investment.
 
-Nothing here is an offer of tokens, value or securities, and testnet activity does not earn tokens.
+Testing is optional and at your own risk. You may lose any funds you use, and we do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
+
+Points are per task or per bug reported, never per amount or volume.
+
+There are no leaderboards, ranks or prizes.
 
 Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
@@ -152,6 +154,20 @@ Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues
 Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html).
 
 The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
+
+## Airdrop interest
+
+**PENDING LAWYER REVIEW**
+
+This note is separate from the tester page above.
+
+Test now. An airdrop may come later; amount TBD.
+
+Nothing here is an offer of tokens, value or any investment.
+
+Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
+
+The page is [airdrop interest](apps/wallet-ux/landing/airdrop-interest/index.html). It is not linked from the tester page or from the live marketing navigation.
 
 ## Status
 Architecture complete. Core runner (stub + live Grok client), denylist, vault, liability, insurance, dispute, meta-audit, key management, Base Sepolia Foundry deploy, and the BVT staking/fee/governance stack are real code. Core, Gate B, and BotAttestationEscrow are on Base Sepolia. BVT is not deployed. Agents do not `--broadcast`. Remaining: the first live attested audit.
