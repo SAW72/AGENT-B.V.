@@ -1,5 +1,5 @@
 name: Tester sign-up
-description: Volunteer to test Agent-BV on Base Sepolia. PENDING LAWYER REVIEW.
+description: Volunteer to test. No payment, token or value is promised.
 title: "[Tester] Sign-up"
 body:
   - type: markdown
@@ -11,11 +11,28 @@ body:
 
         Test now. An airdrop may come later; amount TBD.
 
+        Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.
+
+        Nothing here is an offer of tokens, value or any investment.
+
+        Nothing here is an offer of tokens, value or securities, and testnet activity does not earn tokens.
+
         Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
-        Testnet only (chain 84532). Test ETH has no value. Use a wallet that does not hold real funds.
+        Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.
 
         We only use this to contact you about testing. Never share private keys or seed phrases.
+
+        Tester Terms (DRAFT): https://agent-bv.pages.dev/legal/tester-terms/
+        Privacy Notice (DRAFT): https://agent-bv.pages.dev/legal/tester-privacy/
+        Sanctions (DRAFT): https://agent-bv.pages.dev/legal/tester-sanctions/
+  - type: checkboxes
+    id: attestation
+    attributes:
+      label: Sanctions and terms attestation
+      options:
+        - label: "I am not located in, ordinarily resident in, or organized in a jurisdiction subject to comprehensive U.S. sanctions, and I am not on, or owned or controlled by anyone on, a U.S. sanctions list, including OFAC's SDN List. I agree to the Tester Terms and Privacy Notice: https://agent-bv.pages.dev/legal/tester-terms/ and https://agent-bv.pages.dev/legal/tester-privacy/."
+          required: true
   - type: input
     id: email
     attributes:

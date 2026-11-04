@@ -127,9 +127,15 @@ See [`apps/wallet-ux/README.md`](apps/wallet-ux/README.md).
 
 Test now. An airdrop may come later; amount TBD.
 
+Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.
+
+Nothing here is an offer of tokens, value or any investment.
+
+Nothing here is an offer of tokens, value or securities, and testnet activity does not earn tokens.
+
 Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
-Testnet only (chain 84532). Test ETH has no value. Use a wallet that does not hold real funds. Never share a private key or a seed phrase.
+Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Use a wallet that does not hold real funds. Never share a private key or a seed phrase.
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 
@@ -141,7 +147,9 @@ We only use this to contact you about testing. Never share private keys or seed 
 4. **Try a flow:** [Fund an escrow](https://agent-bv.pages.dev/app/fund) on BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`. [Open a dispute](https://agent-bv.pages.dev/app/dispute) on DisputePanel `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. Those addresses are the live entries in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
 5. **Report:** file a bug or feedback issue with steps, the expected result, the actual result, the transaction hash, and the browser and wallet. Do not include a private key or a seed phrase.
 
-Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues.
+Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues. Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.
+
+Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html).
 
 The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
 
