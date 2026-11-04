@@ -125,11 +125,9 @@ See [`apps/wallet-ux/README.md`](apps/wallet-ux/README.md).
 
 **PENDING LAWYER REVIEW**
 
-Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.
-
 Nothing here is an offer of tokens, value or any investment.
 
-Testing is optional and at your own risk. You may lose any funds you use, and we do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
+Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
 
 Points are per task or per bug reported, never per amount or volume.
 
@@ -141,17 +139,17 @@ Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary val
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 
-**GitHub issues are public.** A Tester sign-up issue shows your email and wallet address to anyone who can view the repository.
+**GitHub issues are public.** Do not post your email, wallet address or any key here. We will reply in this issue with a link to a private form for contact details. Official contact: [TBD by Spencer].
 
-1. **Sign up:** open a [Tester sign-up](https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml) issue. The form asks for an email and, if you want, a wallet address.
+1. **Sign up:** open a [Tester sign-up](https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml) issue. The issue author is the GitHub handle. The form collects no email, no wallet address, and no other personal field.
 2. **Get test ETH:** use a public Base Sepolia faucet. Base lists them on [Get Funds](https://docs.base.org/get-started/get-funds). Checked faucets: [Alchemy](https://www.alchemy.com/faucets/base-sepolia), [QuickNode](https://faucet.quicknode.com/base/sepolia), [thirdweb](https://thirdweb.com/base-sepolia-testnet), [Chainstack](https://faucet.chainstack.com/), [ethfaucet](https://ethfaucet.com/networks/base), [Google Cloud](https://cloud.google.com/application/web3/faucet/base/sepolia), and the [Coinbase Developer Platform faucet](https://portal.cdp.coinbase.com/onchain-tools/faucet).
 3. **Open the app:** [https://agent-bv.pages.dev/app/](https://agent-bv.pages.dev/app/), then connect a wallet on Base Sepolia (chain ID 84532). The app refuses every other chain, including Ethereum mainnet and Base mainnet.
-4. **Try a flow:** [Fund an escrow](https://agent-bv.pages.dev/app/fund) on BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`. [Open a dispute](https://agent-bv.pages.dev/app/dispute) on DisputePanel `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. Those addresses are the live entries in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
+4. **Try a flow:** Fund a testnet escrow with free Base Sepolia test ETH (no real value), then open a dispute. Fund page: [https://agent-bv.pages.dev/app/fund](https://agent-bv.pages.dev/app/fund) (BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`). Dispute page: [https://agent-bv.pages.dev/app/dispute](https://agent-bv.pages.dev/app/dispute) (DisputePanel `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`). Those addresses are the live entries in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
 5. **Report:** file a bug or feedback issue with steps, the expected result, the actual result, the transaction hash, and the browser and wallet. Do not include a private key or a seed phrase.
 
 Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues. Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.
 
-Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html).
+Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html). Airdrop Interest Terms are a separate draft and are not part of the Tester Terms.
 
 The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
 
@@ -159,15 +157,21 @@ The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](htt
 
 **PENDING LAWYER REVIEW**
 
-This note is separate from the tester page above.
+This note is separate from the tester page above. The page is an unpublished draft. `scripts/assemble-site.mjs` copies `apps/wallet-ux/landing/` only. This file is not in that directory, not in the sitemap, and not in the live marketing navigation.
 
-Test now. An airdrop may come later; amount TBD.
+We have not decided whether any airdrop will happen. No airdrop is promised, and there is no amount, date or schedule.
+
+Registering interest does not make you eligible for anything and does not reserve anything for you.
+
+Testing, points and any use of the app have no bearing on this page.
 
 Nothing here is an offer of tokens, value or any investment.
 
-Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
+You may not take part if you are in a jurisdiction subject to comprehensive U.S. sanctions, or if you are on a U.S. sanctions list, including OFAC's SDN List.
 
-The page is [airdrop interest](apps/wallet-ux/landing/airdrop-interest/index.html). It is not linked from the tester page or from the live marketing navigation.
+See the Tester Terms, Privacy Notice and Sanctioned Jurisdictions pages.
+
+The draft page is [airdrop interest](apps/wallet-ux/staging/airdrop-interest/index.html). [Airdrop Interest Terms](apps/wallet-ux/staging/legal/airdrop-interest-terms/index.html) are a separate draft, linked only from that page.
 
 ## Status
 Architecture complete. Core runner (stub + live Grok client), denylist, vault, liability, insurance, dispute, meta-audit, key management, Base Sepolia Foundry deploy, and the BVT staking/fee/governance stack are real code. Core, Gate B, and BotAttestationEscrow are on Base Sepolia. BVT is not deployed. Agents do not `--broadcast`. Remaining: the first live attested audit.

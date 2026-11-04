@@ -7,13 +7,11 @@ body:
       value: |
         **PENDING LAWYER REVIEW**
 
-        **GitHub issues are public.** This form publishes your email and your wallet address. Anyone who can view this repository can read them.
-
-        Testers may be considered for future recognition, subject to terms, eligibility and sanctions screening. Recognition does not depend on depositing or using funds, and nothing here is an offer of tokens or value.
+        Do not post your email, wallet address or any key here. GitHub issues are public. We will reply in this issue with a link to a private form for contact details. Official contact: [TBD by Spencer].
 
         Nothing here is an offer of tokens, value or any investment.
 
-        Testing is optional and at your own risk. You may lose any funds you use, and we do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
+        Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
 
         Points are per task or per bug reported, never per amount or volume.
 
@@ -25,6 +23,8 @@ body:
 
         We only use this to contact you about testing. Never share private keys or seed phrases.
 
+        This sign-up collects only your GitHub handle. You are the issue author. Do not add an email, a wallet address, or any other personal field.
+
         Tester Terms (DRAFT): https://agent-bv.pages.dev/legal/tester-terms/
         Privacy Notice (DRAFT): https://agent-bv.pages.dev/legal/tester-privacy/
         Sanctions (DRAFT): https://agent-bv.pages.dev/legal/tester-sanctions/
@@ -35,19 +35,3 @@ body:
       options:
         - label: "I am not located in, ordinarily resident in, or organized in a jurisdiction subject to comprehensive U.S. sanctions, and I am not on, or owned or controlled by anyone on, a U.S. sanctions list, including OFAC's SDN List. I agree to the Tester Terms and Privacy Notice: https://agent-bv.pages.dev/legal/tester-terms/ and https://agent-bv.pages.dev/legal/tester-privacy/."
           required: true
-  - type: input
-    id: email
-    attributes:
-      label: Email
-      description: Required. We only use this to contact you about testing. Never share private keys or seed phrases. This issue is public, so this email will be visible.
-      placeholder: you@example.com
-    validations:
-      required: true
-  - type: input
-    id: wallet
-    attributes:
-      label: Wallet address (optional)
-      description: Optional. A Base Sepolia address (chain 84532) only. Leave this blank if you do not have one yet. Never share a private key or a seed phrase. This issue is public, so this address will be visible.
-      placeholder: "0x"
-    validations:
-      required: false
