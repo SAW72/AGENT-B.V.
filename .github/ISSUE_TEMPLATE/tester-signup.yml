@@ -1,0 +1,34 @@
+name: Tester sign-up
+description: Volunteer to test Agent-BV on Base Sepolia. PENDING LAWYER REVIEW.
+title: "[Tester] Sign-up"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **PENDING LAWYER REVIEW**
+
+        **GitHub issues are public.** This form publishes your email and your wallet address. Anyone who can view this repository can read them.
+
+        Test now. An airdrop may come later; amount TBD.
+
+        Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
+
+        Testnet only (chain 84532). Test ETH has no value. Use a wallet that does not hold real funds.
+
+        We only use this to contact you about testing. Never share private keys or seed phrases.
+  - type: input
+    id: email
+    attributes:
+      label: Email
+      description: Required. We only use this to contact you about testing. Never share private keys or seed phrases. This issue is public, so this email will be visible.
+      placeholder: you@example.com
+    validations:
+      required: true
+  - type: input
+    id: wallet
+    attributes:
+      label: Wallet address (optional)
+      description: Optional. A Base Sepolia address (chain 84532) only. Leave this blank if you do not have one yet. Never share a private key or a seed phrase. This issue is public, so this address will be visible.
+      placeholder: "0x"
+    validations:
+      required: false

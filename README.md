@@ -121,6 +121,30 @@ npm run dev
 
 See [`apps/wallet-ux/README.md`](apps/wallet-ux/README.md).
 
+## How to test (Base Sepolia testnet)
+
+**PENDING LAWYER REVIEW**
+
+Test now. An airdrop may come later; amount TBD.
+
+Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
+
+Testnet only (chain 84532). Test ETH has no value. Use a wallet that does not hold real funds. Never share a private key or a seed phrase.
+
+We only use this to contact you about testing. Never share private keys or seed phrases.
+
+**GitHub issues are public.** A Tester sign-up issue shows your email and wallet address to anyone who can view the repository.
+
+1. **Sign up:** open a [Tester sign-up](https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml) issue. The form asks for an email and, if you want, a wallet address.
+2. **Get test ETH:** use a public Base Sepolia faucet. Base lists them on [Get Funds](https://docs.base.org/get-started/get-funds). Checked faucets: [Alchemy](https://www.alchemy.com/faucets/base-sepolia), [QuickNode](https://faucet.quicknode.com/base/sepolia), [thirdweb](https://thirdweb.com/base-sepolia-testnet), [Chainstack](https://faucet.chainstack.com/), [ethfaucet](https://ethfaucet.com/networks/base), [Google Cloud](https://cloud.google.com/application/web3/faucet/base/sepolia), and the [Coinbase Developer Platform faucet](https://portal.cdp.coinbase.com/onchain-tools/faucet).
+3. **Open the app:** [https://agent-bv.pages.dev/app/](https://agent-bv.pages.dev/app/), then connect a wallet on Base Sepolia (chain ID 84532). The app refuses every other chain, including Ethereum mainnet and Base mainnet.
+4. **Try a flow:** [Fund an escrow](https://agent-bv.pages.dev/app/fund) on BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`. [Open a dispute](https://agent-bv.pages.dev/app/dispute) on DisputePanel `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. Those addresses are the live entries in [`deployments/base-sepolia.json`](deployments/base-sepolia.json).
+5. **Report:** file a bug or feedback issue with steps, the expected result, the actual result, the transaction hash, and the browser and wallet. Do not include a private key or a seed phrase.
+
+Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues.
+
+The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
+
 ## Status
 Architecture complete. Core runner (stub + live Grok client), denylist, vault, liability, insurance, dispute, meta-audit, key management, Base Sepolia Foundry deploy, and the BVT staking/fee/governance stack are real code. Core, Gate B, and BotAttestationEscrow are on Base Sepolia. BVT is not deployed. Agents do not `--broadcast`. Remaining: the first live attested audit.
 

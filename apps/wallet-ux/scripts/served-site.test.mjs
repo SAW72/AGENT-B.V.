@@ -306,6 +306,41 @@ describe("built site", () => {
     expect(withQuery.location).toBe("/app/?x=1")
   })
 
+  it("serves the tester page and lists it in the sitemap", async () => {
+    const page = await get("/testers/")
+    const root = await get("/")
+    expect(page.status).toBe(200)
+    expect(page.type).toContain("text/html")
+    expect(page.text).not.toBe(root.text)
+    expect(page.text).toContain("PENDING LAWYER REVIEW")
+    expect(page.text).toContain("Test now. An airdrop may come later; amount TBD.")
+    expect(page.text).toContain("Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.")
+    expect(page.text).toContain("We only use this to contact you about testing. Never share private keys or seed phrases.")
+    expect(page.text).toContain("GitHub issues are public.")
+    expect(page.text).toContain("https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml")
+    expect(page.text).toContain("0x3d660502D75f1e97b08c110255921b437A3C4C42")
+    expect(page.text).toContain("0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb")
+    expect(page.text).toContain("84532")
+    expect(page.text).toContain('property="og:title"')
+    expect(page.text).toContain('property="og:description"')
+    expect(page.text).toContain('property="og:type" content="website"')
+    expect(page.text).toContain('property="og:url" content="https://agent-bv.pages.dev/testers/"')
+    expect(page.text).toContain('href="/app/fund"')
+    expect(page.text).toContain('href="/app/dispute"')
+    const indexed = await get("/testers/index.html")
+    if (indexed.status === 200) {
+      expect(indexed.text).toBe(page.text)
+    } else {
+      expect([301, 302, 307, 308]).toContain(indexed.status)
+      expect(indexed.location).toMatch(/\/testers\/?$/)
+    }
+    const map = await get("/sitemap.xml")
+    expect(map.status).toBe(200)
+    expect(map.text).toContain("https://agent-bv.pages.dev/testers/")
+    expect(map.text).toContain("https://agent-bv.pages.dev/")
+    expect(map.text).toContain("https://agent-bv.pages.dev/app/")
+  })
+
   it("pins the served inline script hash in the CSP", async () => {
     const root = await get("/")
     const script = inlineScript(root.text)
