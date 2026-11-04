@@ -139,7 +139,7 @@ Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary val
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 
-**GitHub issues are public.** Do not post your email, wallet address or any key here. We will reply in this issue with a link to a private form for contact details. Official contact: [TBD by Spencer].
+**GitHub issues are public.** Do not post your email, wallet address or any key here. We will reply in this issue with a link to a private form for contact details. Official contact: agent-bv@stewardoftheking.com.
 
 1. **Sign up:** open a [Tester sign-up](https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml) issue. The issue author is the GitHub handle. The form collects no email, no wallet address, and no other personal field.
 2. **Get test ETH:** use a public Base Sepolia faucet. Base lists them on [Get Funds](https://docs.base.org/get-started/get-funds). Checked faucets: [Alchemy](https://www.alchemy.com/faucets/base-sepolia), [QuickNode](https://faucet.quicknode.com/base/sepolia), [thirdweb](https://thirdweb.com/base-sepolia-testnet), [Chainstack](https://faucet.chainstack.com/), [ethfaucet](https://ethfaucet.com/networks/base), [Google Cloud](https://cloud.google.com/application/web3/faucet/base/sepolia), and the [Coinbase Developer Platform faucet](https://portal.cdp.coinbase.com/onchain-tools/faucet).
