@@ -149,7 +149,7 @@ We only use this to contact you about testing. Never share private keys or seed 
 
 Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues. Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.
 
-Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html). Airdrop Interest Terms are a separate draft and are not part of the Tester Terms.
+Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html).
 
 The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
 

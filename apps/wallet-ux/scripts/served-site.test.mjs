@@ -394,6 +394,8 @@ describe("built site", () => {
     expect(privacy.text).not.toContain("any related recognition")
     const sanctionsPage = await get("/legal/tester-sanctions/")
     expect(sanctionsPage.text).toContain("participate in, sign up for, or receive anything from")
+    expect(sanctionsPage.text).toContain("We may screen wallet addresses and participants, block access by geography, and withhold or revoke points or anything else from anyone at our discretion to comply with law.")
+    expect(sanctionsPage.text).not.toContain(["withhold or revoke", "recognition"].join(" "))
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
   })
 
