@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -54,6 +54,20 @@ function metaContent(html, selector) {
   const element = dom.window.document.querySelector(selector)
   expect(element).not.toBeNull()
   return element.getAttribute("content")
+}
+
+function pagesUnderLanding(segment) {
+  const root = join(appRoot, "landing", segment)
+  const pages = []
+  const visit = (dir, urlPath) => {
+    if (existsSync(join(dir, "index.html"))) pages.push(urlPath)
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      visit(join(dir, entry.name), `${urlPath}${entry.name}/`)
+    }
+  }
+  visit(root, `/${segment}/`)
+  return pages
 }
 
 function expectAbsoluteHttps(value) {
@@ -306,7 +320,7 @@ describe("built site", () => {
     expect(withQuery.location).toBe("/app/?x=1")
   })
 
-  it("serves the tester page and lists it in the sitemap", async () => {
+  it("serves the tester page and omits it from the sitemap", async () => {
     const page = await get("/testers/")
     const root = await get("/")
     expect(page.status).toBe(200)
@@ -376,7 +390,7 @@ describe("built site", () => {
     }
     const map = await get("/sitemap.xml")
     expect(map.status).toBe(200)
-    expect(map.text).toContain("https://agent-bv.pages.dev/testers/")
+    expect(map.text).not.toContain("https://agent-bv.pages.dev/testers/")
     expect(map.text).toContain("https://agent-bv.pages.dev/")
     expect(map.text).toContain("https://agent-bv.pages.dev/app/")
     expect(map.text).not.toContain("airdrop-interest")
@@ -397,6 +411,28 @@ describe("built site", () => {
     expect(sanctionsPage.text).toContain("We may screen wallet addresses and participants, block access by geography, and withhold or revoke points or anything else from anyone at our discretion to comply with law.")
     expect(sanctionsPage.text).not.toContain(["withhold or revoke", "recognition"].join(" "))
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
+  })
+
+  it("noindexes every legal and tester page and hides them from the sitemap and homepage", async () => {
+    const pages = ["legal", "testers"].flatMap((segment) => pagesUnderLanding(segment))
+    expect(pages.length).toBeGreaterThan(0)
+    const map = await get("/sitemap.xml")
+    expect(map.status).toBe(200)
+    const locs = [...map.text.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/g)].map((match) => match[1])
+    const home = await get("/")
+    const homeDom = new JSDOM(home.text)
+    const hrefs = [...homeDom.window.document.querySelectorAll("header nav a, footer a")].map(
+      (anchor) => anchor.getAttribute("href") ?? "",
+    )
+    for (const path of pages) {
+      const page = await get(path)
+      expect(page.status).toBe(200)
+      const robots = new JSDOM(page.text).window.document.querySelector('head meta[name="robots"]')
+      expect(robots).not.toBeNull()
+      expect(robots.getAttribute("content")).toBe("noindex, nofollow")
+      expect(locs.some((loc) => loc.includes(path))).toBe(false)
+      expect(hrefs.some((href) => href.includes(path))).toBe(false)
+    }
   })
 
   it("pins the served inline script hash in the CSP", async () => {
