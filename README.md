@@ -135,7 +135,7 @@ There are no leaderboards, ranks or prizes.
 
 Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
-Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Use a wallet that does not hold real funds. Never share a private key or a seed phrase.
+Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Never share a private key or a seed phrase.
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 
@@ -152,26 +152,6 @@ Agent builders (ERC-8004 / x402): integration notes are welcome in GitHub issues
 Draft legal pages, marked DRAFT and PENDING LAWYER REVIEW: [Tester Terms](apps/wallet-ux/landing/legal/tester-terms/index.html), [Privacy Notice](apps/wallet-ux/landing/legal/tester-privacy/index.html), [Sanctions](apps/wallet-ux/landing/legal/tester-sanctions/index.html). Airdrop Interest Terms are a separate draft and are not part of the Tester Terms.
 
 The same steps are on the tester page: [https://agent-bv.pages.dev/testers/](https://agent-bv.pages.dev/testers/).
-
-## Airdrop interest
-
-**PENDING LAWYER REVIEW**
-
-This note is separate from the tester page above. The page is an unpublished draft. `scripts/assemble-site.mjs` copies `apps/wallet-ux/landing/` only. This file is not in that directory, not in the sitemap, and not in the live marketing navigation.
-
-We have not decided whether any airdrop will happen. No airdrop is promised, and there is no amount, date or schedule.
-
-Registering interest does not make you eligible for anything and does not reserve anything for you.
-
-Testing, points and any use of the app have no bearing on this page.
-
-Nothing here is an offer of tokens, value or any investment.
-
-You may not take part if you are in a jurisdiction subject to comprehensive U.S. sanctions, or if you are on a U.S. sanctions list, including OFAC's SDN List.
-
-See the Tester Terms, Privacy Notice and Sanctioned Jurisdictions pages.
-
-The draft page is [airdrop interest](apps/wallet-ux/staging/airdrop-interest/index.html). [Airdrop Interest Terms](apps/wallet-ux/staging/legal/airdrop-interest-terms/index.html) are a separate draft, linked only from that page.
 
 ## Status
 Architecture complete. Core runner (stub + live Grok client), denylist, vault, liability, insurance, dispute, meta-audit, key management, Base Sepolia Foundry deploy, and the BVT staking/fee/governance stack are real code. Core, Gate B, and BotAttestationEscrow are on Base Sepolia. BVT is not deployed. Agents do not `--broadcast`. Remaining: the first live attested audit.

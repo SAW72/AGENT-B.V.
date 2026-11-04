@@ -324,6 +324,8 @@ describe("built site", () => {
     expect(page.text).toContain("Points are per task or per bug reported, never per amount or volume.")
     expect(page.text).toContain("There are no leaderboards, ranks or prizes.")
     expect(page.text).toContain("Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.")
+    expect(page.text).not.toContain("Use a wallet that does not hold real funds.")
+    expect(page.text).not.toContain("Use a wallet that holds no real funds.")
     expect(page.text).toContain("Fund a testnet escrow with free Base Sepolia test ETH (no real value), then open a dispute.")
     expect(page.text).toContain("Nothing here is an offer of tokens, value or any investment.")
     expect(page.text).toContain("Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.")
@@ -385,6 +387,14 @@ describe("built site", () => {
     expect(terms.text).not.toContain(["could include a token", "distribution"].join(" "))
     expect(terms.text).not.toContain("production smart contracts and real funds")
     expect(terms.text).toContain("Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds.")
+    expect(terms.text).toContain("We may change, suspend or cancel this program, the points program or these terms at any time without notice or liability.")
+    expect(terms.text).not.toContain("these terms or any recognition")
+    const privacy = await get("/legal/tester-privacy/")
+    expect(privacy.text).toContain("We keep tester data only as long as the program needs it, plus what law requires, then delete it [specific period TBD—attorney].")
+    expect(privacy.text).not.toContain("any related recognition")
+    const sanctionsPage = await get("/legal/tester-sanctions/")
+    expect(sanctionsPage.text).toContain("participate in, sign up for, or receive anything from")
+    expect(sanctionsPage.text).not.toContain("receive any recognition from")
   })
 
   it("pins the served inline script hash in the CSP", async () => {
