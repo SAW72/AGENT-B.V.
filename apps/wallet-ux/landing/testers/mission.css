@@ -291,3 +291,9 @@ h2 {
 .footer .legal + .legal { margin-top: 10px; }
 .skip { position: absolute; left: 12px; top: -60px; z-index: 100; background: var(--white); color: var(--ink); padding: 10px 16px; border-radius: 10px; font-weight: 600; text-decoration: none; }
 .skip:focus { top: 12px; }
+
+/* Moved from inline styles — CSP style-src 'self' forbids style attributes */
+.section-faq { padding-top: 0; padding-bottom: 32px; }
+.sec-head-tight { margin-bottom: 0; }
+.faq-title { font-size: clamp(22px, 2.6vw, 28px); }
+.section-signup { padding-top: 0; }
