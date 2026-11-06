@@ -313,6 +313,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       points_total: 0,
       rows_count: 0,
       first_activity_utc_day: null,
+      eligibility_reason: "sanctions_unavailable",
     });
     assert.deepEqual(store.listLedgerRows(ADDRESS, { limit: 25, after: null }), []);
   });
@@ -325,6 +326,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       assert.equal(summary.points_total, 0);
       assert.equal(summary.rows_count, 2);
       assert.equal(summary.first_activity_utc_day, 20_000);
+      assert.equal(summary.eligibility_reason, "sanctions_unavailable");
       const stored = store.listLedgerRows(ctx.wallet, { limit: 10, afterSeq: 0 });
       assert.equal(stored.length, 2);
       assert.equal(stored[0].source_tx_hash, "sentinel-source-77ab");
@@ -336,6 +338,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         assert.equal(body.json.points_total, 0);
         assert.equal(body.json.rows_count, 2);
         assert.equal(body.json.points_withheld, true);
+        assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
         assert.equal(body.json.indexed_to_block, 100_000_000);
         const history = await request(base, `/v1/points/${ctx.wallet}/history?chainId=84532`);
         assert.equal(history.json.items.length, 2);

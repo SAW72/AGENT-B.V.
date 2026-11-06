@@ -80,7 +80,7 @@ describe("points read API", () => {
     expect(body.address).toBe(address);
     expect(body.points_total).toBe(0);
     expect(body.points_withheld).toBe(true);
-    expect(body.eligibility).toEqual({ status: "unverified", reason: "unverified" });
+    expect(body.eligibility).toEqual({ status: "unverified", reason: "sanctions_unavailable" });
     expect(body.rows_count).toBe(0);
     expect(body.disclaimer.text).toBe(sepolia.display.disclaimer);
     expect(body.disclaimer.text).toBe(DISCLAIMER);
@@ -390,13 +390,29 @@ describe("points read API", () => {
       allow: () => ({ ok: true }),
       store: {
         ...store,
-        getLedgerSummary: () => ({ rows_count: 1, first_activity_utc_day: 1 }),
+        getLedgerSummary: () => ({
+          rows_count: 1,
+          first_activity_utc_day: 1,
+          eligibility_reason: "unverified",
+        }),
       },
     }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
     expect(clear.body).toMatchObject({
       points_total: 0,
       points_withheld: true,
       eligibility: { status: "unverified", reason: "unverified" },
+    });
+    const missing = createReadApi({
+      allow: () => ({ ok: true }),
+      store: {
+        ...store,
+        getLedgerSummary: () => ({ rows_count: 0, first_activity_utc_day: null }),
+      },
+    }).handle({ method: "GET", path: `/v1/points/${address}`, query: {} });
+    expect(missing.body).toMatchObject({
+      points_total: 0,
+      points_withheld: true,
+      eligibility: { status: "unverified", reason: "sanctions_unavailable" },
     });
   });
 

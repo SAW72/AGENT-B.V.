@@ -1,6 +1,6 @@
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "../../src/constants.mjs";
-import { SANCTIONS_MATCH, SANCTIONS_UNAVAILABLE } from "../../src/sanctions.mjs";
+import { publicEligibility } from "../../src/eligibility.mjs";
 import { DISCLAIMER } from "./disclaimer.mjs";
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
@@ -33,12 +33,8 @@ export function pointsEnabled(env: { POINTS_ENABLED?: string } | undefined) {
   return env?.POINTS_ENABLED === "true";
 }
 
-export function eligibilityView(reason: string | undefined) {
-  if (reason === SANCTIONS_MATCH) return { status: "ineligible", reason: SANCTIONS_MATCH };
-  if (reason === SANCTIONS_UNAVAILABLE || reason === "unavailable") {
-    return { status: "unverified", reason };
-  }
-  return { status: "unverified", reason: "unverified" };
+export function eligibilityView(reason: string | undefined): { status: string; reason: string } {
+  return publicEligibility(reason);
 }
 
 export function parseExactHttpsOrigin(raw: unknown) {

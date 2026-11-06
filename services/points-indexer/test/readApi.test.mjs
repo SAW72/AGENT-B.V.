@@ -433,7 +433,7 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(body.json.address, wallet);
       assert.equal(body.json.points_total, 0);
       assert.equal(body.json.points_withheld, true);
-      assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "ofac_unconfigured" });
+      assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
       assert.equal(body.json.rows_count, 2);
       assert.equal(body.json.first_activity_utc_day, 20_000);
       assert.equal(body.json.indexed_to_block, 100_000_000);

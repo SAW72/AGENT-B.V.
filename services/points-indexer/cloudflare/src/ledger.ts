@@ -703,6 +703,15 @@ export function insertLedgerRow(sql: Sql, row: Record<string, unknown>) {
 function loadSanctionsScreen(sql: Sql, now = Date.now()) {
   try {
     for (const statement of SANCTIONS_SCHEMA_SQL) sql.exec(statement);
+    return screenForRead(sql, now);
+  } catch {
+    return screenFromStored(null, [], now);
+  }
+}
+
+/** Read the stored SDN screen. Does not create tables. A missing cache is not a clear. */
+export function screenForRead(sql: Sql, now = Date.now()) {
+  try {
     const cache = one(sql, SANCTIONS_READ_CACHE);
     const wallets = all(sql, SANCTIONS_READ_WALLETS);
     return screenFromStored(cache, wallets, now);

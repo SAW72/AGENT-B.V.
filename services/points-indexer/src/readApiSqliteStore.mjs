@@ -8,7 +8,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHAIN_ID } from "./constants.mjs";
-import { historyOrder } from "./readApi.mjs";
+import { addressEligibility, screenUnavailable } from "./eligibility.mjs";
+import { DISCLAIMER_LINK_SLOTS, historyOrder } from "./readApi.mjs";
+import {
+  SANCTIONS_READ_CACHE,
+  SANCTIONS_READ_WALLETS,
+  SANCTIONS_UNAVAILABLE,
+  screenFromStored,
+} from "./sanctions.mjs";
 
 const WEIGHT_KEYS = [
   "first_activity",
@@ -92,8 +99,16 @@ function loadReadConfig(read, paths) {
   ) {
     throw new Error("config_unavailable");
   }
-  const link = notice.disclaimer_links?.legal_notice_url;
-  if (link != null && typeof link !== "string") throw new Error("config_unavailable");
+  const linkSource = notice.disclaimer_links && typeof notice.disclaimer_links === "object" && !Array.isArray(notice.disclaimer_links)
+    ? notice.disclaimer_links
+    : {};
+  const disclaimerLinks = {};
+  for (const key of DISCLAIMER_LINK_SLOTS) {
+    const value = linkSource[key];
+    if (value != null && typeof value !== "string") throw new Error("config_unavailable");
+    disclaimerLinks[key] = typeof value === "string" ? value : null;
+  }
+  const link = disclaimerLinks.legal_notice_url;
   const weights = {};
   for (const key of WEIGHT_KEYS) weights[key] = scalarOrNull(points.weights?.[key]);
   const gates = {};
@@ -104,8 +119,37 @@ function loadReadConfig(read, paths) {
     weights: Object.freeze(weights),
     gates: Object.freeze(gates),
     rule_version: ruleVersion,
-    legal_notice_url: typeof link === "string" ? link : null,
+    legal_notice_url: link,
+    disclaimer_links: Object.freeze(disclaimerLinks),
   });
+}
+
+/**
+ * Read the stored SDN screen on the reader connection.
+ * This store has no wallet-hash pepper. Any account-link row fails closed.
+ * A missing or empty link table does not turn a ready list into a failure.
+ * @param {object} database
+ */
+function screenForDatabase(database) {
+  let screen;
+  try {
+    const cache = database.prepare(SANCTIONS_READ_CACHE).get() ?? null;
+    const wallets = database.prepare(SANCTIONS_READ_WALLETS).all();
+    screen = screenFromStored(cache, wallets, Date.now());
+  } catch {
+    return screenUnavailable();
+  }
+  try {
+    const table = database.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sanctions_account_wallets'",
+    ).get();
+    if (!table) return screen;
+    const anyLink = database.prepare("SELECT 1 AS hit FROM sanctions_account_wallets LIMIT 1").get();
+    if (anyLink) return screenUnavailable();
+    return screen;
+  } catch {
+    return screenUnavailable();
+  }
 }
 
 function emptyCursor() {
@@ -130,6 +174,7 @@ function emptySummary() {
     points_total: 0,
     rows_count: 0,
     first_activity_utc_day: null,
+    eligibility_reason: SANCTIONS_UNAVAILABLE,
   };
 }
 
@@ -177,10 +222,13 @@ export function createReadApiSqliteStore(source = {}) {
          WHERE wallet = ? AND chain_id = ? AND action = 'first_activity'
          LIMIT 1`,
       ).get(address, CHAIN_ID);
+      const screen = screenForDatabase(database);
+      const eligibility = addressEligibility(screen, address);
       return {
         points_total: Number(totals.points_total),
         rows_count: Number(totals.rows_count),
         first_activity_utc_day: first ? first.utc_day : null,
+        eligibility_reason: eligibility.reason,
       };
     },
     listLedgerRows(address, query) {
