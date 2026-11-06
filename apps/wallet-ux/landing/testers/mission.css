@@ -198,13 +198,13 @@ h2 {
   display: flex; align-items: center; justify-content: center;
   font-weight: 600; font-size: 15px;
 }
-.chip-earn {
+.chip-points {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   padding: 6px 12px; border-radius: 999px;
   background: var(--base-soft); color: #0033A0; white-space: nowrap;
 }
-.chip-earn::before {
+.chip-points::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--base);
 }
 .card h3 { font-weight: 600; font-size: 22px; line-height: 1.25; color: var(--text); }
@@ -280,7 +280,8 @@ h2 {
 
 /* Signup disclaimer (Lawyer exact) */
 .signup-block { margin-top: 28px; max-width: 720px; }
-.signup-block .disclaimer {
+.signup-block .disclaimer,
+.signup-block .points-disclaimer {
   margin-top: 16px; font-size: 14px; line-height: 1.55; color: var(--gray);
 }
 .signup-block .disclaimer a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }

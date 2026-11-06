@@ -116,6 +116,17 @@ async function get(path) {
   }
 }
 
+/** Canonical points line. Independent of LAWYER_SIGNUP_DISCLAIMER. */
+const CANONICAL_POINTS_DISCLAIMER =
+  "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything."
+
+/** Denial allowed in tester-signup.yml. Not an earn promise. */
+const EARN_DENIAL = "not earned by depositing funds"
+
+function withoutEarnDenial(text) {
+  return text.split(EARN_DENIAL).join("")
+}
+
 function inlineScript(html) {
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   expect(scripts).toHaveLength(1)
@@ -341,6 +352,15 @@ describe("built site", () => {
     expect(page.text).toContain('src="/assets/case-file.svg"')
     expect(page.text).toContain(LAWYER_SIGNUP_DISCLAIMER)
     expect(page.text).toContain('data-lawyer-signup-disclaimer="exact"')
+    expect(page.text).toContain(CANONICAL_POINTS_DISCLAIMER)
+    expect(LAWYER_SIGNUP_DISCLAIMER).not.toContain(CANONICAL_POINTS_DISCLAIMER)
+    const pointsDisclaimer = new JSDOM(page.text).window.document.querySelector(
+      '[data-points-disclaimer="canonical"]',
+    )
+    expect(pointsDisclaimer).not.toBeNull()
+    expect(pointsDisclaimer.textContent).toBe(CANONICAL_POINTS_DISCLAIMER)
+    expect(pointsDisclaimer.closest("[hidden], [aria-hidden='true']")).toBeNull()
+    expect(withoutEarnDenial(page.text).toLowerCase()).not.toContain("earn")
     expect(page.text).toContain('id="signup"')
     expect(page.text).not.toContain("PENDING LAWYER REVIEW")
     expect(page.text).not.toContain("An airdrop may come later")
@@ -417,6 +437,8 @@ describe("built site", () => {
     expect(robots.text).toBe(robotsTxtBody(config))
     const terms = await get("/legal/tester-terms/")
     expect(terms.text).toContain("<h1>Tester Terms</h1>")
+    expect(terms.text).toContain(EARN_DENIAL)
+    expect(withoutEarnDenial(terms.text).toLowerCase()).not.toContain("earn")
     expect(terms.text).not.toContain("Tester and Airdrop Terms")
     expect(terms.text).not.toContain(["future", "recognition"].join(" "))
     expect(terms.text).not.toContain(["could include a token", "distribution"].join(" "))
@@ -469,6 +491,11 @@ describe("built site", () => {
       expect(body.toLowerCase(), label).not.toContain("airdrop")
     }
     expect(template).not.toContain("PENDING LAWYER REVIEW")
+    expect(template).toContain(EARN_DENIAL)
+    expect(withoutEarnDenial(template).toLowerCase()).not.toContain("earn")
+    expect(withoutEarnDenial(testers).toLowerCase()).not.toContain("earn")
+    expect(testers).toContain(CANONICAL_POINTS_DISCLAIMER)
+    expect(withoutEarnDenial(terms).toLowerCase()).not.toContain("earn")
     expect(template).toContain("payment, or other distribution")
     expect(template).toContain("at least 18")
     expect(template).toContain("owned 50% or more")
