@@ -468,8 +468,11 @@ describe("built site", () => {
     ]) {
       expect(body.toLowerCase(), label).not.toContain("airdrop")
     }
-    expect(template).toContain("PENDING LAWYER REVIEW")
+    expect(template).not.toContain("PENDING LAWYER REVIEW")
     expect(template).toContain("payment, or other distribution")
+    expect(template).toContain("at least 18")
+    expect(template).toContain("owned 50% or more")
+    expect(template).toContain("acting on behalf of")
     expect(terms).toContain("PENDING LAWYER REVIEW")
     expect(privacy).toContain("PENDING LAWYER REVIEW")
     expect(terms).toContain("are not tokens, securities or a promise of any future token, payment, or other distribution")
