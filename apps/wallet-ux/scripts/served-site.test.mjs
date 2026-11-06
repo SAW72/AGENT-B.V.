@@ -425,7 +425,7 @@ describe("built site", () => {
     expect(terms.text).toContain("We may change, suspend or cancel this program, the points program or these terms at any time without notice or liability.")
     expect(terms.text).not.toContain("these terms or any recognition")
     const privacy = await get("/legal/tester-privacy/")
-    expect(privacy.text).toContain("We keep tester data while the program runs and for 12 months after it ends or you leave, then delete or anonymize it, unless law requires longer. Anonymized bug reports (handle and wallet removed) may be kept indefinitely. If any airdrop or distribution occurs, wallet and points records are kept as long as tax and sanctions record rules require.")
+    expect(privacy.text).toContain("We keep tester data while the program runs and for 12 months after it ends or you leave, then delete or anonymize it, unless law requires longer. Anonymized bug reports (handle and wallet removed) may be kept indefinitely. Wallet and points records are kept as long as tax and sanctions record rules require.")
     expect(privacy.text).not.toContain("any related recognition")
     const sanctionsPage = await get("/legal/tester-sanctions/")
     expect(sanctionsPage.text).toContain("You may not participate in, sign up for, or receive anything from this program if you are: (a) located in")
@@ -455,6 +455,27 @@ describe("built site", () => {
   })
 
 
+  it("keeps airdrop out of the /testers page, signup template, tester-terms, and tester-privacy", () => {
+    const template = readFileSync(join(appRoot, "../../.github/ISSUE_TEMPLATE/tester-signup.yml"), "utf8")
+    const terms = readFileSync(join(appRoot, "landing/legal/tester-terms/index.html"), "utf8")
+    const privacy = readFileSync(join(appRoot, "landing/legal/tester-privacy/index.html"), "utf8")
+    const testers = readFileSync(join(appRoot, "landing/testers/index.html"), "utf8")
+    for (const [label, body] of [
+      ["/testers", testers],
+      ["tester-signup.yml", template],
+      ["tester-terms", terms],
+      ["tester-privacy", privacy],
+    ]) {
+      expect(body.toLowerCase(), label).not.toContain("airdrop")
+    }
+    expect(template).toContain("PENDING LAWYER REVIEW")
+    expect(template).toContain("payment, or other distribution")
+    expect(terms).toContain("PENDING LAWYER REVIEW")
+    expect(privacy).toContain("PENDING LAWYER REVIEW")
+    expect(terms).toContain("are not tokens, securities or a promise of any future token, payment, or other distribution")
+    expect(privacy).toContain("Wallet and points records are kept as long as tax and sanctions record rules require.")
+  })
+
   it("noindexes legal pages and applies the testers index switch to robots and sitemap", async () => {
     const config = loadTestersPageConfig()
     const legalPages = pagesUnderLanding("legal")
@@ -481,7 +502,7 @@ describe("built site", () => {
     expect(testersRobots).not.toBeNull()
     expect(testersRobots.getAttribute("content")).toBe(robotsMetaContent(config))
     expect(locs.includes("https://agent-bv.pages.dev/testers/")).toBe(config.index)
-    expect(hrefs.some((href) => href.includes("/testers/"))).toBe(false)
+    expect(hrefs.some((href) => href.includes("/testers/"))).toBe(true)
     const robotsTxt = await get("/robots.txt")
     expect(robotsTxt.text).toBe(robotsTxtBody(config))
     expect(testers.text.toLowerCase()).not.toContain("airdrop")
