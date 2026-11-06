@@ -278,15 +278,12 @@ h2 {
   .stage-wrap { min-height: 300px; padding-top: 8px; }
 }
 
-/* Signup disclaimer (Lawyer exact) + soft airdrop switch */
+/* Signup disclaimer (Lawyer exact) */
 .signup-block { margin-top: 28px; max-width: 720px; }
 .signup-block .disclaimer {
   margin-top: 16px; font-size: 14px; line-height: 1.55; color: var(--gray);
 }
 .signup-block .disclaimer a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
-.soft-airdrop {
-  margin-top: 14px; font-size: 14px; line-height: 1.55; color: var(--gray);
-}
 .privacy, .public-warn { margin-top: 14px; font-size: 14px; line-height: 1.55; color: var(--gray); }
 .footer .footlinks { display: flex; flex-wrap: wrap; gap: 18px 24px; list-style: none; margin-top: 12px; }
 .footer .footlinks a { font-size: 14px; font-weight: 500; color: var(--gray); }

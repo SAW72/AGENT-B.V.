@@ -15,7 +15,6 @@ import {
   robotsMetaContent,
   robotsTxtBody,
   sitemapXmlBody,
-  softAirdropHtml,
 } from "./testers-page-policy.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -353,13 +352,7 @@ describe("built site", () => {
     expect(page.text).not.toContain("You may lose any funds you use")
     expect(page.text).not.toContain("Use a wallet that does not hold real funds.")
     expect(page.text).not.toContain("Use a wallet that holds no real funds.")
-    if (config.airdropLine === "silent") {
-      expect(page.text).not.toContain(config.softAirdropLine)
-      expect(page.text).not.toContain('data-testers-airdrop="soft"')
-    } else {
-      expect(page.text).toContain(config.softAirdropLine)
-      expect(page.text).toContain('data-testers-airdrop="soft"')
-    }
+    expect(page.text.toLowerCase()).not.toContain("airdrop")
     expect(page.text).toContain('href="/legal/tester-terms/"')
     expect(page.text).toContain('href="/legal/tester-privacy/"')
     expect(page.text).toContain('href="/legal/tester-sanctions/"')
@@ -441,30 +434,28 @@ describe("built site", () => {
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
   })
 
-  it("defaults the testers config switch to index and silent, and covers both switch states", () => {
+  it("defaults the testers config switch to indexed, and covers both index switch states", () => {
     const defaults = loadTestersPageConfig()
     expect(defaults.index).toBe(true)
-    expect(defaults.airdropLine).toBe("silent")
-    expect(defaults.softAirdropLine).toContain("not a promise")
-    expect(defaults.softAirdropLine.toLowerCase()).toContain("airdrop")
+    expect(defaults).not.toHaveProperty("airdropLine")
+    expect(defaults).not.toHaveProperty("softAirdropLine")
 
-    const noindexSilent = { index: false, airdropLine: "silent", softAirdropLine: defaults.softAirdropLine }
-    expect(robotsMetaContent(noindexSilent)).toBe("noindex, nofollow")
-    expect(robotsTxtBody(noindexSilent)).toContain("Disallow: /testers/")
-    expect(sitemapXmlBody(noindexSilent)).not.toContain("https://agent-bv.pages.dev/testers/")
-    expect(softAirdropHtml(noindexSilent)).toBe("")
+    const noindex = { index: false }
+    expect(robotsMetaContent(noindex)).toBe("noindex, nofollow")
+    expect(robotsTxtBody(noindex)).toContain("Disallow: /testers/")
+    expect(sitemapXmlBody(noindex)).not.toContain("https://agent-bv.pages.dev/testers/")
 
-    const indexSoft = { index: true, airdropLine: "soft", softAirdropLine: defaults.softAirdropLine }
-    expect(robotsMetaContent(indexSoft)).toBe("index, follow")
-    expect(robotsTxtBody(indexSoft)).not.toContain("Disallow: /testers/")
-    expect(sitemapXmlBody(indexSoft)).toContain("https://agent-bv.pages.dev/testers/")
-    expect(softAirdropHtml(indexSoft)).toContain(defaults.softAirdropLine)
-    expect(softAirdropHtml(indexSoft)).toContain('data-testers-airdrop="soft"')
-    // Soft line still promises nothing.
-    expect(defaults.softAirdropLine.toLowerCase()).toContain("not a promise")
+    const indexed = { index: true }
+    expect(robotsMetaContent(indexed)).toBe("index, follow")
+    expect(robotsTxtBody(indexed)).not.toContain("Disallow: /testers/")
+    expect(sitemapXmlBody(indexed)).toContain("https://agent-bv.pages.dev/testers/")
+    expect(LAWYER_SIGNUP_DISCLAIMER.toLowerCase()).not.toContain("airdrop")
+    expect(LAWYER_SIGNUP_DISCLAIMER.toLowerCase()).not.toContain("free-year")
+    expect(LAWYER_SIGNUP_DISCLAIMER.toLowerCase()).not.toContain("free service")
   })
 
-  it("noindexes legal pages and applies the testers config switch to robots, sitemap, and airdrop line", async () => {
+
+  it("noindexes legal pages and applies the testers index switch to robots and sitemap", async () => {
     const config = loadTestersPageConfig()
     const legalPages = pagesUnderLanding("legal")
     expect(legalPages.length).toBeGreaterThan(0)
@@ -493,12 +484,7 @@ describe("built site", () => {
     expect(hrefs.some((href) => href.includes("/testers/"))).toBe(false)
     const robotsTxt = await get("/robots.txt")
     expect(robotsTxt.text).toBe(robotsTxtBody(config))
-    if (config.airdropLine === "silent") {
-      expect(testers.text).not.toContain(config.softAirdropLine)
-    } else {
-      expect(testers.text).toContain(config.softAirdropLine)
-    }
-    // Apply helper round-trip for the opposite switch state on a temp copy is covered by policy unit expectations above.
+    expect(testers.text.toLowerCase()).not.toContain("airdrop")
     expect(typeof applyTestersPageConfig).toBe("function")
   })
 

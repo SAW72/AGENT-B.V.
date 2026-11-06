@@ -5,18 +5,13 @@ import { fileURLToPath } from "node:url"
 const here = dirname(fileURLToPath(import.meta.url))
 const defaultConfigPath = join(here, "../landing/testers/page-config.json")
 
+/** Lawyer exact signup disclaimer (BUILD-GO-2026-11-05). No airdrop wording. No free-service-year. */
 export const LAWYER_SIGNUP_DISCLAIMER =
   "By signing up you confirm: (1) You are at least 18 and agree to the Tester Terms, Privacy Notice, and Sanctions terms. (2) This is free testnet testing on Base Sepolia only. Points have no cash or monetary value, are not transferable, are not tokens, and are not a claim on any token, payment, or other distribution. (3) You are not on, or owned 50% or more or controlled by anyone on, a U.S. sanctions list (including OFAC SDN), and you are not located in, ordinarily resident in, or organized under the laws of a country or region under comprehensive U.S. sanctions; you are not acting on behalf of any such person."
 
 export function loadTestersPageConfig(path = defaultConfigPath) {
   const raw = JSON.parse(readFileSync(path, "utf8"))
-  const index = raw.index === true
-  const airdropLine = raw.airdropLine === "soft" ? "soft" : "silent"
-  const softAirdropLine =
-    typeof raw.softAirdropLine === "string" && raw.softAirdropLine.trim()
-      ? raw.softAirdropLine.trim()
-      : "Points are not a promise of any airdrop, token, or payment."
-  return { index, airdropLine, softAirdropLine }
+  return { index: raw.index === true }
 }
 
 export function robotsMetaContent(config) {
@@ -47,12 +42,7 @@ ${entries}
 `
 }
 
-export function softAirdropHtml(config) {
-  if (config.airdropLine !== "soft") return ""
-  return `<p class="soft-airdrop" data-testers-airdrop="soft">${config.softAirdropLine}</p>\n`
-}
-
-/** Apply the single page-config switch onto a built/copied site root (dist or landing). */
+/** Apply the index switch onto a built/copied site root (dist or landing). */
 export function applyTestersPageConfig(siteRoot, config = loadTestersPageConfig()) {
   const testersIndex = join(siteRoot, "testers/index.html")
   if (!existsSync(testersIndex)) throw new Error(`missing ${testersIndex}`)
@@ -67,13 +57,10 @@ export function applyTestersPageConfig(siteRoot, config = loadTestersPageConfig(
   )
   html = html.replace(
     /data-testers-config="[^"]*"/,
-    `data-testers-config="${config.index ? "index" : "noindex"}-${config.airdropLine}"`,
+    `data-testers-config="${config.index ? "index" : "noindex"}"`,
   )
-  const soft = softAirdropHtml(config)
-  if (!html.includes("<!-- testers:soft-airdrop -->")) {
-    throw new Error("testers index.html missing <!-- testers:soft-airdrop --> marker")
-  }
-  html = html.replace(/<!-- testers:soft-airdrop -->[\s\S]*?<!-- \/testers:soft-airdrop -->/, `<!-- testers:soft-airdrop -->\n${soft}<!-- /testers:soft-airdrop -->`)
+  // Strip any leftover soft-airdrop markers if present (airdrop switch removed).
+  html = html.replace(/\s*<!-- testers:soft-airdrop -->[\s\S]*?<!-- \/testers:soft-airdrop -->\s*/g, "\n")
   writeFileSync(testersIndex, html)
   writeFileSync(join(siteRoot, "robots.txt"), robotsTxtBody(config))
   writeFileSync(join(siteRoot, "sitemap.xml"), sitemapXmlBody(config))
