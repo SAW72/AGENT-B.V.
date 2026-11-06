@@ -1,6 +1,7 @@
 import sepolia from "../../../../config/reputation/sepolia.json";
 import { CHAIN_ID, ESCROW_START_BLOCK } from "../../src/constants.mjs";
 import { publicEligibility } from "../../src/eligibility.mjs";
+import { POINTS_ENFORCER } from "../../src/enforcer.mjs";
 import { DISCLAIMER } from "./disclaimer.mjs";
 
 export const DEFAULT_RATE_PER_MINUTE = 60;
@@ -493,6 +494,7 @@ export function createReadApi(options: {
           weights: points.weights as Record<string, unknown>,
           gates: points.gates as Record<string, unknown>,
           rule_version: points.rule_version,
+          enforcer: { ...POINTS_ENFORCER },
           disclaimer: disclaimer(),
         }, input);
       } else {

@@ -8,6 +8,7 @@
 
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
 import { publicEligibility } from "./eligibility.mjs";
+import { POINTS_ENFORCER } from "./enforcer.mjs";
 import { pointsEnabled } from "./pointsFlag.mjs";
 import {
   DEFAULT_MAX_ENTRIES,
@@ -797,6 +798,7 @@ export function createReadApi(options = {}) {
           weights: points.weights,
           gates: points.gates,
           rule_version: points.rule_version,
+          enforcer: { ...POINTS_ENFORCER },
           disclaimer: disclaimer(points),
         }, input);
       } else {

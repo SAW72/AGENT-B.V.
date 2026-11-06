@@ -1726,7 +1726,8 @@ describe("points read API", { concurrency: false }, () => {
       config: { ratePerMinute: 30 },
     }, async (base) => {
       const config = await request(base, "/v1/points/config?chainId=84532");
-      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "disclaimer", "gates", "rule_version", "status", "weights"]);
+      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "disclaimer", "enforcer", "gates", "rule_version", "status", "weights"]);
+      assert.deepEqual(config.json.enforcer, { owner: "TBD", auto_cancel: false, flags: "review_only" });
       assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
       const address = await request(base, `/v1/points/${ADDRESS}?chainId=84532`);
       assert.deepEqual(Object.keys(address.json).sort(), [
