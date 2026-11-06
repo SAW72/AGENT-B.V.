@@ -166,6 +166,7 @@ export function normalizeVersion(raw) {
       abuse_policy: httpsLink(raw.disclaimer_links?.abuse_policy),
     },
     caps_label: String(raw.display?.caps_label || "DRAFT/GUESS"),
+    caps_status: raw.hooks?.caps_lock_12 === "locked" ? "locked" : "draft",
     points_ledger_status: pointsLedgerPublicStatus(raw.points_ledger),
     read_api: {
       rate_limit_per_minute: guessInt({ value: raw.read_api?.rate_limit_per_minute ?? 60 }, "rate"),
