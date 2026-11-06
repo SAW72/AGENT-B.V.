@@ -1,3 +1,5 @@
+> **INTERNAL, counsel review only, not an offer or announcement.**
+
 # BVT tokenomics (one page)
 
 > **Securities disclaimer.** This page is **not an offer of securities** or tokens. Do **not** market BVT with ROI, yield, or profit-share claims. Staking is an **operational performance bond**, not an investment product. Testnet tokens have **no value**. Engage counsel before any public distribution. Full text: [BVT_SECURITIES_DISCLAIMER.md](BVT_SECURITIES_DISCLAIMER.md). Also [DISCLAIMER.md](../DISCLAIMER.md).
