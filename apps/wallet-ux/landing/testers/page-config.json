@@ -1,9 +1,9 @@
 {
-  "index": false,
+  "index": true,
   "airdropLine": "silent",
   "_flags": {
-    "index": "OPEN CHOICE — Spencer has not decided index vs noindex. Default noindex. Flipping to true updates robots meta, robots.txt /testers/ line, and sitemap entry via assemble-site.",
-    "airdropLine": "OPEN CHOICE — Spencer has not decided silent vs soft. Default silent. soft still promises nothing; silent omits any airdrop-framed line."
+    "index": "OPEN CHOICE - Spencer can flip back to noindex. Default INDEXED (Spencer 2026-11-06 7:33 AM ET). Flipping updates robots meta, robots.txt /testers/ line, and sitemap entry via assemble-site.",
+    "airdropLine": "OPEN CHOICE - Spencer has not decided silent vs soft. Default silent. soft still promises nothing; silent omits any airdrop-framed line."
   },
   "softAirdropLine": "Points are not a promise of any airdrop, token, or payment."
 }

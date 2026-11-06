@@ -1,5 +1,4 @@
 User-agent: *
 Allow: /
-Disallow: /testers/
 
 Sitemap: https://agent-bv.pages.dev/sitemap.xml

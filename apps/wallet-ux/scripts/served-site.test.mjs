@@ -441,9 +441,9 @@ describe("built site", () => {
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
   })
 
-  it("defaults the testers config switch to noindex and silent, and covers both switch states", () => {
+  it("defaults the testers config switch to index and silent, and covers both switch states", () => {
     const defaults = loadTestersPageConfig()
-    expect(defaults.index).toBe(false)
+    expect(defaults.index).toBe(true)
     expect(defaults.airdropLine).toBe("silent")
     expect(defaults.softAirdropLine).toContain("not a promise")
     expect(defaults.softAirdropLine.toLowerCase()).toContain("airdrop")
