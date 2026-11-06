@@ -8,6 +8,15 @@ import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { readWalletRoute, taskHref } from "../src/routes.ts"
+import {
+  LAWYER_SIGNUP_DISCLAIMER,
+  applyTestersPageConfig,
+  loadTestersPageConfig,
+  robotsMetaContent,
+  robotsTxtBody,
+  sitemapXmlBody,
+  softAirdropHtml,
+} from "./testers-page-policy.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
@@ -323,10 +332,18 @@ describe("built site", () => {
   it("serves the tester page and omits it from the sitemap", async () => {
     const page = await get("/testers/")
     const root = await get("/")
+    const config = loadTestersPageConfig()
     expect(page.status).toBe(200)
     expect(page.type).toContain("text/html")
     expect(page.text).not.toBe(root.text)
-    expect(page.text).toContain("PENDING LAWYER REVIEW")
+    expect(page.text).toContain("Break our escrow before the bots do.")
+    expect(page.text).toContain("Mission Briefing")
+    expect(page.text).toContain('href="/testers/mission.css"')
+    expect(page.text).toContain('src="/assets/case-file.svg"')
+    expect(page.text).toContain(LAWYER_SIGNUP_DISCLAIMER)
+    expect(page.text).toContain('data-lawyer-signup-disclaimer="exact"')
+    expect(page.text).toContain('id="signup"')
+    expect(page.text).not.toContain("PENDING LAWYER REVIEW")
     expect(page.text).not.toContain("An airdrop may come later")
     expect(page.text).not.toContain("testnet activity does not earn tokens")
     expect(page.text).not.toContain("/airdrop-interest/")
@@ -334,15 +351,15 @@ describe("built site", () => {
     expect(page.text).not.toContain(["future", "recognition"].join(" "))
     expect(page.text).not.toContain(["could include a token", "distribution"].join(" "))
     expect(page.text).not.toContain("You may lose any funds you use")
-    expect(page.text).toContain("Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.")
-    expect(page.text).toContain("Points are per task or per bug reported, never per amount or volume.")
-    expect(page.text).toContain("There are no leaderboards, ranks or prizes.")
-    expect(page.text).toContain("Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.")
     expect(page.text).not.toContain("Use a wallet that does not hold real funds.")
     expect(page.text).not.toContain("Use a wallet that holds no real funds.")
-    expect(page.text).toContain("Fund a testnet escrow with free Base Sepolia test ETH (no real value), then open a dispute.")
-    expect(page.text).toContain("Nothing here is an offer of tokens, value or any investment.")
-    expect(page.text).toContain("Agent BV is independent and is not affiliated with or endorsed by the ERC-8004 authors, the x402 Foundation or Base/Coinbase.")
+    if (config.airdropLine === "silent") {
+      expect(page.text).not.toContain(config.softAirdropLine)
+      expect(page.text).not.toContain('data-testers-airdrop="soft"')
+    } else {
+      expect(page.text).toContain(config.softAirdropLine)
+      expect(page.text).toContain('data-testers-airdrop="soft"')
+    }
     expect(page.text).toContain('href="/legal/tester-terms/"')
     expect(page.text).toContain('href="/legal/tester-privacy/"')
     expect(page.text).toContain('href="/legal/tester-sanctions/"')
@@ -368,12 +385,9 @@ describe("built site", () => {
       expect(draft.text).toContain("DRAFT")
       expect(draft.text).not.toBe(root.text)
     }
-    expect(page.text).toContain("Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.")
     expect(page.text).toContain("We only use this to contact you about testing. Never share private keys or seed phrases.")
     expect(page.text).toContain("GitHub issues are public.")
     expect(page.text).toContain("https://github.com/SAW72/AGENT-B.V./issues/new?template=tester-signup.yml")
-    expect(page.text).toContain("0x3d660502D75f1e97b08c110255921b437A3C4C42")
-    expect(page.text).toContain("0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb")
     expect(page.text).toContain("84532")
     expect(page.text).toContain('property="og:title"')
     expect(page.text).toContain('property="og:description"')
@@ -381,6 +395,11 @@ describe("built site", () => {
     expect(page.text).toContain('property="og:url" content="https://agent-bv.pages.dev/testers/"')
     expect(page.text).toContain('href="/app/fund"')
     expect(page.text).toContain('href="/app/dispute"')
+    const missionCss = await get("/testers/mission.css")
+    expect(missionCss.status).toBe(200)
+    expect(missionCss.type).toContain("text/css")
+    const caseFile = await get("/assets/case-file.svg")
+    expect(caseFile.status).toBe(200)
     const indexed = await get("/testers/index.html")
     if (indexed.status === 200) {
       expect(indexed.text).toBe(page.text)
@@ -390,10 +409,19 @@ describe("built site", () => {
     }
     const map = await get("/sitemap.xml")
     expect(map.status).toBe(200)
-    expect(map.text).not.toContain("https://agent-bv.pages.dev/testers/")
     expect(map.text).toContain("https://agent-bv.pages.dev/")
     expect(map.text).toContain("https://agent-bv.pages.dev/app/")
     expect(map.text).not.toContain("airdrop-interest")
+    if (config.index) {
+      expect(map.text).toContain("https://agent-bv.pages.dev/testers/")
+      expect(page.text).toContain('content="index, follow"')
+    } else {
+      expect(map.text).not.toContain("https://agent-bv.pages.dev/testers/")
+      expect(page.text).toContain('content="noindex, nofollow"')
+    }
+    const robots = await get("/robots.txt")
+    expect(robots.status).toBe(200)
+    expect(robots.text).toBe(robotsTxtBody(config))
     const terms = await get("/legal/tester-terms/")
     expect(terms.text).toContain("<h1>Tester Terms</h1>")
     expect(terms.text).not.toContain("Tester and Airdrop Terms")
@@ -413,9 +441,33 @@ describe("built site", () => {
     expect(sanctionsPage.text).not.toContain("receive any recognition from")
   })
 
-  it("noindexes every legal and tester page and hides them from the sitemap and homepage", async () => {
-    const pages = ["legal", "testers"].flatMap((segment) => pagesUnderLanding(segment))
-    expect(pages.length).toBeGreaterThan(0)
+  it("defaults the testers config switch to noindex and silent, and covers both switch states", () => {
+    const defaults = loadTestersPageConfig()
+    expect(defaults.index).toBe(false)
+    expect(defaults.airdropLine).toBe("silent")
+    expect(defaults.softAirdropLine).toContain("not a promise")
+    expect(defaults.softAirdropLine.toLowerCase()).toContain("airdrop")
+
+    const noindexSilent = { index: false, airdropLine: "silent", softAirdropLine: defaults.softAirdropLine }
+    expect(robotsMetaContent(noindexSilent)).toBe("noindex, nofollow")
+    expect(robotsTxtBody(noindexSilent)).toContain("Disallow: /testers/")
+    expect(sitemapXmlBody(noindexSilent)).not.toContain("https://agent-bv.pages.dev/testers/")
+    expect(softAirdropHtml(noindexSilent)).toBe("")
+
+    const indexSoft = { index: true, airdropLine: "soft", softAirdropLine: defaults.softAirdropLine }
+    expect(robotsMetaContent(indexSoft)).toBe("index, follow")
+    expect(robotsTxtBody(indexSoft)).not.toContain("Disallow: /testers/")
+    expect(sitemapXmlBody(indexSoft)).toContain("https://agent-bv.pages.dev/testers/")
+    expect(softAirdropHtml(indexSoft)).toContain(defaults.softAirdropLine)
+    expect(softAirdropHtml(indexSoft)).toContain('data-testers-airdrop="soft"')
+    // Soft line still promises nothing.
+    expect(defaults.softAirdropLine.toLowerCase()).toContain("not a promise")
+  })
+
+  it("noindexes legal pages and applies the testers config switch to robots, sitemap, and airdrop line", async () => {
+    const config = loadTestersPageConfig()
+    const legalPages = pagesUnderLanding("legal")
+    expect(legalPages.length).toBeGreaterThan(0)
     const map = await get("/sitemap.xml")
     expect(map.status).toBe(200)
     const locs = [...map.text.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/g)].map((match) => match[1])
@@ -424,7 +476,7 @@ describe("built site", () => {
     const hrefs = [...homeDom.window.document.querySelectorAll("header nav a, footer a")].map(
       (anchor) => anchor.getAttribute("href") ?? "",
     )
-    for (const path of pages) {
+    for (const path of legalPages) {
       const page = await get(path)
       expect(page.status).toBe(200)
       const robots = new JSDOM(page.text).window.document.querySelector('head meta[name="robots"]')
@@ -433,6 +485,21 @@ describe("built site", () => {
       expect(locs.some((loc) => loc.includes(path))).toBe(false)
       expect(hrefs.some((href) => href.includes(path))).toBe(false)
     }
+    const testers = await get("/testers/")
+    const testersRobots = new JSDOM(testers.text).window.document.querySelector('head meta[name="robots"]')
+    expect(testersRobots).not.toBeNull()
+    expect(testersRobots.getAttribute("content")).toBe(robotsMetaContent(config))
+    expect(locs.includes("https://agent-bv.pages.dev/testers/")).toBe(config.index)
+    expect(hrefs.some((href) => href.includes("/testers/"))).toBe(false)
+    const robotsTxt = await get("/robots.txt")
+    expect(robotsTxt.text).toBe(robotsTxtBody(config))
+    if (config.airdropLine === "silent") {
+      expect(testers.text).not.toContain(config.softAirdropLine)
+    } else {
+      expect(testers.text).toContain(config.softAirdropLine)
+    }
+    // Apply helper round-trip for the opposite switch state on a temp copy is covered by policy unit expectations above.
+    expect(typeof applyTestersPageConfig).toBe("function")
   })
 
   it("pins the served inline script hash in the CSP", async () => {

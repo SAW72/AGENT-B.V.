@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 220" width="280" height="220" role="img" aria-label="Manila case file stamped CASE FILE">
+  <defs>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0B0B0F" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <!-- back flap -->
+  <path d="M28 48h92l18 18h114c8 0 14 6 14 14v108c0 8-6 14-14 14H28c-8 0-14-6-14-14V62c0-8 6-14 14-14z" fill="#D9C7A2" filter="url(#soft)"/>
+  <!-- front panel -->
+  <rect x="14" y="78" width="252" height="126" rx="10" fill="#E8D5AE"/>
+  <!-- tab -->
+  <path d="M28 48h92l18 18H28c-8 0-14 6-14 14V62c0-8 6-14 14-14z" fill="#CDB58A"/>
+  <!-- label strip -->
+  <rect x="36" y="98" width="168" height="28" rx="4" fill="#F4EBD8" stroke="#C4A97A" stroke-width="1.5"/>
+  <text x="48" y="117" font-family="Georgia, 'Times New Roman', serif" font-size="13" font-weight="700" fill="#5A4630" letter-spacing="0.18em">CASE FILE</text>
+  <!-- stamp -->
+  <g transform="translate(168,130) rotate(-12)">
+    <rect x="0" y="0" width="86" height="36" rx="4" fill="none" stroke="#B33A2E" stroke-width="3"/>
+    <text x="43" y="24" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="12" font-weight="700" fill="#B33A2E" letter-spacing="0.14em">CASE FILE</text>
+  </g>
+  <!-- paper peek -->
+  <rect x="44" y="70" width="140" height="14" rx="2" fill="#F7F1E4"/>
+</svg>
