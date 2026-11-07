@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { CHAIN_ID } from "../../src/constants.mjs";
+import { addressEligibility, screenUnavailable, screenWithPersistedMatch } from "../../src/eligibility.mjs";
 import { SANCTIONS_MATCH, normalizeSanctionsAddress, walletHashHex } from "../../src/sanctions.mjs";
 import {
   ensureSchema,
@@ -8,6 +9,7 @@ import {
   metaGet,
   metaInt,
   refreshBundled,
+  screenForRead,
   storedConfig,
 } from "./ledger";
 import { createReadApi, parseCorsList, pointsEnabled, type ReadInput } from "./read-api";
@@ -114,17 +116,9 @@ export class PointsObject extends DurableObject<Env> {
             address,
             CHAIN_ID,
           ).toArray()[0];
-          let eligibilityReason: string | undefined;
-          try {
-            const hit = sql.exec(
-              "SELECT reason FROM sanctions_wallets WHERE wallet = ? LIMIT 1",
-              address,
-            ).toArray()[0];
-            if (hit && String(hit.reason) === SANCTIONS_MATCH) eligibilityReason = SANCTIONS_MATCH;
-          } catch {
-            eligibilityReason = "unavailable";
-          }
-          if (!eligibilityReason) {
+          let screen = screenForRead(sql);
+          const direct = addressEligibility(screen, address);
+          if (direct.reason !== SANCTIONS_MATCH) {
             try {
               const tables = sql.exec(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sanctions_account_wallets'",
@@ -133,11 +127,11 @@ export class PointsObject extends DurableObject<Env> {
                 const pepper = this.env.WALLET_HASH_PEPPER;
                 if (!pepper) {
                   const anyLink = sql.exec("SELECT 1 AS hit FROM sanctions_account_wallets LIMIT 1").toArray()[0];
-                  if (anyLink) eligibilityReason = "unavailable";
+                  if (anyLink) screen = screenUnavailable();
                 } else {
                   const hash = walletHashHex(pepper, normalizeSanctionsAddress(address));
                   if (!hash) {
-                    eligibilityReason = "unavailable";
+                    screen = screenUnavailable();
                   } else {
                     const linked = sql.exec(
                       `SELECT 1 AS hit
@@ -148,18 +142,18 @@ export class PointsObject extends DurableObject<Env> {
                        LIMIT 1`,
                       hash,
                     ).toArray()[0];
-                    if (linked) eligibilityReason = SANCTIONS_MATCH;
+                    if (linked) screen = screenWithPersistedMatch(screen, address);
                   }
                 }
               }
             } catch {
-              eligibilityReason = "unavailable";
+              screen = screenUnavailable();
             }
           }
           return {
             rows_count: Number(totals?.rows_count ?? 0),
             first_activity_utc_day: first ? Number(first.utc_day) : null,
-            ...(eligibilityReason ? { eligibility_reason: eligibilityReason } : {}),
+            eligibility_reason: addressEligibility(screen, address).reason,
           };
         },
         listLedgerRows: (address, query) => {

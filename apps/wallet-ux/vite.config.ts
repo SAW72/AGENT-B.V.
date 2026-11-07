@@ -78,5 +78,43 @@ export default defineConfig({
         external: [/\/claim-relayer\/.*\.mjs$/],
       },
     },
+    // served-site.test.mjs and require-build-env.test.mjs both run `npm run build`
+    // into this app's dist. build.emptyOutDir wipes dist/app, so one file's build
+    // deletes the index the other file is asserting. Keep every other file parallel.
+    // fileParallelism: false forces this project's maxWorkers to 1 after a CLI
+    // --maxWorkers override. The root config is a container once projects is set.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "wallet-ux",
+          exclude: [
+            "**/node_modules/**",
+            "**/.git/**",
+            "scripts/served-site.test.mjs",
+            "scripts/require-build-env.test.mjs",
+          ],
+        },
+      },
+      {
+        // Own include. extends: true would concatenate the root include and run
+        // the whole suite again inside this project.
+        extends: false,
+        test: {
+          name: "dist-build",
+          environment: "node",
+          include: [
+            "scripts/served-site.test.mjs",
+            "scripts/require-build-env.test.mjs",
+          ],
+          fileParallelism: false,
+          server: {
+            deps: {
+              external: [/\/claim-relayer\/.*\.mjs$/],
+            },
+          },
+        },
+      },
+    ],
   },
 })

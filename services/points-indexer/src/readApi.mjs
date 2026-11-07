@@ -7,6 +7,8 @@
  */
 
 import { CHAIN_ID, ESCROW_START_BLOCK } from "./constants.mjs";
+import { publicEligibility } from "./eligibility.mjs";
+import { POINTS_ENFORCER } from "./enforcer.mjs";
 import { pointsEnabled } from "./pointsFlag.mjs";
 import {
   DEFAULT_MAX_ENTRIES,
@@ -67,14 +69,14 @@ const HISTORY_ACTIONS = Object.freeze({
   first_activity: 4,
   return_day: 5,
 });
-const DISCLAIMER_LINK_SLOTS = [
+export const DISCLAIMER_LINK_SLOTS = Object.freeze([
   "master_disclaimer",
   "legal_notice_url",
   "as_is",
   "not_investment",
   "eligibility_notice",
   "abuse_policy",
-];
+]);
 
 /** One sentence for every public read response. */
 export const DISCLAIMER_TEXT = "Testnet only. Not a token. Can't be transferred, sold, or redeemed. May be adjusted or cancelled, and does not convert to anything.";
@@ -399,14 +401,18 @@ export function createRateLimiter(options = {}) {
  * getLedgerSummary(address) returns points_total, rows_count, and first_activity_utc_day.
  * listLedgerRows(address, { limit, after }) returns row objects.
  * after is null or { block_number, log_index, action, utc_day }. seq is not a cursor.
- * getConfig() returns weights, gates, rule_version, and legal_notice_url.
+ * getConfig() returns weights, gates, rule_version, legal_notice_url, and disclaimer_links.
  * getCursor() may set stale when the last pass failed.
  */
 
 function disclaimer(config) {
   const links = {};
-  for (const key of DISCLAIMER_LINK_SLOTS) links[key] = null;
-  links.legal_notice_url = httpsNoticeUrl(config?.legal_notice_url);
+  const rawLinks = config?.disclaimer_links;
+  const source = rawLinks && typeof rawLinks === "object" && !Array.isArray(rawLinks) ? rawLinks : {};
+  for (const key of DISCLAIMER_LINK_SLOTS) {
+    const raw = Object.hasOwn(source, key) ? source[key] : (key === "legal_notice_url" ? config?.legal_notice_url : null);
+    links[key] = httpsNoticeUrl(raw);
+  }
   return { text: DISCLAIMER_TEXT, links };
 }
 
@@ -495,12 +501,13 @@ function publicHistoryItem(row) {
 }
 
 function addressBody(sync, wallet, summary) {
+  const eligibility = publicEligibility(summary?.eligibility_reason);
   return {
     address: wallet,
     chainId: CHAIN_ID,
     points_total: 0,
     points_withheld: true,
-    eligibility: { status: "unverified", reason: "ofac_unconfigured" },
+    eligibility: { status: eligibility.status, reason: eligibility.reason },
     rows_count: Number(summary.rows_count),
     first_activity_utc_day: summary.first_activity_utc_day ?? null,
     ...syncFields(sync),
@@ -791,6 +798,7 @@ export function createReadApi(options = {}) {
           weights: points.weights,
           gates: points.gates,
           rule_version: points.rule_version,
+          enforcer: { ...POINTS_ENFORCER },
           disclaimer: disclaimer(points),
         }, input);
       } else {
