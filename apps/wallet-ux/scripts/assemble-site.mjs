@@ -6,6 +6,7 @@
 import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { applyTestersPageConfig } from "./testers-page-policy.mjs"
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const dist = resolve(app, "dist")
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
@@ -14,4 +15,5 @@ cpSync(resolve(app, "landing"), dist, { recursive: true })
 const appAssets = resolve(dist, "app/assets")
 mkdirSync(appAssets, { recursive: true })
 cpSync(resolve(app, "landing/assets/404.html"), resolve(appAssets, "404.html"))
+applyTestersPageConfig(dist)
 console.log("assembled dist/: landing at /, wallet app at /app/")

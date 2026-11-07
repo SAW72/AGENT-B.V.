@@ -5,21 +5,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        **PENDING LAWYER REVIEW**
-
         Do not post your email, wallet address or any key here. GitHub issues are public. We will reply in this issue with a link to a private form for contact details. Official contact: agent-bv@stewardoftheking.com.
 
-        Nothing here is an offer of tokens, value or any investment.
+        By signing up you confirm: (1) You are at least 18 and agree to the Tester Terms, Privacy Notice, and Sanctions terms. (2) This is free testnet testing on Base Sepolia only. Points have no cash or monetary value, are not transferable, are not tokens, and are not a claim on any token, payment, or other distribution. (3) You are not on, or owned 50% or more or controlled by anyone on, a U.S. sanctions list (including OFAC SDN), and you are not located in, ordinarily resident in, or organized under the laws of a country or region under comprehensive U.S. sanctions; you are not acting on behalf of any such person.
 
-        Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
+        Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time. Points are per task or per bug reported, never per amount or volume. There are no leaderboards, ranks or prizes.
 
-        Points are per task or per bug reported, never per amount or volume.
-
-        There are no leaderboards, ranks or prizes.
-
-        Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
-
-        Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed.
+        Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Nothing here is an offer of tokens, value or any investment.
 
         We only use this to contact you about testing. Never share private keys or seed phrases.
 
@@ -31,7 +23,7 @@ body:
   - type: checkboxes
     id: attestation
     attributes:
-      label: Sanctions and terms attestation
+      label: Age, sanctions and terms attestation
       options:
-        - label: "I am not located in, ordinarily resident in, or organized in a jurisdiction subject to comprehensive U.S. sanctions, and I am not on, or owned or controlled by anyone on, a U.S. sanctions list, including OFAC's SDN List. I agree to the Tester Terms and Privacy Notice: https://agent-bv.pages.dev/legal/tester-terms/ and https://agent-bv.pages.dev/legal/tester-privacy/."
+        - label: "I am at least 18. I agree to the Tester Terms, Privacy Notice, and Sanctions terms. I am not on, or owned 50% or more or controlled by anyone on, a U.S. sanctions list (including OFAC SDN), and I am not located in, ordinarily resident in, or organized under the laws of a country or region under comprehensive U.S. sanctions; I am not acting on behalf of any such person. Tester Terms: https://agent-bv.pages.dev/legal/tester-terms/ Privacy Notice: https://agent-bv.pages.dev/legal/tester-privacy/ Sanctions: https://agent-bv.pages.dev/legal/tester-sanctions/."
           required: true
