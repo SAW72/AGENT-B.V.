@@ -11,6 +11,7 @@ import { CHAIN_ID } from "./constants.mjs";
 import { addressEligibility, screenUnavailable } from "./eligibility.mjs";
 import { DISCLAIMER_LINK_SLOTS, historyOrder } from "./readApi.mjs";
 import {
+  SANCTIONS_MATCH,
   SANCTIONS_READ_CACHE,
   SANCTIONS_READ_WALLETS,
   SANCTIONS_UNAVAILABLE,
@@ -126,11 +127,13 @@ function loadReadConfig(read, paths) {
 
 /**
  * Read the stored SDN screen on the reader connection.
- * This store has no wallet-hash pepper. Any account-link row fails closed.
+ * This store has no wallet-hash pepper. An account-link row fails closed
+ * unless this address is already a direct ready-list or persisted match.
  * A missing or empty link table does not turn a ready list into a failure.
  * @param {object} database
+ * @param {string} address
  */
-function screenForDatabase(database) {
+function screenForDatabase(database, address) {
   let screen;
   try {
     const cache = database.prepare(SANCTIONS_READ_CACHE).get() ?? null;
@@ -139,6 +142,8 @@ function screenForDatabase(database) {
   } catch {
     return screenUnavailable();
   }
+  // Same order as the worker: a match is kept before the pepperless link path.
+  if (addressEligibility(screen, address).reason === SANCTIONS_MATCH) return screen;
   try {
     const table = database.prepare(
       "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sanctions_account_wallets'",
@@ -222,7 +227,7 @@ export function createReadApiSqliteStore(source = {}) {
          WHERE wallet = ? AND chain_id = ? AND action = 'first_activity'
          LIMIT 1`,
       ).get(address, CHAIN_ID);
-      const screen = screenForDatabase(database);
+      const screen = screenForDatabase(database, address);
       const eligibility = addressEligibility(screen, address);
       return {
         points_total: Number(totals.points_total),
