@@ -127,7 +127,7 @@ See [`apps/wallet-ux/README.md`](apps/wallet-ux/README.md).
 
 Nothing here is an offer of tokens, value or any investment.
 
-Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any future token, airdrop or payment. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
+Testing is optional and at your own risk. Use only free testnet tokens. They have no value. Do not connect a wallet that holds real funds. We do not ask you to deposit funds. Testers can earn points for testing. Points have no cash or monetary value, are not transferable, cannot be sold or exchanged, and are not tokens, securities or a promise of any token, payment, or other distribution. Points are not earned by depositing funds or by the amount of funds used. We may change or end the points program at any time.
 
 Points are per task or per bug reported, never per amount or volume.
 
@@ -135,7 +135,7 @@ There are no leaderboards, ranks or prizes.
 
 Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
-Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Never share a private key or a seed phrase.
+Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and do not convert into anything. Contracts may be redeployed. Never share a private key or a seed phrase.
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 

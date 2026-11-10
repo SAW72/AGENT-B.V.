@@ -7,7 +7,7 @@ const defaultConfigPath = join(here, "../landing/testers/page-config.json")
 
 /** Lawyer exact signup disclaimer (BUILD-GO-2026-11-05). No airdrop wording. No free-service-year. */
 export const LAWYER_SIGNUP_DISCLAIMER =
-  "By signing up you confirm: (1) You are at least 18 and agree to the Tester Terms, Privacy Notice, and Sanctions terms. (2) This is free testnet testing on Base Sepolia only. Points have no cash or monetary value, are not transferable, are not tokens, and are not a claim on any token, payment, or other distribution. (3) You are not on, or owned 50% or more or controlled by anyone on, a U.S. sanctions list (including OFAC SDN), and you are not located in, ordinarily resident in, or organized under the laws of a country or region under comprehensive U.S. sanctions; you are not acting on behalf of any such person."
+  "By signing up you confirm: (1) You are at least 18 and agree to the Tester Terms, Privacy Notice, and Sanctions terms. (2) This is free testnet testing on Base Sepolia only. Points have no cash or monetary value, cannot be sold, transferred, or converted into any token or currency, are not tokens, and are not a claim on any token, payment, or other distribution. (3) You are not on, or owned 50% or more or controlled by anyone on, a U.S. sanctions list (including OFAC SDN), and you are not located in, ordinarily resident in, or organized under the laws of a country or region under comprehensive U.S. sanctions; you are not acting on behalf of any such person."
 
 export function loadTestersPageConfig(path = defaultConfigPath) {
   const raw = JSON.parse(readFileSync(path, "utf8"))
