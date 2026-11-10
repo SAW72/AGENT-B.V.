@@ -135,7 +135,7 @@ There are no leaderboards, ranks or prizes.
 
 Eligibility is subject to terms, jurisdiction restrictions, and sanctions screening.
 
-Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and will not convert into any future token. Contracts may be redeployed. Never share a private key or a seed phrase.
+Testnet only (chain 84532). Test ETH and any testnet tokens have no monetary value, cannot be redeemed or exchanged for anything of value, and do not convert into anything. Contracts may be redeployed. Never share a private key or a seed phrase.
 
 We only use this to contact you about testing. Never share private keys or seed phrases.
 

@@ -502,7 +502,7 @@ describe("built site", () => {
     expect(template).toContain("acting on behalf of")
     expect(terms).toContain("PENDING LAWYER REVIEW")
     expect(privacy).toContain("PENDING LAWYER REVIEW")
-    expect(terms).toContain("are not tokens, securities or a promise of any future token, payment, or other distribution")
+    expect(terms).toContain("are not tokens, securities or a promise of any token, payment, or other distribution")
     expect(privacy).toContain("Wallet and points records are kept as long as tax and sanctions record rules require.")
   })
 
