@@ -1,0 +1,18 @@
+# NEAR testnet keys never go in git. near-cli-rs saves them in ~/.near-credentials;
+# these patterns are a second guard in case someone points a tool at this folder.
+.near-credentials/
+**/*.key
+**/*.pem
+**/*-key.json
+**/*.fc.json
+keys/
+.keys/
+neardev/
+# build + tool output
+contract/target/
+target/
+agent/node_modules/
+.sandbox/
+deployments/*.partial
+# demo run output (a sample is committed as demo/sample-attack.log)
+demo/out/

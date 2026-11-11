@@ -1,0 +1,32 @@
+[package]
+name = "agent-bv-policy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+resolver = "3"
+description = "Agent-BV NEAR testnet policy contract: allow / warn / block before an agent spends"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "5"
+
+[dev-dependencies]
+near-sdk = { version = "5", features = ["unit-testing"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+
+# Unit tests pull in near-sdk "unit-testing" (nearcore VM, wasmtime). Linking the
+# test cdylib with full debug info needs several GB and was OOM-killed on a
+# memory-constrained box; no debug info keeps the link small.
+[profile.dev]
+debug = 0

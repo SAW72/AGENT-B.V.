@@ -2,6 +2,57 @@
 
 **Agent-BV** — adversarial scenario library, scoring rubric, behavioral auditing pipeline, and on-chain attestation for detecting deceptive or harmful AI bots. Built for on-chain audit proofs.
 
+## NEAR HACKATHON entry (NEAR testnet, AI Security & Defense)
+
+> Testnet only. Nothing in this section runs on NEAR mainnet, uses NEAR Intents, or moves real funds.
+
+### What is judged (Q-002 disclosure)
+
+Agent-BV existed before NEAR HACKATHON as a testnet tester program on Base Sepolia (chain 84532), with BotAttestationEscrow `0x3d660502D75f1e97b08c110255921b437A3C4C42` and DisputePanel `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`. That earlier work is the baseline and is **not** the entry. It has no users yet and is not audited, and its TEE attestation is not live.
+
+The judged work is everything under `near/`, which was built during the hackathon window. Compare the baseline to the submission here:
+https://github.com/SAW72/AGENT-B.V./compare/pre-hackathon...hackathon-submission
+
+Until the `hackathon-submission` tag is set, compare against the working branch: https://github.com/SAW72/AGENT-B.V./compare/pre-hackathon...hackathon/near-2026
+
+### What it does
+
+- **Policy contract** (NEAR testnet, account [`agentbv-policy-11111545.testnet`](https://testnet.nearblocks.io/address/agentbv-policy-11111545.testnet)). It records a bot attestation outcome and keeps a small blocklist. Its `check` method returns `allow`, `warn`, or `block` with reasons before an agent spends. It can also enforce a per-agent spend limit.
+- **Agent wrapper.** It signs only with a function-call access key scoped to the policy contract. On `block` it refuses to sign. On `warn` it stops and asks a human.
+- **Attack demo.** A prompt-injected agent tries to pay a known-bad account and gets stopped. The demo agent is a deterministic script, not an LLM. The run writes a log you can compare with the sample in `near/demo/sample-attack.log`.
+
+### Key limits (why a function-call key)
+
+The agent never holds a full-access key. Per the [NEAR access keys docs](https://docs.near.org/protocol/accounts-contracts/access-keys), a function-call key:
+- can call only one contract (its `receiver_id`);
+- cannot attach NEAR token transfers;
+- cannot add or delete keys, or delete the account.
+
+When its gas allowance runs out, the key stops working, and adding NEAR to the account does not refill it. So a hijacked agent can, at worst, call the policy contract until its allowance is spent.
+
+### Judge steps (do X, see Y)
+
+1. **Do:** `git clone https://github.com/SAW72/AGENT-B.V. && cd AGENT-B.V. && git checkout hackathon-submission && cd near`
+   **See:** this README, the `contract/`, `agent/`, and `demo/` folders, and the compare link above.
+2. **Do:** install the toolchain (Rust via rustup, which picks up the pinned 1.86.0 toolchain and `wasm32-unknown-unknown` target from `contract/rust-toolchain.toml`, and Node 22) and run `cd agent && npm ci` then `cd ../contract && cargo test && cd ../agent && npm test && npm run test:sandbox`.
+   **See:** all tests pass, including the allow, warn, and block policy cases.
+3. **Do:** `cd agent && npm run view` (read-only, no keys) against `agentbv-policy-11111545.testnet` (already deployed), or follow `near/DEPLOY.md` to deploy your own using a free testnet faucet account.
+   **See:** the stored attestation outcome and blocklist entries.
+4. **Do:** `cd agent && npm run demo:attack` (needs the agent's function-call key, so run it on your own copy from `near/DEPLOY.md`; without one, open the testnet transaction links in `near/demo/sample-attack.log`)
+   **See:** the wrapper refuses to sign with reason `block`, and `near/demo/out/attack.log` matches `near/demo/sample-attack.log`, ignoring timestamps, transaction hashes, and account ids (if you deployed your own copy with `near/DEPLOY.md`).
+5. **Do:** `cd agent && npm run demo:warn` (same key requirement as step 4; sample in `near/demo/sample-warn.log`)
+   **See:** the wrapper does not sign on its own, and it prints a request for human approval.
+6. **Do:** `cd agent && npm run keys` for the agent account
+   **See:** the agent's key is a FunctionCall key whose `receiver_id` is `agentbv-policy-11111545.testnet`, and the agent uses no FullAccess key.
+
+### Out of scope
+
+The entry leaves out NEAR mainnet, NEAR Intents (they have no testnet), TEE attestation, porting the Base Sepolia escrow and dispute panel to NEAR, and any UI.
+
+### License
+
+Dual license: AGPL-3.0-only or a commercial license from Steward of the King LLC. See `LICENSE`.
+
 ## License
 
 **Dual license:** [AGPL-3.0-only](LICENSE.AGPL-3.0) (public default) **or** a [paid commercial proprietary license](LICENSE.COMMERCIAL) from Steward of the King LLC.

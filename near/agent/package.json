@@ -1,0 +1,26 @@
+{
+  "name": "agent-bv-near-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NEAR testnet agent wrapper, attack demo and sandbox tests",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/unit.test.mjs",
+    "test:sandbox": "bash scripts/sandbox-test.sh",
+    "view": "node scripts/view.mjs",
+    "keys": "node scripts/key-info.mjs",
+    "demo:attack": "node demo/attack.mjs",
+    "demo:warn": "node demo/warn.mjs",
+    "deploy": "bash ../scripts/deploy.sh"
+  },
+  "dependencies": {
+    "near-api-js": "^7.5.3"
+  },
+  "devDependencies": {
+    "near-workspaces": "^5.0.0"
+  }
+}
