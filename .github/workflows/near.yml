@@ -1,0 +1,51 @@
+name: NEAR policy (testnet entry)
+
+# Tests for the NEAR HACKATHON entry under near/. Runs only when near/ or this
+# file changes. No secrets, no network keys, no deploys: unit tests plus a local
+# nearcore sandbox. Nothing here talks to NEAR testnet or mainnet.
+on:
+  push:
+    branches: [main, "hackathon/near-2026"]
+    paths: ["near/**", ".github/workflows/near.yml"]
+  pull_request:
+    paths: ["near/**", ".github/workflows/near.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: near/contract
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Contract unit tests
+        run: cargo test --locked
+      - name: Build Wasm
+        run: cargo build --locked --release --target wasm32-unknown-unknown
+
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: near/agent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Wrapper unit tests (no network)
+        run: npm test
+      - name: Sandbox integration tests (local nearcore 2.14.0, committed wasm)
+        run: npm run test:sandbox

@@ -1,0 +1,33 @@
+{
+  "network": "testnet",
+  "policy_contract": "agentbv-policy-11111545.testnet",
+  "agent": "agentbv-agent-11111545.testnet",
+  "merchant_attested_pass": "agentbv-merchant-11111545.testnet",
+  "drainer_blocklisted": "agentbv-drainer-11111545.testnet",
+  "badbot_attested_fail": "agentbv-badbot-11111545.testnet",
+  "agent_function_call_public_key": "ed25519:8JKj4NM9HMUMjTyZMXrg4VyATKtw7UWGLDTgbz86dDTm",
+  "agent_key_scope": {
+    "receiver_id": "agentbv-policy-11111545.testnet",
+    "method_names": [
+      "request_payment"
+    ],
+    "allowance_yocto": "250000000000000000000000"
+  },
+  "agent_limit_yocto": "50000000000000000000000",
+  "warn_above_yocto": "20000000000000000000000",
+  "wasm_sha256": "87535f80d803490694a1fc30e71045ec470a45c63e84b38bc0cd44a301944774",
+  "wasm_bytes": 422523,
+  "txs": {
+    "deploy_and_init": "2he2GAkgqNEUZwfNtfRFgnxyvo33GokooJp1YTyseW6M",
+    "policy_setup": "2j6Kn91S5qxzyK6TiMc7PpVtBKXs9UHBGSpsALmmhrKn",
+    "agent_add_fc_key": "8gNaatqLk2gYBXzop74W5jQJEX1e5KjZdo2XWtB1W2et",
+    "agent_delete_full_access_key": "QoZBid6ZzJKV4p5XGgAr5keUYHsDd6LHJyA9uF6ufGL"
+  },
+  "explorer": {
+    "deploy_and_init": "https://testnet.nearblocks.io/txns/2he2GAkgqNEUZwfNtfRFgnxyvo33GokooJp1YTyseW6M",
+    "policy_setup": "https://testnet.nearblocks.io/txns/2j6Kn91S5qxzyK6TiMc7PpVtBKXs9UHBGSpsALmmhrKn",
+    "agent_add_fc_key": "https://testnet.nearblocks.io/txns/8gNaatqLk2gYBXzop74W5jQJEX1e5KjZdo2XWtB1W2et",
+    "agent_delete_full_access_key": "https://testnet.nearblocks.io/txns/QoZBid6ZzJKV4p5XGgAr5keUYHsDd6LHJyA9uF6ufGL"
+  },
+  "deployed_at": "2026-11-11T20:47:20.618Z"
+}

@@ -1,0 +1,6 @@
+[toolchain]
+# 1.86 is pinned on purpose: newer rustc emits Wasm features (bulk-memory etc.)
+# that older NEAR runtimes reject when building without cargo-near.
+channel = "1.86.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
