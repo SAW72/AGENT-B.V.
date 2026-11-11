@@ -19,7 +19,7 @@ Until the `hackathon-submission` tag is set, compare against the working branch:
 
 - **Policy contract** (NEAR testnet, account [`agentbv-policy-11111545.testnet`](https://testnet.nearblocks.io/address/agentbv-policy-11111545.testnet)). It records a bot attestation outcome and keeps a small blocklist. Its `check` method returns `allow`, `warn`, or `block` with reasons before an agent spends. It can also enforce a per-agent spend limit.
 - **Agent wrapper.** It signs only with a function-call access key scoped to the policy contract. On `block` it refuses to sign. On `warn` it stops and asks a human.
-- **Attack demo.** A prompt-injected agent tries to pay a known-bad account and gets stopped. The run writes a log you can compare with the sample in `near/demo/sample-attack.log`.
+- **Attack demo.** A prompt-injected agent tries to pay a known-bad account and gets stopped. The demo agent is a deterministic script, not an LLM. The run writes a log you can compare with the sample in `near/demo/sample-attack.log`.
 
 ### Key limits (why a function-call key)
 
@@ -39,7 +39,7 @@ When its gas allowance runs out, the key stops working, and adding NEAR to the a
 3. **Do:** `cd agent && npm run view` (read-only, no keys) against `agentbv-policy-11111545.testnet` (already deployed), or follow `near/DEPLOY.md` to deploy your own using a free testnet faucet account.
    **See:** the stored attestation outcome and blocklist entries.
 4. **Do:** `cd agent && npm run demo:attack` (needs the agent's function-call key, so run it on your own copy from `near/DEPLOY.md`; without one, open the testnet transaction links in `near/demo/sample-attack.log`)
-   **See:** the wrapper refuses to sign with reason `block`, and `near/demo/out/attack.log` matches `near/demo/sample-attack.log`, ignoring timestamps and transaction hashes.
+   **See:** the wrapper refuses to sign with reason `block`, and `near/demo/out/attack.log` matches `near/demo/sample-attack.log`, ignoring timestamps, transaction hashes, and account ids (if you deployed your own copy with `near/DEPLOY.md`).
 5. **Do:** `cd agent && npm run demo:warn` (same key requirement as step 4; sample in `near/demo/sample-warn.log`)
    **See:** the wrapper does not sign on its own, and it prints a request for human approval.
 6. **Do:** `cd agent && npm run keys` for the agent account
