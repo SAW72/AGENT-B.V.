@@ -29,6 +29,7 @@ import {
   screenFromStored,
   swapSanctionsCache,
 } from "./sanctions.mjs";
+import { createPointsEnforcer } from "./enforcer.mjs";
 import { evaluateChain, expiryAccepts, linkHash, recoverSigner } from "./signature.mjs";
 
 const RPC_NOT_BEFORE_KEY = "rpc_not_before";
@@ -252,6 +253,7 @@ export class Indexer {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec(SCHEMA);
     this.lastSkips = [];
+    this.enforcerFlags = [];
     if (!this.#metaGet("configured")) {
       const finalizedBlock = options.finalizedBlock;
       if (!Number.isInteger(finalizedBlock) || finalizedBlock < 0) throw new PointsError("bad_finalized");
@@ -786,6 +788,7 @@ export class Indexer {
     }));
 
     const skips = [];
+    const enforcer = createPointsEnforcer();
     for (const item of attribution.skipped) skips.push(item);
     for (const item of attribution.withheld) skips.push(item);
     for (const item of attribution.deferred) skips.push({ reason: item.reason, txHash: item.txHash, logIndex: item.logIndex });
@@ -884,6 +887,13 @@ export class Indexer {
         }
         const gate = gateReason(candidate, this.gates, pairDay, pairLife);
         if (gate) {
+          if (gate === "same_pair_day" || gate === "same_pair_lifetime") {
+            enforcer.flag({
+              kind: "PAIR_CAP",
+              wallet: candidate.wallet,
+              refs: [candidate.txHash, String(candidate.logIndex)],
+            });
+          }
           skips.push({ reason: gate, txHash: candidate.txHash, logIndex: candidate.logIndex, wallet: candidate.wallet });
           continue;
         }
@@ -933,6 +943,7 @@ export class Indexer {
       rows.forEach((row, index) => renumber.run(index + 1, row.rowid));
       this.db.exec("COMMIT");
       this.lastSkips = skips;
+      this.enforcerFlags = enforcer.flags();
     } catch (error) {
       try {
         this.db.exec("ROLLBACK");
