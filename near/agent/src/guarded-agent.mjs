@@ -1,4 +1,4 @@
-// Agent-BV guarded agent wrapper (NEAR testnet only).
+// Guarded agent wrapper for the NEAR testnet policy contract (NEAR testnet only).
 //
 // Every payment an AI agent wants to make goes through `pay()`:
 //   1. ask the policy contract (`check`, a free view call) for allow / warn / block;

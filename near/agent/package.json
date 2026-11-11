@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Agent-BV NEAR testnet agent wrapper, attack demo and sandbox tests",
+  "description": "NEAR testnet agent wrapper, attack demo and sandbox tests",
   "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=20"
