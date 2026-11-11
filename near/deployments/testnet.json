@@ -29,5 +29,21 @@
     "agent_add_fc_key": "https://testnet.nearblocks.io/txns/8gNaatqLk2gYBXzop74W5jQJEX1e5KjZdo2XWtB1W2et",
     "agent_delete_full_access_key": "https://testnet.nearblocks.io/txns/QoZBid6ZzJKV4p5XGgAr5keUYHsDd6LHJyA9uF6ufGL"
   },
-  "deployed_at": "2026-11-11T20:47:20.618Z"
+  "deployed_at": "2026-11-11T20:47:20.618Z",
+  "verification": {
+    "checked_at": "2026-11-11T21:49:01.361Z",
+    "onchain_code_hash_base58": "A7FmwGtmJySVv747hysa72DZPJQme8xDFXF5Ztz3QYP5",
+    "matches_wasm_sha256": "87535f80d803490694a1fc30e71045ec470a45c63e84b38bc0cd44a301944774",
+    "redeployed": false,
+    "note": "near/contract/res/agent_bv_policy.wasm rebuilt from source (rustc 1.86.0, cargo build --release --target wasm32-unknown-unknown) is byte-identical to the deployed code; no redeploy needed",
+    "agent_access_keys": "one key only: the function-call key above (request_payment on the policy contract); no full-access key"
+  },
+  "latest_attack_demo": {
+    "log": "near/demo/sample-attack.log",
+    "result": "PASS",
+    "allow_tx": "8s5gS4wxgGbibqWc4HGK5DGPkxdpaoVnt3VTrMb2kbc7",
+    "block_tx": "8v8kFTTaP83CUXji4DHK2LhstGg2cU6Y4qRomveuydMP",
+    "block_tx_explorer": "https://testnet.nearblocks.io/txns/8v8kFTTaP83CUXji4DHK2LhstGg2cU6Y4qRomveuydMP",
+    "block_tx_block_hash": "BEee8kbBpffkC2orov8xPzRGbpLGt3qysQxuCN92Ceri"
+  }
 }

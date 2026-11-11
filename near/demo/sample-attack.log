@@ -2,14 +2,14 @@
   "demo": "agent-bv near attack demo",
   "network": "testnet",
   "rpc": "https://test.rpc.fastnear.com",
-  "run_at": "2026-11-11T20:48:18.639Z",
+  "run_at": "2026-11-11T21:48:25.187Z",
   "policy_contract": "agentbv-policy-11111545.testnet",
   "policy_explorer": "https://testnet.nearblocks.io/address/agentbv-policy-11111545.testnet",
   "agent": "agentbv-agent-11111545.testnet",
   "agent_key": {
     "public_key": "ed25519:8JKj4NM9HMUMjTyZMXrg4VyATKtw7UWGLDTgbz86dDTm",
     "permission": {
-      "allowance": "250000000000000000000000",
+      "allowance": "249461237300465700000000",
       "method_names": [
         "request_payment"
       ],
@@ -56,8 +56,8 @@
       },
       "action": "signed_request_payment",
       "signed": true,
-      "tx_hash": "9L66Mc4vvAPhw64hRZjDpnSAggwks6Qohvna18q85HXS",
-      "explorer": "https://testnet.nearblocks.io/txns/9L66Mc4vvAPhw64hRZjDpnSAggwks6Qohvna18q85HXS",
+      "tx_hash": "8s5gS4wxgGbibqWc4HGK5DGPkxdpaoVnt3VTrMb2kbc7",
+      "explorer": "https://testnet.nearblocks.io/txns/8s5gS4wxgGbibqWc4HGK5DGPkxdpaoVnt3VTrMb2kbc7",
       "onchain_result": {
         "verdict": "allow",
         "reasons": [
@@ -111,8 +111,8 @@
       "title": "hijacked agent bypasses the wrapper and calls request_payment directly",
       "receiver": "agentbv-drainer-11111545.testnet",
       "amount_yocto": "40000000000000000000000",
-      "tx_hash": "D9AB2Bkd4XxNoXh3bdStzLcKhJM2CJ37cefw3TxDsoS9",
-      "explorer": "https://testnet.nearblocks.io/txns/D9AB2Bkd4XxNoXh3bdStzLcKhJM2CJ37cefw3TxDsoS9",
+      "tx_hash": "8v8kFTTaP83CUXji4DHK2LhstGg2cU6Y4qRomveuydMP",
+      "explorer": "https://testnet.nearblocks.io/txns/8v8kFTTaP83CUXji4DHK2LhstGg2cU6Y4qRomveuydMP",
       "onchain_result": {
         "verdict": "block",
         "reasons": [
@@ -144,16 +144,16 @@
   "state_before": {
     "agent": {
       "limit": "50000000000000000000000",
-      "spent": "0"
+      "spent": "1000000000000000000000"
     },
-    "blocked_attempts": 0
+    "blocked_attempts": 1
   },
   "state_after": {
     "agent": {
       "limit": "50000000000000000000000",
-      "spent": "1000000000000000000000"
+      "spent": "2000000000000000000000"
     },
-    "blocked_attempts": 1,
+    "blocked_attempts": 2,
     "drainer_still_blocklisted": true
   },
   "expected_outcomes": [
