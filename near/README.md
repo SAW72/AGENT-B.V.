@@ -68,6 +68,8 @@ The first `cargo test` compiles near-sdk's unit-testing runtime and is slow (min
 
 ## Deploy your own (testnet, free)
 
+Full steps: [DEPLOY.md](DEPLOY.md).
+
 ```bash
 cd near && ./scripts/deploy.sh      # needs `near` (near-cli-rs) on PATH
 cd agent && npm run demo:attack && npm run demo:warn

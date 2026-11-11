@@ -15,7 +15,7 @@
     "keys": "node scripts/key-info.mjs",
     "demo:attack": "node demo/attack.mjs",
     "demo:warn": "node demo/warn.mjs",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "bash ../scripts/deploy.sh"
   },
   "dependencies": {
     "near-api-js": "^7.5.3"
