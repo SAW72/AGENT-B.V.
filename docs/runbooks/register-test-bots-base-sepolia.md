@@ -10,7 +10,7 @@ Reads below were taken against `https://sepolia.base.org` (chain id `84532`). Ow
 
 ## Hard stops
 
-1. Spencer sends the two `cast send` registration transactions himself, from `0x10CC9474b45625ADfd05C209f2518023484878D9`.
+1. Live Vault owner is timelock `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`, 24h delay (`getMinDelay` 86400), read at block 58453015. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules on `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`, waits 24h, then executes. The old direct registration `cast send` is superseded.
 2. Agent sessions stop after `cast call`, `cast estimate`, `cast code`, `cast storage`, `cast logs`, and `cast calldata`. They do not run `cast send`, `--broadcast`, or any command with a private key.
 3. Every send template uses `--account <his-keystore>`. None of them contain `--private-key`.
 4. The chain is Base Sepolia only. The RPC is `https://sepolia.base.org`.
@@ -44,15 +44,9 @@ Selector `0xb4560e96`. `Tier.Financial` is enum value `3` (`None = 0`, `Chat = 1
 
 There is no stake, bond, or fee on this call. The argument list has no token and no amount. The function is not payable: a call with `msg.value` of 1 wei reverts with empty revert data. `deployments/base-sepolia.json` leaves `BVT.address` null, and `Vault.register` does not call `BVTFeeRouter`. Spencer does not approve a token and does not attach ETH to the registration.
 
-`onlyOwner` checks `msg.sender == owner()`. On chain that owner is `0x10CC9474b45625ADfd05C209f2518023484878D9`. `pendingOwner()` is the zero address. The same account owns the live Denylist and the live escrow, and it is the escrow's immutable `governance`.
+`onlyOwner` checks `msg.sender == owner()`. On chain that owner is timelock `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`, 24h delay (`getMinDelay` 86400), read at block 58453015. `pendingOwner()` is the zero address. The same account owns the live Denylist and the live escrow, and it is the escrow's immutable `governance`. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules on `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`, waits 24h, then executes.
 
-That account is an EIP-7702-delegated EOA. Its code is 23 bytes:
-
-```text
-0xef010063c0c19a282a1b52b07dd5a65b58948a07dae32b
-```
-
-The address after `0xef0100` is `0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B` (the delegate recorded in `test/LiveDenylistVault.t.sol`). `getMinDelay()` reverts. `schedule(address,uint256,bytes,bytes32,bytes32,uint256)` reverts. There is no `TimelockController` delay. A transaction from this account runs immediately.
+superseded, see owner path above.
 
 `register` also calls `denylist.check(weightHash, behaviorSig, promptHash)` and requires `MatchLevel.None` (`0`). Any other level reverts with the string `bot is denylisted`. The live Denylist is `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`, which is what `Vault.denylist()` returns. Both test fingerprints below return `0`.
 
@@ -92,7 +86,7 @@ Bot A is the payer bot. Its operator is Spencer's wallet, and that same wallet s
 | Vault | `0x1463D664fA467FBCDA4B05443434494f05e565bc` |
 | Denylist | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` |
 | BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |
-| CORE_TIMELOCK (registration sender) | `0x10CC9474b45625ADfd05C209f2518023484878D9` |
+| CORE_TIMELOCK (registration sender) | `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33` |
 | Payer operator, first smoke | `<SPENCER_PAYER_WALLET>` |
 | Payee operator | `<REAL_PAYEE_WALLET>` |
 | Relayer, optional later mode only | `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` |
@@ -146,7 +140,7 @@ export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
 export VAULT=0x1463D664fA467FBCDA4B05443434494f05e565bc
 export DENYLIST=0xeE76876bECcFc1B58fC06fF4E654a517d784B224
 export ESCROW=0x3d660502D75f1e97b08c110255921b437A3C4C42
-export CORE_TIMELOCK=0x10CC9474b45625ADfd05C209f2518023484878D9
+export CORE_TIMELOCK=0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33
 export PAYER_OPERATOR=<SPENCER_PAYER_WALLET>
 export PAYEE_OPERATOR=<REAL_PAYEE_WALLET>
 
@@ -186,11 +180,11 @@ Observed in this session:
 
 ```text
 84532
-0x10CC9474b45625ADfd05C209f2518023484878D9
+superseded, see owner path above
 0x0000000000000000000000000000000000000000
 0xeE76876bECcFc1B58fC06fF4E654a517d784B224
 3
-0xef010063c0c19a282a1b52b07dd5a65b58948a07dae32b
+superseded, see owner path above
 ```
 
 Both `bots` rows were `(0x0, 0x0, 0x0, 0, false, 0)`. Both `operator` reads were `0x0000000000000000000000000000000000000000`.
@@ -348,7 +342,7 @@ On the empty Vault this reverts `InvalidParties` (`0xb6e500fe`). The [simulation
 
 7. **Stop. Do not send until both prerequisite boxes are ticked, the echoed addresses are the wallets you mean, and you type `YES`. `PAYER_OPERATOR` and `PAYEE_OPERATOR` have to be real checksummed wallets. An unedited export of `<SPENCER_PAYER_WALLET>` or `<REAL_PAYEE_WALLET>` fails in the shell. The guard rejects the `bEEF` placeholder, the zero address, the simulation stand-ins, the live escrow, the retired escrow, the sample senders from `script/`, the live Vault, the live Denylist, DisputePanel, the old Vault, Liability `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, the old Denylist `0xF0f260967D377E07Bdd7840862508ddB23C012b8`, the relayer as either operator, and using one address for both operators. A blocklisted address fails here even when the clear step was skipped. Sending a stand-in binds that address as a party.**
 
-Paste this block as one unit. It defines `ops_guard` again so a fresh shell cannot send without it. The two `echo` lines show the addresses that will be bound. Before the chain check, a missing `cast` prints `cast is not installed` and skips both sends. It does not print `wrong chain`. The chain check reads `cast chain-id` and skips both sends unless the RPC is Base Sepolia `84532`. The prompt uses `printf` and `read -r`, which behave the same in bash and in zsh. Do not switch it to `read -p`: zsh treats `-p` as a coprocess flag. Type `YES` only after the echoed addresses are right. Any other answer, or a failing guard, skips both `cast send` commands and leaves the shell open. A wrong chain, an empty chain id, or a `cast chain-id` error skips both sends, calls the wallet 0 times, and leaves the shell open. Replace `<his-keystore>` with the `CORE_TIMELOCK` account name before pasting. `cast wallet address` for that account must be `0x10CC9474b45625ADfd05C209f2518023484878D9`. That keystore is the 7702 EOA. There is no schedule step.
+Paste this block as one unit. It defines `ops_guard` again so a fresh shell cannot send without it. The two `echo` lines show the addresses that will be bound. Before the chain check, a missing `cast` prints `cast is not installed` and skips both sends. It does not print `wrong chain`. The chain check reads `cast chain-id` and skips both sends unless the RPC is Base Sepolia `84532`. The prompt uses `printf` and `read -r`, which behave the same in bash and in zsh. Do not switch it to `read -p`: zsh treats `-p` as a coprocess flag. Type `YES` only after the echoed addresses are right. Any other answer, or a failing guard, skips both `cast send` commands and leaves the shell open. A wrong chain, an empty chain id, or a `cast chain-id` error skips both sends, calls the wallet 0 times, and leaves the shell open. superseded, see owner path above.
 
 ```bash
 ops_guard() {
@@ -454,7 +448,7 @@ if [ "$skip_send" = 0 ]; then
 fi
 ```
 
-Send Bot A first, wait for the receipt, then send Bot B. Each registration comes from `0x10CC9474b45625ADfd05C209f2518023484878D9`. Re-estimate after the real wallets are filled in. A simulation-only stand-in at block `47392348` used about `177900` gas for each register. That figure is not a substitute for the estimate with Spencer's addresses.
+superseded, see owner path above. Re-estimate after the real wallets are filled in. A simulation-only stand-in at block `47392348` used about `177900` gas for each register. That figure is not a substitute for the estimate with Spencer's addresses.
 
 8. Read the bots back. Tier `3` is Financial. `active` is true. `registeredAt` is the block timestamp, non-zero. Operators match the addresses Spencer passed.
 
@@ -715,9 +709,9 @@ Retired by #46 (code path removed), not rotated. Tick only after CUTOVER.md (#51
 
 The first smoke therefore sets `PAYER_OPERATOR` to Spencer's own wallet (`<SPENCER_PAYER_WALLET>`). He calls `createEscrow` from that wallet. `msg.sender` has to equal `operator(payerBotId)`. The pasted guard rejects the relayer as either operator. Retired by #46 (code path removed), not rotated. Tick only after CUTOVER.md (#51) step 1 has deleted the old values on Render, GitHub, and Cloudflare.
 
-`CORE_TIMELOCK` has no delay. The 7702 delegation executes the owner call in the same transaction Spencer signs. The same key can `register`, `setOperator`, and `burn` on this Vault, and it owns the Denylist and the escrow. A bad signature is immediate.
+superseded, see owner path above.
 
-`register` is permanent for a `botId`. `burn` clears `active` and does not free the id. A wrong id cannot be registered again. `setOperator` can point a stored bot at a new non-zero account, and that call is also `onlyOwner` from `0x10CC9474b45625ADfd05C209f2518023484878D9`.
+`register` is permanent for a `botId`. `burn` clears `active` and does not free the id. A wrong id cannot be registered again. `setOperator` can point a stored bot at a new non-zero account, and that call is also `onlyOwner`. superseded, see owner path above.
 
 The payer operator and the payee operator have to be different addresses. `createEscrow` reverts `InvalidParties` when `msg.sender == payee`. `ops_guard` returns 1 when they match, when either one is the relayer, when either one is blocklisted, and when `cast` is missing. Those failures leave the shell open. A missing `cast` on either send paste prints `cast is not installed` and does not say `wrong chain`. A chain id other than `84532`, an empty chain id, or a `cast chain-id` error skips the send, calls the wallet 0 times, and leaves the shell open.
 
