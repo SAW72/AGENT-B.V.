@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.stamp_api import DENYLIST, HISTORY, REGISTRY, app
+from api.stamp_api import register_and_verify_next
 from bot2bot.handshake import HandshakeClient, StampClient, verify_counterparty
 from pipeline.security import canonical_fingerprint_hash
 
@@ -89,8 +90,70 @@ def test_real_api_tier_too_low():
 
 
 def test_real_api_unknown_bot():
-    ok, reason = verify_counterparty(_stamp(), "missing")
+    client = _client()
+    ok, reason = verify_counterparty(_stamp(client), "missing")
     assert not ok and reason == "unknown_bot"
+    result = HandshakeClient(_stamp(client)).verify("missing")
+    assert result.allowed is False
+    assert result.reason == "unknown_bot"
+    direct = client.post("/v1/access/check", json={"bot_id": "missing"})
+    assert direct.status_code == 200
+    assert result.next == direct.json()["next"]
+    assert result.next == register_and_verify_next()
+    encoded = result.to_json()
+    assert '"action": "register_and_verify"' in encoded
+
+
+def test_unknown_bot_carries_access_next_through():
+    marker = {"action": "register_and_verify", "marker": "from-api"}
+
+    class Stub:
+        def get_stamp(self, bot_id, attestation=True):
+            raise KeyError(bot_id)
+
+        def access_check(self, bot_id, permissions):
+            return {"allowed": False, "reason": "unknown_bot", "next": marker}
+
+    result = HandshakeClient(Stub()).verify("missing")
+    assert result.reason == "unknown_bot"
+    assert result.next is marker
+
+
+def test_unknown_bot_uses_pinned_next_when_access_omits_it():
+    class Stub:
+        def get_stamp(self, bot_id, attestation=True):
+            raise KeyError(bot_id)
+
+        def access_check(self, bot_id, permissions):
+            return {"allowed": False, "reason": "unknown_bot"}
+
+    result = HandshakeClient(Stub()).verify("missing")
+    assert result.next == register_and_verify_next()
+
+
+def test_stamp_client_sends_optional_agent_id():
+    captured = {}
+
+    class Probe:
+        def post(self, url, json=None, headers=None, timeout=None):
+            captured["json"] = json
+
+            class R:
+                status_code = 200
+
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"allowed": False, "reason": "unknown_bot"}
+
+            return R()
+
+    stamp = StampClient("http://testserver", api_key="", session=Probe())
+    stamp.access_check("missing", ["transfer"], agent_id="15")
+    assert captured["json"]["agent_id"] == "15"
+    stamp.access_check("missing", ["transfer"])
+    assert "agent_id" not in captured["json"]
 
 
 def test_stamp_client_sends_env_api_key(monkeypatch):

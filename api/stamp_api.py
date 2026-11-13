@@ -34,7 +34,8 @@ import json
 import os
 import secrets
 import time
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -70,6 +71,30 @@ STAMP_LIMITATIONS = [
 LEGAL_REF = "/v1/disclaimer"
 ATTESTATION_STATUS = "stub_not_hardware_attested"
 
+# Existing Base Sepolia ERC-8004 Identity Registry. No new registry is deployed.
+_PINNED_IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+_ERC8004_PATH = Path(__file__).resolve().parents[1] / "config" / "erc8004-base-sepolia.json"
+_ERC8004 = json.loads(_ERC8004_PATH.read_text(encoding="utf-8"))
+if _ERC8004.get("chainId") != 84532:
+    raise RuntimeError("ERC-8004 config must be Base Sepolia chain id 84532")
+if _ERC8004.get("agentRegistry") != f"eip155:84532:{_PINNED_IDENTITY_REGISTRY}":
+    raise RuntimeError("ERC-8004 config must use the existing Base Sepolia Identity Registry")
+if _ERC8004.get("registerFunction") != "register(string)":
+    raise RuntimeError("ERC-8004 register helper must be register(string)")
+
+
+def register_and_verify_next() -> Dict[str, Any]:
+    """Onboarding for a bot that has no agent id. Output only. Nothing is signed or sent."""
+    return {
+        "action": "register_and_verify",
+        "register": {
+            "agentRegistry": _ERC8004["agentRegistry"],
+            "function": _ERC8004["registerFunction"],
+        },
+        "verify_url": _ERC8004["verifyUrl"],
+        "retry": _ERC8004["retry"],
+    }
+
 app = FastAPI(
     title="Agent-BV (Agent Auditor) Stamp API",
     version="0.2.0",
@@ -101,6 +126,8 @@ class AccessCheck(BaseModel):
     bot_id: str
     requested_permissions: List[str] = []
     policy_id: Optional[str] = None
+    # Optional ERC-8004 agent id. Omitted for a bot that has not registered yet.
+    agent_id: Optional[Union[str, int]] = None
 
 
 class HistoryAppend(BaseModel):
@@ -167,13 +194,21 @@ def _stamp(record: Dict[str, Any], *, require_attestation: bool = False) -> Dict
     return payload
 
 
-def _access_payload(allowed: bool, reason: str, required_tier: int) -> Dict[str, Any]:
-    return {
+def _access_payload(
+    allowed: bool,
+    reason: str,
+    required_tier: int,
+    nxt: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
         "allowed": allowed,
         "reason": reason,
         "required_tier": required_tier,
         "disclaimer": DISCLAIMER_TEXT,
     }
+    if nxt is not None:
+        payload["next"] = nxt
+    return payload
 
 
 @app.get("/health")
@@ -265,7 +300,8 @@ def append_history(bot_id: str, body: HistoryAppend, _: None = Depends(require_o
 def access_check(body: AccessCheck):
     rec = REGISTRY.get(body.bot_id)
     if not rec:
-        return _access_payload(False, "unknown_bot", 1)
+        # agent_id is accepted and optional. It does not admit an unknown bot.
+        return _access_payload(False, "unknown_bot", 1, register_and_verify_next())
     status = DENYLIST.get(rec["fingerprint_hash"], "clean")
     if status != "clean":
         return _access_payload(False, f"denylisted:{status}", rec["tier"])
