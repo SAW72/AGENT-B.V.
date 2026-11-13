@@ -8,7 +8,9 @@ import { DenylistLookup } from "./DenylistLookup"
 import { EscrowPanel } from "./EscrowPanel"
 import { PendingStrip, FlowPreview } from "./FlowPreview"
 import { ChainBanner, HeaderNetwork, HomeScreen } from "./homeChrome"
-import { useWalletRoute, type FlowId } from "./routes"
+import { IDENTITY_GATEWAY_PATH, isIdentityGatewayPath } from "./identity8004"
+import { IdentityGateway } from "./IdentityGateway"
+import { navigate, useWalletRoute, walletHome, type FlowId } from "./routes"
 import { useVoteSeat, voteTaskReason, VoteScreen } from "./VoteScreen"
 import { WithdrawScreen, withdrawReadMode } from "./WithdrawScreen"
 import { errorText, formatEth, shortAddress } from "./format"
@@ -280,6 +282,7 @@ export function App() {
   const readiness = walletReadiness(account.isConnected, walletChainId)
   const [systemOpen, setSystemOpen] = useState(false)
   const route = useWalletRoute()
+  const onIdentity = isIdentityGatewayPath(typeof window === "undefined" ? "http://localhost/" : window.location.href)
   const voteReason = voteTaskReason(useVoteSeat(ADDRESSES.disputePanel), account.address)
 
   return (
@@ -300,9 +303,30 @@ export function App() {
       </header>
       <p className="lede">
         Base Sepolia only · chain id {BASE_SEPOLIA_CHAIN_ID}
+        {" · "}
+        <a
+          href={walletHome()}
+          onClick={(event) => {
+            event.preventDefault()
+            navigate(walletHome())
+          }}
+        >
+          Wallet
+        </a>
+        {" · "}
+        <a
+          href={IDENTITY_GATEWAY_PATH}
+          data-testid="identity-nav"
+          onClick={(event) => {
+            event.preventDefault()
+            navigate(IDENTITY_GATEWAY_PATH)
+          }}
+        >
+          Identity
+        </a>
       </p>
 
-      {route.pageNotice ? (
+      {!onIdentity && route.pageNotice ? (
         <p className="banner" role="status" data-testid="url-page-notice">
           {route.pageNotice}
         </p>
@@ -316,7 +340,9 @@ export function App() {
       {!rpcFailed && !guard.ok && guard.code !== "rpc-pending" ? <ChainBanner reason={guard.reason} /> : null}
 
       <PendingStrip />
-      {route.flow == null ? (
+      {onIdentity ? (
+        <IdentityGateway client={client} readsEnabled={guard.ok} blockedReason={blockedReason} />
+      ) : route.flow == null ? (
         <HomeScreen voteReason={voteReason} />
       ) : (
         <GuidedFlow flow={route.flow} reads={withdrawReadMode(chainQuery.isPending, guard.ok)} />
