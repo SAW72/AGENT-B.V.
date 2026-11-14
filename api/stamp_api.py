@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -127,7 +128,7 @@ class AccessCheck(BaseModel):
     requested_permissions: List[str] = []
     policy_id: Optional[str] = None
     # Optional ERC-8004 agent id. Omitted for a bot that has not registered yet.
-    # A decimal integer is stored and ignored. Anything else is a 400.
+    # An ASCII decimal integer in [0, 2**256) is stored and ignored. Anything else is a 400.
     agent_id: Optional[Any] = None
 
 
@@ -297,13 +298,17 @@ def append_history(bot_id: str, body: HistoryAppend, _: None = Depends(require_o
     return {"appended": True, "count": len(bucket), "entry": entry}
 
 
+_AGENT_ID_ASCII = re.compile(r"^[0-9]+$")
+_AGENT_ID_MAX = 2**256
+
+
 def _is_decimal_agent_id(agent_id: Any) -> bool:
     if isinstance(agent_id, bool):
         return False
     if isinstance(agent_id, int):
-        return True
-    if isinstance(agent_id, str) and agent_id.strip().isdigit():
-        return True
+        return 0 <= agent_id < _AGENT_ID_MAX
+    if isinstance(agent_id, str) and _AGENT_ID_ASCII.fullmatch(agent_id):
+        return 0 <= int(agent_id) < _AGENT_ID_MAX
     return False
 
 
@@ -311,7 +316,10 @@ def _require_decimal_agent_id(agent_id: Any) -> None:
     if agent_id is None:
         return
     if not _is_decimal_agent_id(agent_id):
-        raise HTTPException(status_code=400, detail="agent_id must be a decimal integer.")
+        raise HTTPException(
+            status_code=400,
+            detail="agent_id must be a decimal integer (ASCII digits only, 0 <= n < 2**256).",
+        )
 
 
 @app.post("/v1/access/check")

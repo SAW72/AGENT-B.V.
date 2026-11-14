@@ -340,9 +340,45 @@ def test_non_numeric_agent_id_is_rejected():
     assert still.json()["reason"] == "unknown_bot"
     assert "call /v1/access/check again" not in still.json()["next"]["retry"]
     negative = c.post("/v1/access/check", json={"bot_id": "no-such", "agent_id": -3})
-    assert negative.status_code == 200
-    assert negative.json()["allowed"] is False
-    assert negative.json()["reason"] == "unknown_bot"
+    assert negative.status_code == 400
+    assert "decimal integer" in negative.json()["detail"]
+
+
+def test_agent_id_ascii_uint256_bounds():
+    c = _client()
+    bot = {"bot_id": "no-id-bot"}
+
+    negative = c.post("/v1/access/check", json={**bot, "agent_id": -3})
+    assert negative.status_code == 400
+    assert "decimal integer" in negative.json()["detail"]
+
+    superscript = c.post("/v1/access/check", json={**bot, "agent_id": "\u00b2"})
+    assert superscript.status_code == 400
+    assert "decimal integer" in superscript.json()["detail"]
+
+    too_big = c.post("/v1/access/check", json={**bot, "agent_id": 2**256})
+    assert too_big.status_code == 400
+    assert "decimal integer" in too_big.json()["detail"]
+
+    max_ok = c.post("/v1/access/check", json={**bot, "agent_id": 2**256 - 1})
+    assert max_ok.status_code == 200
+    assert max_ok.json()["allowed"] is False
+    assert max_ok.json()["reason"] == "unknown_bot"
+
+    as_str = c.post("/v1/access/check", json={**bot, "agent_id": "1000"})
+    assert as_str.status_code == 200
+    assert as_str.json()["allowed"] is False
+    assert as_str.json()["reason"] == "unknown_bot"
+
+    as_int = c.post("/v1/access/check", json={**bot, "agent_id": 1000})
+    assert as_int.status_code == 200
+    assert as_int.json()["allowed"] is False
+    assert as_int.json()["reason"] == "unknown_bot"
+
+    for agent_id in (True, False):
+        bad = c.post("/v1/access/check", json={**bot, "agent_id": agent_id})
+        assert bad.status_code == 400
+        assert "decimal integer" in bad.json()["detail"]
 
 
 def test_known_bot_accepts_optional_agent_id_without_next():
