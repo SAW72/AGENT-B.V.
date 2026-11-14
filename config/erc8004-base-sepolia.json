@@ -1,0 +1,25 @@
+{
+  "chainId": 84532,
+  "identityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  "identityRegistryImpl": "0x7274e874ca62410a93bd8bf61c69d8045e399c02",
+  "agentRegistry": "eip155:84532:0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  "registerFunction": "register(string)",
+  "gatewayPath": "/app/identity",
+  "verifyUrl": "https://agent-bv.pages.dev/app/identity",
+  "basescanSite": "https://sepolia.basescan.org",
+  "retry": "The bot registers on the identity registry. The browser check is a badge. Server-side admission comes later.",
+  "eip712": {
+    "name": "Agent-BV Identity",
+    "version": "1",
+    "chainId": 84532,
+    "verifyingContract": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+    "primaryType": "AgentBVChallenge"
+  },
+  "registryEip712": {
+    "name": "ERC8004IdentityRegistry",
+    "version": "1",
+    "chainId": 84532
+  },
+  "challengeTtlSeconds": 600,
+  "challengeClockSkewSeconds": 60
+}

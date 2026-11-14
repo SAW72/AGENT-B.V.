@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 
-from api.stamp_api import HISTORY, REGISTRY, DENYLIST, app
+from api.stamp_api import HISTORY, REGISTRY, DENYLIST, app, register_and_verify_next
 from pipeline.security import canonical_fingerprint_hash
 
 OPERATOR_KEY = "test-operator-key"
@@ -291,3 +291,65 @@ def test_denylist_write_with_auth_then_public_read():
     assert "denylisted" in access.json()["reason"]
     assert "disclaimer" in access.json()
     assert "not insurance" in access.json()["disclaimer"].lower()
+    assert "next" not in access.json()
+
+
+def test_unknown_bot_stays_refused_and_returns_register_next():
+    c = _client()
+    missing = c.post("/v1/access/check", json={"bot_id": "no-id-bot"})
+    assert missing.status_code == 200
+    body = missing.json()
+    assert body["allowed"] is False
+    assert body["reason"] == "unknown_bot"
+    assert body["required_tier"] == 1
+    assert body["next"] == register_and_verify_next()
+    assert body["next"]["action"] == "register_and_verify"
+    assert body["next"]["register"] == {
+        "agentRegistry": "eip155:84532:0x8004A818BFB912233c491871b3d84c89A494BD9e",
+        "function": "register(string)",
+    }
+    assert body["next"]["verify_url"] == "https://agent-bv.pages.dev/app/identity"
+    assert body["next"]["retry"] == (
+        "The bot registers on the identity registry. The browser check is a badge. "
+        "Server-side admission comes later."
+    )
+    assert "call /v1/access/check again" not in body["next"]["retry"]
+    assert "call the access check again" not in body["next"]["retry"]
+    with_id = c.post("/v1/access/check", json={"bot_id": "no-id-bot", "agent_id": "10700"})
+    assert with_id.status_code == 200
+    assert with_id.json()["allowed"] is False
+    assert with_id.json()["next"] == body["next"]
+    numeric = c.post("/v1/access/check", json={"bot_id": "no-id-bot", "agent_id": 10700})
+    assert numeric.status_code == 200
+    assert numeric.json()["reason"] == "unknown_bot"
+
+
+def test_non_numeric_agent_id_is_rejected():
+    c = _client()
+    for agent_id in ("not-a-number", 1.5, True, ""):
+        bad = c.post("/v1/access/check", json={"bot_id": "no-id-bot", "agent_id": agent_id})
+        assert bad.status_code == 400
+        assert "decimal integer" in bad.json()["detail"]
+    c.post("/v1/bots", json=_register_body(), headers=_auth())
+    known_bad = c.post("/v1/access/check", json={"bot_id": "bot-1", "agent_id": "nope"})
+    assert known_bad.status_code == 400
+    assert "decimal integer" in known_bad.json()["detail"]
+    still = c.post("/v1/access/check", json={"bot_id": "no-such", "agent_id": 10700})
+    assert still.status_code == 200
+    assert still.json()["allowed"] is False
+    assert still.json()["reason"] == "unknown_bot"
+    assert "call /v1/access/check again" not in still.json()["next"]["retry"]
+    negative = c.post("/v1/access/check", json={"bot_id": "no-such", "agent_id": -3})
+    assert negative.status_code == 200
+    assert negative.json()["allowed"] is False
+    assert negative.json()["reason"] == "unknown_bot"
+
+
+def test_known_bot_accepts_optional_agent_id_without_next():
+    c = _client()
+    c.post("/v1/bots", json=_register_body(), headers=_auth())
+    access = c.post("/v1/access/check", json={"bot_id": "bot-1", "agent_id": "7"})
+    assert access.status_code == 200
+    assert access.json()["allowed"] is True
+    assert access.json()["reason"] == "ok"
+    assert "next" not in access.json()

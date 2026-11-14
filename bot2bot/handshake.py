@@ -122,11 +122,19 @@ class StampClient:
         self._raise_for_stamp(r, bot_id)
         return r.json()
 
-    def access_check(self, bot_id: str, permissions: List[str]) -> Dict[str, Any]:
+    def access_check(
+        self,
+        bot_id: str,
+        permissions: List[str],
+        agent_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"bot_id": bot_id, "requested_permissions": permissions}
+        if agent_id is not None and str(agent_id).strip() != "":
+            body["agent_id"] = str(agent_id)
         r = self._request(
             "post",
             "/v1/access/check",
-            json={"bot_id": bot_id, "requested_permissions": permissions},
+            json=body,
         )
         if hasattr(r, "raise_for_status"):
             r.raise_for_status()
@@ -249,18 +257,35 @@ class HandshakeResult:
     reason: str
     stamp: Dict[str, Any]
     checked_at: float
+    # Onboarding block from POST /v1/access/check. Present for an unknown bot.
+    next: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "counterparty": self.counterparty,
-                "allowed": self.allowed,
-                "reason": self.reason,
-                "stamp": self.stamp,
-                "checked_at": self.checked_at,
-            },
-            indent=2,
-        )
+        payload: Dict[str, Any] = {
+            "counterparty": self.counterparty,
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "stamp": self.stamp,
+            "checked_at": self.checked_at,
+        }
+        if self.next is not None:
+            payload["next"] = self.next
+        return json.dumps(payload, indent=2)
+
+
+def _next_from_access(stamp: StampClient, bot_id: str, permissions: List[str]) -> Dict[str, Any]:
+    """Copy `next` from the access check. Fall back to the pinned registry block."""
+    from api.stamp_api import register_and_verify_next
+
+    access_check = getattr(stamp, "access_check", None)
+    if callable(access_check):
+        try:
+            access = access_check(bot_id, permissions)
+        except Exception:  # noqa: BLE001
+            access = None
+        if isinstance(access, dict) and isinstance(access.get("next"), dict):
+            return access["next"]
+    return register_and_verify_next()
 
 
 class HandshakeClient:
@@ -286,23 +311,26 @@ class HandshakeClient:
         required_permissions: Optional[List[str]] = None,
     ) -> HandshakeResult:
         tier = self.default_tier if required_tier is None else required_tier
+        permissions = required_permissions or self.default_permissions
         ok, reason = verify_counterparty(
             self.stamp,
             counterparty_bot_id,
             required_tier=tier,
-            required_permissions=required_permissions or self.default_permissions,
+            required_permissions=permissions,
         )
         stamp_data: Dict[str, Any] = {}
         try:
             stamp_data = self.stamp.get_stamp(counterparty_bot_id, attestation=True)
         except Exception:  # noqa: BLE001
             pass
+        nxt = _next_from_access(self.stamp, counterparty_bot_id, permissions) if reason == "unknown_bot" else None
         return HandshakeResult(
             counterparty=counterparty_bot_id,
             allowed=ok,
             reason=reason,
             stamp=stamp_data,
             checked_at=time.time(),
+            next=nxt,
         )
 
     def _open_escrow(
