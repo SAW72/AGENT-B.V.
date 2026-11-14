@@ -35,7 +35,7 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -127,7 +127,8 @@ class AccessCheck(BaseModel):
     requested_permissions: List[str] = []
     policy_id: Optional[str] = None
     # Optional ERC-8004 agent id. Omitted for a bot that has not registered yet.
-    agent_id: Optional[Union[str, int]] = None
+    # A decimal integer is stored and ignored. Anything else is a 400.
+    agent_id: Optional[Any] = None
 
 
 class HistoryAppend(BaseModel):
@@ -296,11 +297,29 @@ def append_history(bot_id: str, body: HistoryAppend, _: None = Depends(require_o
     return {"appended": True, "count": len(bucket), "entry": entry}
 
 
+def _is_decimal_agent_id(agent_id: Any) -> bool:
+    if isinstance(agent_id, bool):
+        return False
+    if isinstance(agent_id, int):
+        return True
+    if isinstance(agent_id, str) and agent_id.strip().isdigit():
+        return True
+    return False
+
+
+def _require_decimal_agent_id(agent_id: Any) -> None:
+    if agent_id is None:
+        return
+    if not _is_decimal_agent_id(agent_id):
+        raise HTTPException(status_code=400, detail="agent_id must be a decimal integer.")
+
+
 @app.post("/v1/access/check")
 def access_check(body: AccessCheck):
+    _require_decimal_agent_id(body.agent_id)
     rec = REGISTRY.get(body.bot_id)
     if not rec:
-        # agent_id is accepted and optional. It does not admit an unknown bot.
+        # A numeric agent_id is accepted and ignored. It does not admit an unknown bot.
         return _access_payload(False, "unknown_bot", 1, register_and_verify_next())
     status = DENYLIST.get(rec["fingerprint_hash"], "clean")
     if status != "clean":

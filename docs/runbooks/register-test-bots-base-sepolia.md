@@ -1,6 +1,6 @@
 # Register two Financial-tier test bots on the live Base Sepolia Vault
 
-This runbook registers two test bots on the live Vault so `createEscrow` on the live escrow can get past `InvalidParties`. Spencer signs both registrations from `CORE_TIMELOCK`. An agent session stops at the read-only dry-run.
+This runbook registers two test bots on the live Vault so `createEscrow` on the live escrow can get past `InvalidParties`. Spencer does not sign from `CORE_TIMELOCK`. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules on timelock `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`, waits 86400s, then executes. The timelock is the caller of `Vault.register`. An agent session stops at the read-only dry-run.
 
 The live Vault has no bots. `BotAttestationEscrow.createEscrow` reads `Vault.operator(botId)` and reverts `InvalidParties` when that address is the zero address. Binding a payer operator and a payee operator, both at Financial tier, is the fix.
 
@@ -86,7 +86,7 @@ Bot A is the payer bot. Its operator is Spencer's wallet, and that same wallet s
 | Vault | `0x1463D664fA467FBCDA4B05443434494f05e565bc` |
 | Denylist | `0xeE76876bECcFc1B58fC06fF4E654a517d784B224` |
 | BotAttestationEscrow | `0x3d660502D75f1e97b08c110255921b437A3C4C42` |
-| CORE_TIMELOCK (registration sender) | `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33` |
+| CORE_TIMELOCK (timelock, not a signer) | `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33` |
 | Payer operator, first smoke | `<SPENCER_PAYER_WALLET>` |
 | Payee operator | `<REAL_PAYEE_WALLET>` |
 | Relayer, optional later mode only | `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` |
@@ -133,7 +133,7 @@ unset PAYER_OPERATOR PAYEE_OPERATOR
 
 Replace both angle-bracket tokens with checksummed addresses, then follow the numbers in order. Left as written, the two operator exports fail to parse (`<` is a redirection).
 
-Bash reads a paste one line at a time, so it reports a syntax error on the angle brackets and does not set the placeholders. zsh rejects that whole paste, so a previous valid address can remain if the clear step above was skipped. `ops_guard` does not rely on that `unset`. After checksum, and ignoring hex case, it rejects a payer or a payee that is blocklisted. That list is the `bEEF` placeholder, the zero address, the simulation stand-ins `0x1111111111111111111111111111111111111111` and `0x2222222222222222222222222222222222222222`, the live escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`, the retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`, the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, the sample senders in `script/` (`0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001`, `0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38`, `0x0000000000000000000000000000000000000A11`, `0x0000000000000000000000000000000000000A22`, `0x0000000000000000000000000000000000000A33`, and `0x0000000000000000000000000000000000000001`), and these book addresses from `deployments/base-sepolia.json`: Vault `Vault.address` `0x1463D664fA467FBCDA4B05443434494f05e565bc`, Denylist `Denylist.address` `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`, DisputePanel `DisputePanel.address` `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`, the old Vault `superseded.Vault.address` `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7`, Liability `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and the old Denylist `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` and the escrow deployer stay allowed. They are EOAs. It also rejects either operator equal to the relayer, the two operators equal to each other, and a shell with no `cast`. Step 7 still prints both values and waits for `YES` before either registration `cast send`. That prompt is what stops a stale address that is not on the list. Both send pastes check `cast chain-id` and skip the send unless it is `84532`. A missing `cast` prints `cast is not installed` and does not report a wrong chain. The shell stays open.
+Bash reads a paste one line at a time, so it reports a syntax error on the angle brackets and does not set the placeholders. zsh rejects that whole paste, so a previous valid address can remain if the clear step above was skipped. `ops_guard` does not rely on that `unset`. After checksum, and ignoring hex case, it rejects a payer or a payee that is blocklisted. That list is the `bEEF` placeholder, the zero address, the simulation stand-ins `0x1111111111111111111111111111111111111111` and `0x2222222222222222222222222222222222222222`, the live escrow `0x3d660502D75f1e97b08c110255921b437A3C4C42`, the retired ESC-M-1 escrow `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d`, the retired escrow `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c`, the sample senders in `script/` (`0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001`, `0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38`, `0x0000000000000000000000000000000000000A11`, `0x0000000000000000000000000000000000000A22`, `0x0000000000000000000000000000000000000A33`, and `0x0000000000000000000000000000000000000001`), and these book addresses from `deployments/base-sepolia.json`: Vault `Vault.address` `0x1463D664fA467FBCDA4B05443434494f05e565bc`, Denylist `Denylist.address` `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`, DisputePanel `DisputePanel.address` `0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb`, the old Vault `superseded.Vault.address` `0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7`, Liability `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and the old Denylist `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` is the timelock contract, not an EOA and not a signer. The escrow deployer stays allowed. The deployer is not the registration signer. It also rejects either operator equal to the relayer, the two operators equal to each other, and a shell with no `cast`. Step 7 is superseded, see owner path above. It does not run a registration `cast send`. The createEscrow send paste checks `cast chain-id` and skips the send unless it is `84532`. A missing `cast` prints `cast is not installed` and does not report a wrong chain. The shell stays open.
 
 ```bash
 export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
@@ -159,7 +159,7 @@ export ESCROW_ID=0xcf49428f2c5d229ad09cd8c4c343539fa4c80199aa43d6d9c900bfff41026
 
 `ESCROW_ID` is `cast keccak "agent-bv:base-sepolia:p1d:create-escrow-dry-run"`. It is only for the simulation. `usedEscrowIds` for it was `false` at block `47392038`.
 
-`PAYER_OPERATOR` is the wallet Spencer will use as `msg.sender` on `createEscrow`. `PAYEE_OPERATOR` is the payee test wallet. They are different addresses. The registration transaction is still sent by `CORE_TIMELOCK`, which can be a different account from `PAYER_OPERATOR`.
+`PAYER_OPERATOR` is the wallet Spencer will use as `msg.sender` on `createEscrow`. `PAYEE_OPERATOR` is the payee test wallet. They are different addresses. `CORE_TIMELOCK` is the timelock contract, not a wallet and not a signer. superseded, see owner path above. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules, waits 86400s, then executes.
 
 1. Confirm the chain, the owner, the tier cap, and that these ids are empty.
 
@@ -204,7 +204,7 @@ Observed output, each call:
 0
 ```
 
-3. Dry-run Bot A from `CORE_TIMELOCK`. `PAYER_OPERATOR` is Spencer's wallet. `cast call` returns `0x` when the state change succeeds and the function returns nothing. `cast estimate` returns gas. Neither command sends a transaction. Both prerequisite boxes are ticked before this step.
+3. Dry-run Bot A with `--from` set to the timelock `CORE_TIMELOCK` (an `eth_call`, not a signature). `PAYER_OPERATOR` is Spencer's wallet. `cast call` returns `0x` when the state change succeeds and the function returns nothing. `cast estimate` returns gas. Neither command sends a transaction. Both prerequisite boxes are ticked before this step.
 
 ```bash
 cast call "$VAULT" "register(bytes32,bytes32,bytes32,bytes32,uint8,address)" \
@@ -218,9 +218,9 @@ cast estimate "$VAULT" "register(bytes32,bytes32,bytes32,bytes32,uint8,address)"
 
 A `cast call` of the same register with `--value 1` from `CORE_TIMELOCK` reverts with no revert data. Leave the value off.
 
-The same register with `--from` set to any account other than `CORE_TIMELOCK` reverts `OwnableUnauthorizedAccount` (`0x118cdaa7`). The registration has to come from `CORE_TIMELOCK`.
+The same register with `--from` set to any account other than `CORE_TIMELOCK` reverts `OwnableUnauthorizedAccount` (`0x118cdaa7`). The inner caller of `register` is the timelock `CORE_TIMELOCK`. Nobody signs from that contract. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules, waits 86400s, then executes.
 
-4. Define `ops_guard`, then dry-run Bot B only if it returns 0. Paste this block as one unit. The function checks that `cast` is installed, that each operator is a valid checksummed address (`cast to-check-sum-address`, then compare the shell value to that result), and that the two operators differ. After checksum, and ignoring hex case, it rejects either operator when it is the relayer `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` or when it is blocklisted: the `bEEF` placeholder, the zero address, a simulation stand-in, the live escrow, the retired escrow, a sample sender from `script/`, the live Vault, the live Denylist, DisputePanel, the old Vault, Liability, InsuranceFund, or the old Denylist. Those book addresses in `deployments/base-sepolia.json` are `Vault.address`, `Denylist.address`, `DisputePanel.address`, `superseded.Vault.address`, `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` and the deployer stay allowed. That check does not depend on the earlier `unset`. A failure prints why and `return`s 1. It does not `exit`, so the interactive shell stays open. The dry-run is on the same `&&` chain, so a failure skips both `cast` commands. The chain-id check is on the two send pastes, not on this dry-run. A wrong chain skips the send and leaves the shell open.
+4. Define `ops_guard`, then dry-run Bot B only if it returns 0. Paste this block as one unit. The function checks that `cast` is installed, that each operator is a valid checksummed address (`cast to-check-sum-address`, then compare the shell value to that result), and that the two operators differ. After checksum, and ignoring hex case, it rejects either operator when it is the relayer `0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861` or when it is blocklisted: the `bEEF` placeholder, the zero address, a simulation stand-in, the live escrow, the retired escrow, a sample sender from `script/`, the live Vault, the live Denylist, DisputePanel, the old Vault, Liability, InsuranceFund, or the old Denylist. Those book addresses in `deployments/base-sepolia.json` are `Vault.address`, `Denylist.address`, `DisputePanel.address`, `superseded.Vault.address`, `Liability.address` `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, `InsuranceFund.address` `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, and `superseded.Denylist.address` `0xF0f260967D377E07Bdd7840862508ddB23C012b8`. `coreTimelock` is the timelock contract, not an EOA and not a signer. The deployer stays allowed and is not the registration signer. That check does not depend on the earlier `unset`. A failure prints why and `return`s 1. It does not `exit`, so the interactive shell stays open. The dry-run is on the same `&&` chain, so a failure skips both `cast` commands. The chain-id check is on the createEscrow send paste, not on this dry-run. A wrong chain skips the send and leaves the shell open.
 
 ```bash
 ops_guard() {
@@ -340,113 +340,8 @@ cast estimate "$ESCROW" "createEscrow(bytes32,address,bytes32,bytes32,uint256)" 
 
 On the empty Vault this reverts `InvalidParties` (`0xb6e500fe`). The [simulation-only record](#simulation-only-record) has the exact text.
 
-7. **Stop. Do not send until both prerequisite boxes are ticked, the echoed addresses are the wallets you mean, and you type `YES`. `PAYER_OPERATOR` and `PAYEE_OPERATOR` have to be real checksummed wallets. An unedited export of `<SPENCER_PAYER_WALLET>` or `<REAL_PAYEE_WALLET>` fails in the shell. The guard rejects the `bEEF` placeholder, the zero address, the simulation stand-ins, the live escrow, the retired escrow, the sample senders from `script/`, the live Vault, the live Denylist, DisputePanel, the old Vault, Liability `0x554Caf5a214B8d70D675C09186C5EAE24FEB7307`, InsuranceFund `0x19fc26B36Cb2031062eD90C19db64b3b09753ab8`, the old Denylist `0xF0f260967D377E07Bdd7840862508ddB23C012b8`, the relayer as either operator, and using one address for both operators. A blocklisted address fails here even when the clear step was skipped. Sending a stand-in binds that address as a party.**
+7. superseded, see owner path above. Do not paste a `Vault.register` `cast send`. The owner is timelock `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`. Owner path: Safe `0x12b3683A30De9845767c1f27a5D23591cA83dD54` schedules, waits 86400s, then executes. The timelock is the caller of `Vault.register`. Nobody signs from `CORE_TIMELOCK`. This step has no Safe calldata.
 
-Paste this block as one unit. It defines `ops_guard` again so a fresh shell cannot send without it. The two `echo` lines show the addresses that will be bound. Before the chain check, a missing `cast` prints `cast is not installed` and skips both sends. It does not print `wrong chain`. The chain check reads `cast chain-id` and skips both sends unless the RPC is Base Sepolia `84532`. The prompt uses `printf` and `read -r`, which behave the same in bash and in zsh. Do not switch it to `read -p`: zsh treats `-p` as a coprocess flag. Type `YES` only after the echoed addresses are right. Any other answer, or a failing guard, skips both `cast send` commands and leaves the shell open. A wrong chain, an empty chain id, or a `cast chain-id` error skips both sends, calls the wallet 0 times, and leaves the shell open. superseded, see owner path above.
-
-```bash
-ops_guard() {
-  local payer payee relayer payer_lc payee_lc relayer_lc banned banned_lc
-  if ! command -v cast >/dev/null 2>&1; then
-    echo "cast is not installed"
-    return 1
-  fi
-  payer=$(cast to-check-sum-address "${PAYER_OPERATOR-}") || {
-    echo "PAYER_OPERATOR invalid/placeholder"
-    return 1
-  }
-  payee=$(cast to-check-sum-address "${PAYEE_OPERATOR-}") || {
-    echo "PAYEE_OPERATOR invalid/placeholder"
-    return 1
-  }
-  relayer=$(cast to-check-sum-address 0x9D1b3E1400D2632d435cB7C0fC131C4f42B31861) || {
-    echo "cast to-check-sum-address failed"
-    return 1
-  }
-  payer_lc=$(printf '%s' "$payer" | tr '[:upper:]' '[:lower:]')
-  payee_lc=$(printf '%s' "$payee" | tr '[:upper:]' '[:lower:]')
-  relayer_lc=$(printf '%s' "$relayer" | tr '[:upper:]' '[:lower:]')
-  if [ "$payer_lc" = "$relayer_lc" ]; then
-    echo "PAYER_OPERATOR is the relayer"
-    return 1
-  fi
-  if [ "$payee_lc" = "$relayer_lc" ]; then
-    echo "PAYEE_OPERATOR is the relayer"
-    return 1
-  fi
-  while IFS= read -r banned; do
-    [ -n "$banned" ] || continue
-    banned=$(cast to-check-sum-address "$banned") || {
-      echo "cast to-check-sum-address failed"
-      return 1
-    }
-    banned_lc=$(printf '%s' "$banned" | tr '[:upper:]' '[:lower:]')
-    if [ "$payer_lc" = "$banned_lc" ]; then
-      echo "PAYER_OPERATOR is blocklisted"
-      return 1
-    fi
-    if [ "$payee_lc" = "$banned_lc" ]; then
-      echo "PAYEE_OPERATOR is blocklisted"
-      return 1
-    fi
-  done <<'END_KNOWN'
-0x000000000000000000000000000000000000bEEF
-0x0000000000000000000000000000000000000000
-0x1111111111111111111111111111111111111111
-0x2222222222222222222222222222222222222222
-0x3d660502D75f1e97b08c110255921b437A3C4C42
-0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d
-0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c
-0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001
-0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38
-0x0000000000000000000000000000000000000A11
-0x0000000000000000000000000000000000000A22
-0x0000000000000000000000000000000000000A33
-0x0000000000000000000000000000000000000001
-0x1463D664fA467FBCDA4B05443434494f05e565bc
-0xeE76876bECcFc1B58fC06fF4E654a517d784B224
-0x31a92f9A25396968E14d2b55B6B0BB1482ECf1Bb
-0xa1a067D2F58Ae54d4bb5Ec06d893B29E23A45CB7
-0x19fc26B36Cb2031062eD90C19db64b3b09753ab8
-0x554Caf5a214B8d70D675C09186C5EAE24FEB7307
-0xF0f260967D377E07Bdd7840862508ddB23C012b8
-END_KNOWN
-  if [ "$PAYER_OPERATOR" != "$payer" ]; then
-    echo "PAYER_OPERATOR is not checksummed (expected $payer)"
-    return 1
-  fi
-  if [ "$PAYEE_OPERATOR" != "$payee" ]; then
-    echo "PAYEE_OPERATOR is not checksummed (expected $payee)"
-    return 1
-  fi
-  if [ "$payee" = "$payer" ]; then
-    echo "PAYER_OPERATOR and PAYEE_OPERATOR are the same address"
-    return 1
-  fi
-  return 0
-}
-
-echo "PAYER_OPERATOR=${PAYER_OPERATOR-UNSET}"
-echo "PAYEE_OPERATOR=${PAYEE_OPERATOR-UNSET}"
-skip_send=0
-command -v cast >/dev/null || { echo 'cast is not installed'; skip_send=1; }
-if [ "$skip_send" = 0 ]; then
-  chain_id=$(cast chain-id --rpc-url "$BASE_SEPOLIA_RPC_URL") || chain_id=
-  if [ "$chain_id" = 84532 ]; then
-    ops_guard && printf 'Send with PAYER=%s PAYEE=%s? type YES: ' "$PAYER_OPERATOR" "$PAYEE_OPERATOR" && read -r ok && [ "$ok" = "YES" ] && \
-    cast send "$VAULT" "register(bytes32,bytes32,bytes32,bytes32,uint8,address)" \
-      "$BOT_A" "$WEIGHT_A" "$SIG_A" "$PROMPT_A" 3 "$PAYER_OPERATOR" \
-      --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-      --account <his-keystore> && \
-    cast send "$VAULT" "register(bytes32,bytes32,bytes32,bytes32,uint8,address)" \
-      "$BOT_B" "$WEIGHT_B" "$SIG_B" "$PROMPT_B" 3 "$PAYEE_OPERATOR" \
-      --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-      --account <his-keystore>
-  else
-    echo 'wrong chain: expected Base Sepolia 84532' >&2
-  fi
-fi
-```
 
 superseded, see owner path above. Re-estimate after the real wallets are filled in. A simulation-only stand-in at block `47392348` used about `177900` gas for each register. That figure is not a substitute for the estimate with Spencer's addresses.
 
@@ -523,7 +418,7 @@ ops_guard && cast call "$ESCROW" "createEscrow(bytes32,address,bytes32,bytes32,u
 
 A successful simulation returns `ESCROW_ID`. `$PAYER_WORD` and `$PAYEE_WORD` are the real wallets only when `ops_guard` returns 0.
 
-When Spencer later sends `createEscrow`, paste this block as one unit. It defines `ops_guard` again. A missing `cast` prints `cast is not installed` and skips the send. The chain check skips the send unless `cast chain-id` is Base Sepolia `84532`. A wrong chain, an empty chain id, or a `cast chain-id` error does not send and does not call `cast wallet`. The shell stays open. The send runs only when the guard returns 0 and `cast wallet address --account <his-keystore>` equals `$PAYER_OPERATOR`. That keystore is the payer wallet. If that wallet is also `CORE_TIMELOCK`, it is the same account as step 7. If it is a different wallet, it is a different keystore, still passed only as `--account <his-keystore>`. Replace `<his-keystore>` before pasting.
+When Spencer later sends `createEscrow`, paste this block as one unit. It defines `ops_guard` again. A missing `cast` prints `cast is not installed` and skips the send. The chain check skips the send unless `cast chain-id` is Base Sepolia `84532`. A wrong chain, an empty chain id, or a `cast chain-id` error does not send and does not call `cast wallet`. The shell stays open. The send runs only when the guard returns 0 and `cast wallet address --account <his-keystore>` equals `$PAYER_OPERATOR`. That keystore is the payer wallet. The old note that this wallet might also be `CORE_TIMELOCK`, the same account as step 7, is superseded, see owner path above. `CORE_TIMELOCK` is the timelock contract, so the payer keystore is never that account. The payer keystore is still passed only as `--account <his-keystore>`. Replace `<his-keystore>` before pasting.
 
 ```bash
 ops_guard() {
@@ -654,14 +549,14 @@ block = 47392348
 0x0000000000000000000000002222222222222222222222222222222222222222
 ```
 
-Register Bot A from `CORE_TIMELOCK` (`cast call`, then `cast estimate`):
+Register Bot A from `CORE_TIMELOCK` (then 0x10CC, historical) (`cast call`, then `cast estimate`):
 
 ```text
 0x
 177900
 ```
 
-Register Bot B from `CORE_TIMELOCK`:
+Register Bot B from `CORE_TIMELOCK` (then 0x10CC, historical):
 
 ```text
 0x

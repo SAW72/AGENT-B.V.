@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ActionButton, type ActionButtonState } from "./actionButton"
@@ -7,10 +7,14 @@ import { ErrorNotice } from "./ErrorNotice"
 import { errorText, isZeroAddress, sameAddress, shortAddress } from "./format"
 import { resolveWalletChainId } from "./guard"
 import {
+  AGENT_ID_DECIMAL_TEXT,
+  AGENT_ID_RANGE_TEXT,
   CHECKED_IN_BROWSER,
   NO_ID_TEXT,
+  PUBLIC_RPC_HOST,
   WALLET_NOT_SET_TEXT,
   agentIdFromHref,
+  agentIdIssue,
   basescanAddressUrl,
   basescanAgentUrl,
   basescanRegistryUrl,
@@ -22,14 +26,19 @@ import {
   readAgentIdentity,
   requestChallengeSignature,
   verifyAgentChallenge,
+  MissingAgentError,
   type IdentityRecord,
   type VerifyResult,
 } from "./identity8004"
-import { rpcHost, type SepoliaClient } from "./read"
-import { AddressRow, TextRow } from "./ui"
+import { REVERT_FALLBACK_TEXT } from "./revert"
+import { SwitchToSepoliaButton } from "./firstRun"
+import type { SepoliaClient } from "./read"
+import { AddressRow } from "./ui"
 import { useConnectorChainId } from "./useWalletChain"
 import { rpcUrl } from "./wagmi"
 import { walletReadiness } from "./walkthrough"
+
+const URI_PREVIEW = 96
 
 function reasonText(reason: VerifyResult["reason"]): string {
   if (reason === "verified") return "Verified."
@@ -43,13 +52,19 @@ function reasonText(reason: VerifyResult["reason"]): string {
   return "Not verified. The owner or agent wallet changed. Sign again."
 }
 
+function readDetail(error: unknown): string {
+  return errorText(error).split(REVERT_FALLBACK_TEXT).join("The registry read failed.")
+}
+
 export function IdentityGateway({
   client,
   readsEnabled,
+  readsPending = false,
   blockedReason,
 }: {
   client: SepoliaClient
   readsEnabled: boolean
+  readsPending?: boolean
   blockedReason: string | null
 }) {
   const account = useAccount()
@@ -64,9 +79,11 @@ export function IdentityGateway({
   const [outcome, setOutcome] = useState<VerifyResult | null>(null)
   const [signError, setSignError] = useState<string | null>(null)
   const [button, setButton] = useState<ActionButtonState>({ status: "idle", label: "Sign the identity check" })
+  const [staleHoldAt, setStaleHoldAt] = useState<number | null>(null)
   const signTicket = useRef(0)
 
   const parsed = parseAgentId(agentInput)
+  const issue = agentIdIssue(agentInput)
   const identityQuery = useQuery({
     queryKey: ["erc8004-identity", rpcUrl, parsed?.toString() ?? ""],
     queryFn: () => readAgentIdentity(client, parsed as bigint),
@@ -74,11 +91,19 @@ export function IdentityGateway({
     retry: 1,
   })
 
+  useEffect(() => {
+    if (staleHoldAt == null) return
+    if (identityQuery.dataUpdatedAt !== staleHoldAt) setStaleHoldAt(null)
+  }, [identityQuery.dataUpdatedAt, staleHoldAt])
+
   const record = identityQuery.data ?? null
+  const hideParties = staleHoldAt != null
   const onboarding = onboardingNext()
   const showOnboarding = agentInput.trim() === ""
+  const zeroWallet = record != null && isZeroAddress(record.agentWallet)
 
   async function sign(current: IdentityRecord) {
+    if (hideParties) return
     if (!account.address || !account.connector || readiness !== "ready") return
     if (!sameAddress(account.address, current.agentWallet)) return
     const ticket = signTicket.current + 1
@@ -87,19 +112,24 @@ export function IdentityGateway({
     setOutcome(null)
     setButton({ status: "waiting-wallet" })
     try {
-      const nowSeconds = Math.floor(Date.now() / 1000)
-      const challenge = buildChallenge(current.agentId, current.agentWallet, nowSeconds)
+      const issuedAt = Math.floor(Date.now() / 1000)
+      const challenge = buildChallenge(current.agentId, current.agentWallet, issuedAt)
       const provider = await providerFromConnector(account.connector)
       const signature = await requestChallengeSignature(provider, account.address, challenge)
+      const checkedAt = Math.floor(Date.now() / 1000)
       const checked = await verifyAgentChallenge({
         verifier: client,
         record: current,
         challenge,
         signature,
-        nowSeconds,
+        nowSeconds: checkedAt,
         reread: () => readAgentIdentity(client, current.agentId),
       })
       if (signTicket.current !== ticket) return
+      if (checked.reason === "stale") {
+        setStaleHoldAt(identityQuery.dataUpdatedAt)
+        void identityQuery.refetch()
+      }
       setOutcome(checked)
       setButton({ status: "idle", label: "Sign the identity check" })
     } catch (error) {
@@ -111,6 +141,7 @@ export function IdentityGateway({
 
   const canSign =
     record != null &&
+    !hideParties &&
     readiness === "ready" &&
     account.address != null &&
     sameAddress(account.address, record.agentWallet) &&
@@ -119,46 +150,36 @@ export function IdentityGateway({
     !isZeroAddress(record.agentWallet)
 
   let signState = button
-  if (button.status === "idle") {
-    if (readiness === "disconnected") signState = { status: "needs-wallet" }
-    else if (readiness === "wrong-network") signState = { status: "wrong-network" }
+  if (button.status === "idle" && !zeroWallet && readiness === "disconnected") {
+    signState = { status: "needs-wallet" }
   }
-  const signReason = !record
-    ? null
-    : isZeroAddress(record.agentWallet)
-      ? WALLET_NOT_SET_TEXT
-      : record.implementationMatches && record.registryDomainMatches
-        ? readiness === "ready" && account.address && !sameAddress(account.address, record.agentWallet)
-          ? "Connect the agent wallet. The signature has to come from that address."
-          : null
-        : "This registry no longer matches the pinned identity deployment."
+  const signReason = hideParties
+    ? "Reading the registry again. Sign stays off until that read finishes."
+    : !record
+      ? null
+      : isZeroAddress(record.agentWallet)
+        ? WALLET_NOT_SET_TEXT
+        : record.implementationMatches && record.registryDomainMatches
+          ? readiness === "wrong-network"
+            ? "Switch to Base Sepolia before signing."
+            : readiness === "ready" && account.address && !sameAddress(account.address, record.agentWallet)
+              ? "Connect the agent wallet. The signature has to come from that address."
+              : null
+          : "This registry no longer matches the pinned identity deployment."
+
+  const missingAgent = identityQuery.error instanceof MissingAgentError ? identityQuery.error : null
 
   return (
-    <section className="card" aria-labelledby="identity-heading" data-testid="identity-gateway">
+    <section className="card identity-gateway" aria-labelledby="identity-heading" data-testid="identity-gateway">
       <h2 id="identity-heading">ERC-8004 identity</h2>
       <p className="muted" data-testid="checked-in-browser">
-        {CHECKED_IN_BROWSER}. Base Sepolia only. Reads use {rpcHost(rpcUrl)}. The signature is not a transaction.
+        {CHECKED_IN_BROWSER}. Base Sepolia only. Reads use {PUBLIC_RPC_HOST}. The signature is not a transaction.
       </p>
       <p>
         <a href={basescanRegistryUrl()} target="_blank" rel="noreferrer">
           View the registry on Basescan
         </a>
       </p>
-
-      {showOnboarding ? (
-        <div data-testid="identity-onboarding">
-          <p>
-            <strong>{NO_ID_TEXT}</strong>
-          </p>
-          <p className="muted">
-            A bot with no agent id stays refused. Register on the existing registry, open this page to get verified,
-            then call the access check again with agent_id.
-          </p>
-          <pre className="calldata" data-testid="identity-next">
-            {JSON.stringify(onboarding, null, 2)}
-          </pre>
-        </div>
-      ) : null}
 
       <label>
         Agent id
@@ -173,31 +194,37 @@ export function IdentityGateway({
             setAgentInput(event.target.value)
             setOutcome(null)
             setSignError(null)
+            setStaleHoldAt(null)
             setButton({ status: "idle", label: "Sign the identity check" })
           }}
         />
       </label>
-      {agentInput.trim() !== "" && parsed == null ? (
-        <p className="pill bad">Enter the agent id as a decimal integer.</p>
-      ) : null}
-      {!readsEnabled && blockedReason ? <ErrorNotice main="Registry reads are off." detail={blockedReason} /> : null}
-      {identityQuery.isPending && parsed != null && readsEnabled ? <p className="banner info">Reading the identity registry.</p> : null}
-      {identityQuery.isError ? <ErrorNotice main="Could not read this agent id." detail={errorText(identityQuery.error)} /> : null}
-
-      {record ? <IdentityRecordView record={record} /> : null}
-      {outcome ? (
-        <p className={outcome.verified ? "pill ok" : "pill bad"} data-testid="identity-result">
-          {outcome.verified ? "Verified" : "Not verified"}. {CHECKED_IN_BROWSER}. {reasonText(outcome.reason)}
+      {issue === "decimal" ? <p className="pill bad">{AGENT_ID_DECIMAL_TEXT}</p> : null}
+      {issue === "range" ? <p className="pill bad">{AGENT_ID_RANGE_TEXT}</p> : null}
+      {readsPending ? (
+        <p className="banner info" data-testid="identity-loading">
+          Reading the identity registry.
         </p>
+      ) : !readsEnabled && blockedReason ? (
+        <ErrorNotice main="Registry reads are off." detail={blockedReason} />
       ) : null}
-      {signError ? <ErrorNotice main="The wallet did not complete the check." detail={signError} /> : null}
+      {identityQuery.isPending && parsed != null && readsEnabled ? (
+        <p className="banner info">Reading the identity registry.</p>
+      ) : null}
+      {missingAgent ? (
+        <p className="pill bad" data-testid="identity-missing">
+          {missingAgent.message}
+        </p>
+      ) : identityQuery.isError ? (
+        <ErrorNotice main="Could not read this agent id." detail={readDetail(identityQuery.error)} />
+      ) : null}
 
-      <div className="bar">
+      <div className="bar" data-testid="identity-actions">
         {account.isConnected ? (
           <button type="button" className="secondary" onClick={() => disconnect()}>
             Disconnect
           </button>
-        ) : (
+        ) : zeroWallet ? null : (
           visibleConnectors(connectors).map((connector) => (
             <button
               key={connector.uid}
@@ -209,6 +236,7 @@ export function IdentityGateway({
             </button>
           ))
         )}
+        {readiness === "wrong-network" ? <SwitchToSepoliaButton /> : null}
         {record ? (
           <ActionButton
             testId="identity-sign"
@@ -221,12 +249,35 @@ export function IdentityGateway({
           />
         ) : null}
       </div>
+      {outcome ? (
+        <p className={outcome.verified ? "pill ok" : "pill bad"} data-testid="identity-result">
+          {reasonText(outcome.reason)}
+        </p>
+      ) : null}
+      {signError ? <ErrorNotice main="The wallet did not complete the check." detail={signError} /> : null}
       {connectError ? <ErrorNotice main="Could not connect the wallet." detail={errorText(connectError)} /> : null}
+
+      {showOnboarding ? (
+        <div data-testid="identity-onboarding">
+          <p>
+            <strong>{NO_ID_TEXT}</strong>
+          </p>
+          <p className="muted">
+            A bot with no agent id stays refused. The bot registers on the existing registry. The browser check is a
+            badge. Server-side admission comes later.
+          </p>
+          <pre className="calldata" data-testid="identity-next">
+            {JSON.stringify(onboarding, null, 2)}
+          </pre>
+        </div>
+      ) : null}
+
+      {record ? <IdentityRecordView record={record} hideParties={hideParties} /> : null}
     </section>
   )
 }
 
-function IdentityRecordView({ record }: { record: IdentityRecord }) {
+function IdentityRecordView({ record, hideParties }: { record: IdentityRecord; hideParties: boolean }) {
   return (
     <>
       {!record.implementationMatches ? (
@@ -243,14 +294,61 @@ function IdentityRecordView({ record }: { record: IdentityRecord }) {
         />
       ) : null}
       {isZeroAddress(record.agentWallet) ? <ErrorNotice main={WALLET_NOT_SET_TEXT} /> : null}
-      <AddressRow label="Owner" value={record.owner} testId="identity-owner" />
-      <AddressRow label="Agent wallet" value={record.agentWallet} testId="identity-wallet" />
-      <TextRow label="Agent URI" value={record.agentURI === "" ? "(empty)" : record.agentURI} testId="identity-uri" />
+      {hideParties ? (
+        <p className="muted" data-testid="identity-stale-hold">
+          Reading the registry again. Sign stays off until that read finishes.
+        </p>
+      ) : (
+        <>
+          <AddressRow label="Owner" value={record.owner} testId="identity-owner" />
+          <AgentWalletRow value={record.agentWallet} />
+        </>
+      )}
+      <AgentUriRow value={record.agentURI} />
       <p>
         <a href={basescanAgentUrl(record.agentId)} target="_blank" rel="noreferrer">
           View this agent id on Basescan
         </a>
       </p>
     </>
+  )
+}
+
+function AgentWalletRow({ value }: { value: string }) {
+  if (isZeroAddress(value)) {
+    return (
+      <div className="kv-row">
+        <div className="kv-label">Agent wallet</div>
+        <div className="kv-value">
+          <span className="mono" title={value} data-testid="identity-wallet">
+            {shortAddress(value)}
+          </span>
+          <span className="muted"> none</span>
+        </div>
+      </div>
+    )
+  }
+  return <AddressRow label="Agent wallet" value={value} testId="identity-wallet" />
+}
+
+function AgentUriRow({ value }: { value: string }) {
+  const [open, setOpen] = useState(false)
+  const shown = value === "" ? "(empty)" : value
+  const long = shown.length > URI_PREVIEW
+  const text = !long || open ? shown : `${shown.slice(0, URI_PREVIEW)}...`
+  return (
+    <div className="kv-row">
+      <div className="kv-label">Agent URI</div>
+      <div className="kv-value identity-uri">
+        <span className="identity-uri-text" title={shown} data-testid="identity-uri">
+          {text}
+        </span>
+        {long ? (
+          <button type="button" className="secondary" onClick={() => setOpen((current) => !current)}>
+            {open ? "Collapse" : "Expand"}
+          </button>
+        ) : null}
+      </div>
+    </div>
   )
 }

@@ -7,7 +7,7 @@
   "gatewayPath": "/app/identity",
   "verifyUrl": "https://agent-bv.pages.dev/app/identity",
   "basescanSite": "https://sepolia.basescan.org",
-  "retry": "call /v1/access/check again with agent_id",
+  "retry": "The bot registers on the identity registry. The browser check is a badge. Server-side admission comes later.",
   "eip712": {
     "name": "Agent-BV Identity",
     "version": "1",

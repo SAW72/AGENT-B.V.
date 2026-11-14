@@ -1,17 +1,22 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createPublicClient, custom, hashTypedData, pad, toHex, type Address, type Hex } from "viem"
+import { createPublicClient, custom, hashTypedData, pad, RawContractError, toHex, type Address, type Hex } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { baseSepolia } from "viem/chains"
 import { describe, expect, it } from "vitest"
+import type { SepoliaClient } from "./read"
 import { explorerUrl } from "./ui"
 import {
   AGENT_BV_CHALLENGE_TYPES,
+  AGENT_ID_RANGE_TEXT,
   CHECKED_IN_BROWSER,
   NO_ID_TEXT,
+  PUBLIC_RPC_HOST,
   WALLET_NOT_SET_TEXT,
+  MissingAgentError,
   agentIdFromHref,
+  agentIdIssue,
   basescanAgentUrl,
   basescanRegistryUrl,
   blockReason,
@@ -26,6 +31,7 @@ import {
   onboardingNext,
   parseAgentId,
   pinnedImplementation,
+  readAgentIdentity,
   registryDomainFrom,
   registryDomainMatches,
   requestChallengeSignature,
@@ -84,10 +90,13 @@ describe("erc8004 config", () => {
         function: "register(string)",
       },
       verify_url: "https://agent-bv.pages.dev/app/identity",
-      retry: "call /v1/access/check again with agent_id",
+      retry: "The bot registers on the identity registry. The browser check is a badge. Server-side admission comes later.",
     })
+    expect(onboardingNext().retry.includes("call /v1/access/check again")).toBe(false)
+    expect(onboardingNext().retry.includes("call the access check again")).toBe(false)
     expect(NO_ID_TEXT).toBe("Register here, get verified, come back.")
-    expect(CHECKED_IN_BROWSER).toBe("checked in your browser")
+    expect(CHECKED_IN_BROWSER).toBe("Checks run in your browser")
+    expect(PUBLIC_RPC_HOST).toBe("sepolia.base.org")
     expect(WALLET_NOT_SET_TEXT).toBe("wallet_not_set / can't verify")
     expect(basescanRegistryUrl()).toBe(explorerUrl(REGISTRY))
     expect(basescanAgentUrl(7n)).toBe(`https://sepolia.basescan.org/nft/${REGISTRY}/7`)
@@ -124,6 +133,11 @@ describe("route and agent id", () => {
     expect(parseAgentId("-1")).toBeNull()
     expect(parseAgentId("0x10")).toBeNull()
     expect(parseAgentId("1".repeat(80))).toBeNull()
+    expect(agentIdIssue("abc")).toBe("decimal")
+    expect(agentIdIssue("1.5")).toBe("decimal")
+    expect(agentIdIssue("1".repeat(80))).toBe("range")
+    expect(agentIdIssue("15")).toBeNull()
+    expect(AGENT_ID_RANGE_TEXT).toBe("That agent id is outside the uint256 range.")
   })
 })
 
@@ -177,6 +191,29 @@ describe("challenge verification", () => {
     })
     expect(stale.verified).toBe(false)
     expect(stale.reason).toBe("stale")
+
+    const pastTtl = await verifyAgentChallenge({
+      verifier: verifierClient(),
+      record: row,
+      challenge,
+      signature,
+      nowSeconds: NOW + 601,
+      reread: async () => row,
+    })
+    expect(pastTtl.verified).toBe(false)
+    expect(pastTtl.reason).toBe("expired")
+  })
+
+  it("maps a nonexistent token revert to a missing agent", async () => {
+    const data = `0x7e273289${"0".repeat(64)}` as Hex
+    const client = {
+      readContract: async () => {
+        throw new RawContractError({ data })
+      },
+      getStorageAt: async () => "0x",
+    } as unknown as SepoliaClient
+    await expect(readAgentIdentity(client, 50000n)).rejects.toBeInstanceOf(MissingAgentError)
+    await expect(readAgentIdentity(client, 50000n)).rejects.toThrow("No agent with id 50000 on this registry.")
   })
 
   it("verifies an EOA signature with viem and rejects a different signer", async () => {
@@ -260,5 +297,20 @@ describe("challenge verification", () => {
       reread: async () => record({ agentWallet: account.address, owner: account.address, agentId: 1n }),
     })
     expect(checked.verified).toBe(true)
+
+    const gateway = readFileSync(join(dir, "IdentityGateway.tsx"), "utf8")
+    const requestAt = gateway.indexOf("await requestChallengeSignature")
+    const checkedAt = gateway.indexOf("const checkedAt = Math.floor(Date.now() / 1000)", requestAt)
+    const verifyAt = gateway.indexOf("verifyAgentChallenge", checkedAt)
+    expect(checkedAt).toBeGreaterThan(requestAt)
+    expect(verifyAt).toBeGreaterThan(checkedAt)
+    expect(gateway.indexOf("nowSeconds: checkedAt", verifyAt)).toBeGreaterThan(verifyAt)
+    expect(gateway.includes("sepolia.base.org") || gateway.includes("PUBLIC_RPC_HOST")).toBe(true)
+    expect(gateway.includes("[rpc-host]")).toBe(false)
+    expect(gateway.includes("call the access check again")).toBe(false)
+    expect(gateway.includes("call /v1/access/check again")).toBe(false)
+    expect(gateway.includes("rejected this transaction")).toBe(false)
+    expect(gateway.includes("setStaleHoldAt")).toBe(true)
+    expect(gateway.includes("refetch()")).toBe(true)
   })
 })

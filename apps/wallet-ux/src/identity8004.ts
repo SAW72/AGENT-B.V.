@@ -16,12 +16,17 @@ import {
 import { identityRegistry8004Abi } from "./abi"
 import { isZeroAddress, sameAddress } from "./format"
 import type { SepoliaClient } from "./read"
+import { revertDataOf } from "./revert"
 import erc8004Config from "../../../config/erc8004-base-sepolia.json" with { type: "json" }
 
-export const CHECKED_IN_BROWSER = "checked in your browser"
+export const CHECKED_IN_BROWSER = "Checks run in your browser"
+export const PUBLIC_RPC_HOST = "sepolia.base.org"
 export const WALLET_NOT_SET_TEXT = "wallet_not_set / can't verify"
 export const NO_ID_TEXT = "Register here, get verified, come back."
+export const AGENT_ID_DECIMAL_TEXT = "Enter the agent id as a decimal integer."
+export const AGENT_ID_RANGE_TEXT = "That agent id is outside the uint256 range."
 export const IDENTITY_GATEWAY_PATH = erc8004Config.gatewayPath
+const NONEXISTENT_TOKEN_SELECTOR = "0x7e273289"
 
 const PINNED_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
 const UINT256_MAX = (1n << 256n) - 1n
@@ -193,11 +198,41 @@ export function registryDomainMatches(domain: RegistryDomain): boolean {
 }
 
 export function parseAgentId(raw: string): bigint | null {
+  if (agentIdIssue(raw) != null) return null
   const trimmed = raw.trim()
-  if (!/^[0-9]+$/.test(trimmed)) return null
-  const value = BigInt(trimmed)
-  if (value > UINT256_MAX) return null
-  return value
+  if (trimmed === "") return null
+  return BigInt(trimmed)
+}
+
+/** `decimal` is not an integer. `range` is an integer above uint256. Null means empty or in range. */
+export function agentIdIssue(raw: string): "decimal" | "range" | null {
+  const trimmed = raw.trim()
+  if (trimmed === "") return null
+  if (!/^[0-9]+$/.test(trimmed)) return "decimal"
+  if (BigInt(trimmed) > UINT256_MAX) return "range"
+  return null
+}
+
+export function missingAgentMessage(agentId: bigint): string {
+  return `No agent with id ${agentId.toString()} on this registry.`
+}
+
+export class MissingAgentError extends Error {
+  readonly agentId: bigint
+
+  constructor(agentId: bigint) {
+    super(missingAgentMessage(agentId))
+    this.name = "MissingAgentError"
+    this.agentId = agentId
+  }
+}
+
+export function isNonexistentTokenRevert(error: unknown): boolean {
+  const data = revertDataOf(error)
+  if (data && data.toLowerCase().startsWith(NONEXISTENT_TOKEN_SELECTOR)) return true
+  if (error instanceof MissingAgentError) return true
+  const text = error instanceof Error ? error.message : ""
+  return text.toLowerCase().includes(NONEXISTENT_TOKEN_SELECTOR)
 }
 
 export function isIdentityGatewayPath(href: string): boolean {
@@ -259,13 +294,23 @@ function asString(value: unknown, label: string): string {
 export async function readAgentIdentity(client: SepoliaClient, agentId: bigint): Promise<IdentityRecord> {
   const registry = identityRegistryAddress()
   const abi = identityRegistry8004Abi
-  const [owner, agentWallet, agentURI, domainValue, implWord] = await Promise.all([
-    client.readContract({ address: registry, abi, functionName: "ownerOf", args: [agentId] }),
-    client.readContract({ address: registry, abi, functionName: "getAgentWallet", args: [agentId] }),
-    client.readContract({ address: registry, abi, functionName: "tokenURI", args: [agentId] }),
-    client.readContract({ address: registry, abi, functionName: "eip712Domain" }),
-    client.getStorageAt({ address: registry, slot: eip1967ImplementationSlot() }),
-  ])
+  let owner: unknown
+  let agentWallet: unknown
+  let agentURI: unknown
+  let domainValue: unknown
+  let implWord: string | undefined
+  try {
+    ;[owner, agentWallet, agentURI, domainValue, implWord] = await Promise.all([
+      client.readContract({ address: registry, abi, functionName: "ownerOf", args: [agentId] }),
+      client.readContract({ address: registry, abi, functionName: "getAgentWallet", args: [agentId] }),
+      client.readContract({ address: registry, abi, functionName: "tokenURI", args: [agentId] }),
+      client.readContract({ address: registry, abi, functionName: "eip712Domain" }),
+      client.getStorageAt({ address: registry, slot: eip1967ImplementationSlot() }),
+    ])
+  } catch (error) {
+    if (isNonexistentTokenRevert(error)) throw new MissingAgentError(agentId)
+    throw error
+  }
   if (implWord == null) throw new Error("Identity registry implementation slot was empty.")
   const implementation = implementationFromStorage(implWord)
   const registryDomain = registryDomainFrom(domainValue)
@@ -391,6 +436,11 @@ export async function verifyAgentChallenge(args: {
   }
   if (!fresh.implementationMatches) return resultFrom(fresh, false, "impl_changed")
   if (!fresh.registryDomainMatches) return resultFrom(fresh, false, "registry_domain_changed")
+  // The caller passes the clock taken after the signature returns. A deadline
+  // behind that clock is expired even when the signature itself is valid.
+  if (!Number.isInteger(args.nowSeconds) || args.nowSeconds < 0 || args.challenge.deadline < BigInt(args.nowSeconds)) {
+    return resultFrom(fresh, false, "expired")
+  }
   return resultFrom(fresh, true, "verified")
 }
 

@@ -279,6 +279,7 @@ export function App() {
     refetchInterval: 15_000,
   })
 
+  const identityReads = guard.ok || guard.code.startsWith("wallet-")
   const readiness = walletReadiness(account.isConnected, walletChainId)
   const [systemOpen, setSystemOpen] = useState(false)
   const route = useWalletRoute()
@@ -341,7 +342,12 @@ export function App() {
 
       <PendingStrip />
       {onIdentity ? (
-        <IdentityGateway client={client} readsEnabled={guard.ok} blockedReason={blockedReason} />
+        <IdentityGateway
+          client={client}
+          readsEnabled={identityReads}
+          readsPending={chainQuery.isPending}
+          blockedReason={identityReads ? null : blockedReason}
+        />
       ) : route.flow == null ? (
         <HomeScreen voteReason={voteReason} />
       ) : (
