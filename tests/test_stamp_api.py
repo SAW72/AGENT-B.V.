@@ -381,6 +381,24 @@ def test_agent_id_ascii_uint256_bounds():
         assert "decimal integer" in bad.json()["detail"]
 
 
+def test_agent_id_string_length_rejected_before_int():
+    c = _client()
+    bot = {"bot_id": "no-id-bot"}
+    for agent_id in ("1" * 5000, "0" * 4301 + "1", "123\n", "\uff11"):
+        bad = c.post("/v1/access/check", json={**bot, "agent_id": agent_id})
+        assert bad.status_code == 400
+        assert "decimal integer" in bad.json()["detail"]
+
+    max_str = c.post("/v1/access/check", json={**bot, "agent_id": str(2**256 - 1)})
+    assert max_str.status_code == 200
+    assert max_str.json()["allowed"] is False
+    assert max_str.json()["reason"] == "unknown_bot"
+
+    over_str = c.post("/v1/access/check", json={**bot, "agent_id": str(2**256)})
+    assert over_str.status_code == 400
+    assert "decimal integer" in over_str.json()["detail"]
+
+
 def test_known_bot_accepts_optional_agent_id_without_next():
     c = _client()
     c.post("/v1/bots", json=_register_body(), headers=_auth())

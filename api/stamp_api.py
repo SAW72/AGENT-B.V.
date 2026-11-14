@@ -128,7 +128,8 @@ class AccessCheck(BaseModel):
     requested_permissions: List[str] = []
     policy_id: Optional[str] = None
     # Optional ERC-8004 agent id. Omitted for a bot that has not registered yet.
-    # An ASCII decimal integer in [0, 2**256) is stored and ignored. Anything else is a 400.
+    # A str of 1 to 78 ASCII digits, or an int, with 0 <= n < 2**256 is accepted and ignored.
+    # A longer digit string is a 400 before int(). Anything else is a 400. It does not admit a bot.
     agent_id: Optional[Any] = None
 
 
@@ -298,7 +299,8 @@ def append_history(bot_id: str, body: HistoryAppend, _: None = Depends(require_o
     return {"appended": True, "count": len(bucket), "entry": entry}
 
 
-_AGENT_ID_ASCII = re.compile(r"^[0-9]+$")
+# 2**256 is 78 decimal digits. A longer digit string is rejected before int().
+_AGENT_ID_ASCII = re.compile(r"^[0-9]{1,78}$")
 _AGENT_ID_MAX = 2**256
 
 
