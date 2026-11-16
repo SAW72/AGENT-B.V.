@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { createPublicClient, custom, hashTypedData, pad, RawContractError, toHex, type Address, type Hex } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { baseSepolia } from "viem/chains"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { SepoliaClient } from "./read"
 import { explorerUrl } from "./ui"
 import {
@@ -127,7 +127,9 @@ describe("route and agent id", () => {
   it("parses a decimal agent id and rejects anything else", () => {
     expect(parseAgentId("0")).toBe(0n)
     expect(parseAgentId("10702")).toBe(10702n)
-    expect(parseAgentId(" 15 ")).toBe(15n)
+    // The server rejects surrounding whitespace. This client does not trim.
+    expect(parseAgentId(" 15 ")).toBeNull()
+    expect(agentIdIssue(" 15 ")).toBe("decimal")
     expect(parseAgentId("")).toBeNull()
     expect(parseAgentId("1.5")).toBeNull()
     expect(parseAgentId("-1")).toBeNull()
@@ -138,6 +140,54 @@ describe("route and agent id", () => {
     expect(agentIdIssue("1".repeat(80))).toBe("range")
     expect(agentIdIssue("15")).toBeNull()
     expect(AGENT_ID_RANGE_TEXT).toBe("That agent id is outside the uint256 range.")
+  })
+
+  it("matches the server agent id ascii and uint256 bounds", () => {
+    const max = (1n << 256n) - 1n
+    const over = 1n << 256n
+    const maxDigits = max.toString()
+    const overDigits = over.toString()
+    const leadingZeros = `${"0".repeat(77)}7`
+    expect(maxDigits).toHaveLength(78)
+    expect(overDigits).toHaveLength(78)
+    expect(leadingZeros).toHaveLength(78)
+
+    expect(agentIdIssue("0")).toBeNull()
+    expect(parseAgentId("0")).toBe(0n)
+    expect(agentIdIssue("1000")).toBeNull()
+    expect(parseAgentId("1000")).toBe(1000n)
+    expect(agentIdIssue(maxDigits)).toBeNull()
+    expect(parseAgentId(maxDigits)).toBe(max)
+    expect(agentIdIssue(leadingZeros)).toBeNull()
+    expect(parseAgentId(leadingZeros)).toBe(7n)
+
+    const seventyNine = `1${"0".repeat(78)}`
+    const seventyNinePadded = `${"0".repeat(78)}1`
+    const fiveThousand = "1".repeat(5000)
+    const paddedLong = `${"0".repeat(4301)}1`
+    const tooLong = [seventyNine, seventyNinePadded, fiveThousand, paddedLong]
+    const notDigits = [" 15 ", "-3", "1.5", "0x10", "\u00b2", "\uff11", "123\n"]
+
+    const spy = vi.spyOn(globalThis, "BigInt")
+    try {
+      expect(agentIdIssue("")).toBeNull()
+      expect(parseAgentId("")).toBeNull()
+      for (const raw of notDigits) {
+        expect(agentIdIssue(raw)).toBe("decimal")
+        expect(parseAgentId(raw)).toBeNull()
+      }
+      for (const raw of tooLong) {
+        expect(raw.length).toBeGreaterThan(78)
+        expect(agentIdIssue(raw)).toBe("range")
+        expect(parseAgentId(raw)).toBeNull()
+      }
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(agentIdIssue(overDigits)).toBe("range")
+    expect(parseAgentId(overDigits)).toBeNull()
   })
 })
 

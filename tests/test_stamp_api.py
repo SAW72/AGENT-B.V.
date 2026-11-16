@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 
+import api.stamp_api as stamp_api_module
 from api.stamp_api import HISTORY, REGISTRY, DENYLIST, app, register_and_verify_next
 from pipeline.security import canonical_fingerprint_hash
 
@@ -360,6 +361,10 @@ def test_agent_id_ascii_uint256_bounds():
     assert too_big.status_code == 400
     assert "decimal integer" in too_big.json()["detail"]
 
+    way_over = c.post("/v1/access/check", json={**bot, "agent_id": 2**256 + 1})
+    assert way_over.status_code == 400
+    assert "decimal integer" in way_over.json()["detail"]
+
     max_ok = c.post("/v1/access/check", json={**bot, "agent_id": 2**256 - 1})
     assert max_ok.status_code == 200
     assert max_ok.json()["allowed"] is False
@@ -375,28 +380,61 @@ def test_agent_id_ascii_uint256_bounds():
     assert as_int.json()["allowed"] is False
     assert as_int.json()["reason"] == "unknown_bot"
 
+    leading_zeros = "0" * 77 + "7"
+    assert len(leading_zeros) == 78
+    padded_ok = c.post("/v1/access/check", json={**bot, "agent_id": leading_zeros})
+    assert padded_ok.status_code == 200
+    assert padded_ok.json()["allowed"] is False
+    assert padded_ok.json()["reason"] == "unknown_bot"
+
     for agent_id in (True, False):
         bad = c.post("/v1/access/check", json={**bot, "agent_id": agent_id})
         assert bad.status_code == 400
         assert "decimal integer" in bad.json()["detail"]
 
 
-def test_agent_id_string_length_rejected_before_int():
+def test_agent_id_string_length_rejected_before_int(monkeypatch):
+    recorded = []
+
+    class Spy(int):
+        def __new__(cls, value=0, *args, **kwargs):
+            if isinstance(value, str):
+                recorded.append(value)
+            return int.__new__(cls, value, *args, **kwargs)
+
+    monkeypatch.setattr(stamp_api_module, "int", Spy, raising=False)
+
     c = _client()
     bot = {"bot_id": "no-id-bot"}
-    for agent_id in ("1" * 5000, "0" * 4301 + "1", "123\n", "\uff11"):
+    seventy_nine = "1" + "0" * 78
+    seventy_nine_padded = "0" * 78 + "1"
+    assert len(seventy_nine) == 79
+    assert len(seventy_nine_padded) == 79
+    for agent_id in ("1" * 5000, "0" * 4301 + "1", "123\n", "\uff11", seventy_nine, seventy_nine_padded):
         bad = c.post("/v1/access/check", json={**bot, "agent_id": agent_id})
         assert bad.status_code == 400
         assert "decimal integer" in bad.json()["detail"]
+    assert seventy_nine not in recorded
+    assert seventy_nine_padded not in recorded
 
-    max_str = c.post("/v1/access/check", json={**bot, "agent_id": str(2**256 - 1)})
+    max_digits = str(2**256 - 1)
+    assert len(max_digits) == 78
+    max_str = c.post("/v1/access/check", json={**bot, "agent_id": max_digits})
     assert max_str.status_code == 200
     assert max_str.json()["allowed"] is False
     assert max_str.json()["reason"] == "unknown_bot"
 
-    over_str = c.post("/v1/access/check", json={**bot, "agent_id": str(2**256)})
+    over_digits = str(2**256)
+    assert len(over_digits) == 78
+    over_str = c.post("/v1/access/check", json={**bot, "agent_id": over_digits})
     assert over_str.status_code == 400
     assert "decimal integer" in over_str.json()["detail"]
+
+    # The spy stayed on the module int and still parsed in-range and over-range 78-digit strings.
+    assert max_digits in recorded
+    assert over_digits in recorded
+    assert seventy_nine not in recorded
+    assert seventy_nine_padded not in recorded
 
 
 def test_known_bot_accepts_optional_agent_id_without_next():

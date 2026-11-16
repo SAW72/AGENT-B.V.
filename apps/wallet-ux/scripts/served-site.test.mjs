@@ -28,9 +28,9 @@ let stateDir = ""
 let server
 let base = ""
 
-function run(command, args) {
+function run(command, args, env = process.env) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, { cwd: appRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] })
+    const proc = spawn(command, args, { cwd: appRoot, env, stdio: ["ignore", "pipe", "pipe"] })
     let log = ""
     proc.stdout?.on("data", (chunk) => {
       log += chunk.toString()
@@ -145,9 +145,10 @@ function forwardedHref(html, url) {
 
 describe("built site", () => {
   beforeAll(async () => {
-    // The real production build: vite writes dist/app, assemble-site.mjs copies landing/ into dist.
-    await run("npm", ["run", "build"])
-    siteDir = join(appRoot, "dist")
+    // The real production build, in its own out dir so a parallel npm run build cannot clobber it.
+    // vite writes <out>/app, assemble-site.mjs copies landing/ into <out>.
+    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
+    await run("npm", ["run", "build"], { ...process.env, WALLET_UX_OUT_DIR: siteDir })
     stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))
     const port = 18000 + Math.floor(Math.random() * 20000)
     base = `http://127.0.0.1:${port}`
@@ -182,6 +183,7 @@ describe("built site", () => {
       }
     }
     if (stateDir) rmSync(stateDir, { recursive: true, force: true })
+    if (siteDir) rmSync(siteDir, { recursive: true, force: true })
   })
 
   it("copies landing files into dist", async () => {

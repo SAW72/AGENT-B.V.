@@ -1,4 +1,4 @@
-import { dirname, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
@@ -41,10 +41,13 @@ function walletBrand(): Plugin {
 }
 
 // The wallet app is served under /app/; the landing page owns the site root.
-// scripts/assemble-site.mjs puts landing/ at dist/ and this build at dist/app/.
+// scripts/assemble-site.mjs puts landing/ at the out root and this build at <out root>/app/.
+// WALLET_UX_OUT_DIR overrides that root (relative to this app, or absolute). Unset stays dist,
+// so a production build writes the same dist/app tree as before.
+const walletOutRoot = process.env.WALLET_UX_OUT_DIR || "dist"
 export default defineConfig({
   base: "/app/",
-  build: { outDir: "dist/app", emptyOutDir: true },
+  build: { outDir: join(walletOutRoot, "app"), emptyOutDir: true },
   plugins: [requiredBuildEnvPlugin(), react(), walletBrand()],
   server: {
     host: "0.0.0.0",

@@ -27,8 +27,15 @@ if (!existsSync(source)) {
   process.exit(0)
 }
 
-const book = JSON.parse(readFileSync(source, "utf8"))
+const sourceBytes = readFileSync(source)
+const book = JSON.parse(sourceBytes.toString("utf8"))
 assertSepoliaBook(book, "deployments/base-sepolia.json")
-mkdirSync(destDir, { recursive: true })
-copyFileSync(source, dest)
-console.log("Copied deployments/base-sepolia.json -> src/base-sepolia.json (chainId 84532)")
+// copyFileSync truncates dest before the write finishes. A parallel tsc or vite
+// read of this same path can observe the half-written book. Identical bytes need no rewrite.
+if (existsSync(dest) && readFileSync(dest).equals(sourceBytes)) {
+  console.log("src/base-sepolia.json already matches deployments/base-sepolia.json (chainId 84532)")
+} else {
+  mkdirSync(destDir, { recursive: true })
+  copyFileSync(source, dest)
+  console.log("Copied deployments/base-sepolia.json -> src/base-sepolia.json (chainId 84532)")
+}

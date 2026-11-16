@@ -42,6 +42,8 @@ function tempRoot(contents) {
 }
 
 function runBuild(overrides) {
+  const outDir = mkdtempSync(join(tmpdir(), "wallet-ux-build-"))
+  temps.push(outDir)
   const env = { ...process.env }
   delete env.VITE_CLAIM_RELAYER_URL
   delete env.VITE_BASE_SEPOLIA_RPC_URL
@@ -50,20 +52,22 @@ function runBuild(overrides) {
     if (value === undefined) delete env[key]
     else env[key] = value
   }
-  return spawnSync("npm", ["run", "build"], {
+  env.WALLET_UX_OUT_DIR = outDir
+  const result = spawnSync("npm", ["run", "build"], {
     cwd: appRoot,
     env,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
   })
+  return Object.assign(result, { outDir })
 }
 
 function outputOf(result) {
   return `${result.stdout ?? ""}\n${result.stderr ?? ""}`
 }
 
-function distJavaScript() {
-  const directory = join(appRoot, "dist")
+function distJavaScript(outDir) {
+  const directory = outDir
   let text = ""
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
@@ -569,7 +573,7 @@ describe("npm run build", () => {
   it("passes when VITE_CLAIM_RELAYER_URL is unset and inlines the checked-in URL", () => {
     const result = runBuild({})
     expect(result.status, outputOf(result)).toBe(0)
-    const javascript = distJavaScript()
+    const javascript = distJavaScript(result.outDir)
     expect(javascript).toContain(RELAYER_URL)
     expect(javascript).toContain(RPC_URL)
     expect(javascript).not.toContain("VITE_CLAIM_API_SECRET")
@@ -583,7 +587,7 @@ describe("npm run build", () => {
       VITE_BASE_SEPOLIA_RPC_URL: RPC_URL,
     })
     expect(result.status, outputOf(result)).toBe(0)
-    const javascript = distJavaScript()
+    const javascript = distJavaScript(result.outDir)
     expect(javascript).toContain(canonical)
     expect(javascript).not.toContain(raw)
   }, 180_000)
