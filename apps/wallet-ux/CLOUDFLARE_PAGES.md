@@ -27,13 +27,16 @@ cd ../../claim-relayer
 npm ci
 cd ../apps/wallet-ux
 npm test
-npm run build
+unset WALLET_UX_OUT_DIR
+WALLET_UX_DEPLOY=1 npm run build
 node scripts/guard-claim-secret.mjs dist
 ```
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
 `npm run build` reads [`build-env.required.json`](build-env.required.json). That file sets `VITE_CLAIM_RELAYER_URL` to `https://agent-bv-relayer-edge.s-a-wight72.workers.dev` and `VITE_BASE_SEPOLIA_RPC_URL` to `https://sepolia.base.org`. The build fails if either resolved value is empty and names the variable. A non-empty shell value overrides the file. An empty shell value fails the build; it does not fall back to the file. The relayer URL must be exactly `https://agent-bv-relayer-edge.s-a-wight72.workers.dev`, `https://agent-bv-relayer-edge.s-a-wight72.workers.dev/`, or `https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1/claims`. The Render origin is not an allowlist entry. The build inlines that allowlist entry. An https RPC host on the allowlist (`sepolia.base.org`) is accepted. Any other public https RPC host must answer `eth_chainId` with `84532`. Anything else fails the build. Leave `VITE_CLAIM_API_SECRET` unset. That name is retired. `npm run dev` still uses `https://sepolia.base.org` when `VITE_BASE_SEPOLIA_RPC_URL` is unset.
+
+`unset WALLET_UX_OUT_DIR` clears a shell override. `WALLET_UX_DEPLOY=1` makes this build refuse `WALLET_UX_OUT_DIR` if it is set. Before either `npx wrangler pages deploy dist` below, confirm the build printed `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of the repo root. Do not upload if either line is missing or names another directory.
 
 Before the production upload, note the deployment ID of the live production deployment (the current `main` deployment). That ID is the rollback target. Preview deployment IDs are not rollback targets.
 
@@ -63,7 +66,7 @@ The same preview URL also has to pass these checks. The script does not cover th
 
 A failed preview check stops the deploy. Do not upload `--branch=main`.
 
-Then deploy production with the same `dist` and the same merge SHA:
+Then deploy production with the same `dist` and the same merge SHA. This upload uses that same build. The log must already show `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`.
 
 ```bash
 npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>

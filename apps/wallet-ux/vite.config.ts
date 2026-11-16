@@ -4,7 +4,7 @@ import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { applyBrandHtml, brandManifestSource } from "./src/brand.ts"
 import { requiredBuildEnvPlugin } from "./scripts/require-build-env.mjs"
-import { resolveWalletOutRoot } from "./scripts/out-dir.mjs"
+import { assertWalletAppDir, resolveWalletOutRoot } from "./scripts/out-dir.mjs"
 
 const port = Number(process.env.PORT) || 5173
 const appRoot = dirname(fileURLToPath(import.meta.url))
@@ -45,9 +45,10 @@ function walletBrand(): Plugin {
 // The wallet app is served under /app/; the landing page owns the site root.
 // scripts/assemble-site.mjs puts landing/ at the out root and this build at <out root>/app/.
 // scripts/out-dir.mjs confines WALLET_UX_OUT_DIR. Unset stays <app>/dist, so a production
-// build writes the same dist/app tree as before. An override that escapes throws here, at
-// config load, before Vite writes.
+// build writes the same dist/app tree as before. An override is prepared here, at config
+// load, before Vite writes. <root>/app must not be a symlink: emptyOutDir would follow it.
 const walletOutRoot = resolveWalletOutRoot(process.env, appRoot)
+assertWalletAppDir(walletOutRoot)
 
 function walletOutDirLog(): Plugin {
   let logged = false

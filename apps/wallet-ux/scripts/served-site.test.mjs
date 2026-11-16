@@ -152,9 +152,11 @@ describe("built site", () => {
     siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
     const buildEnv = { ...process.env, WALLET_UX_OUT_DIR: siteDir }
     // This temp dir is a local test build, not a deploy build. A parent shell may
-    // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
-    // workflow). Those signals refuse any WALLET_UX_OUT_DIR override.
+    // set CF_PAGES, WALLET_UX_DEPLOY, or GITHUB_WORKFLOW_REF (Cloudflare Pages,
+    // the manual production signal, or the stale deploy workflow). Those signals
+    // refuse any WALLET_UX_OUT_DIR override.
     delete buildEnv.CF_PAGES
+    delete buildEnv.WALLET_UX_DEPLOY
     delete buildEnv.GITHUB_WORKFLOW_REF
     await run("npm", ["run", "build"], buildEnv)
     stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))

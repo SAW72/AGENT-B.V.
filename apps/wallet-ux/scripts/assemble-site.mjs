@@ -3,21 +3,23 @@
 // The same assets/404.html is also placed in dist/app/assets/. Pages has no
 // 404 status in _redirects. A 404.html in those directories makes a missing
 // asset 404. There is no top-level 404.html, so unknown pages still fall back.
-import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyTestersPageConfig } from "./testers-page-policy.mjs"
-import { resolveWalletOutRoot } from "./out-dir.mjs"
+import { deleteStaleOutEntries, openWalletOutRoot } from "./out-dir.mjs"
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 // Confined by scripts/out-dir.mjs. Unset WALLET_UX_OUT_DIR stays <app>/dist.
-// Resolve before any delete: a bad root throws instead of wiping that directory.
-const dist = resolveWalletOutRoot(process.env, app)
+// Prepare before any delete. deleteStaleOutEntries re-lstats a prepared root
+// and throws instead of deleting if it was swapped for a symlink.
+const opened = openWalletOutRoot(process.env, app)
+const dist = opened.root
 console.log(`wallet-ux output dir: ${dist}`)
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
-for (const name of readdirSync(dist)) if (name !== "app") rmSync(resolve(dist, name), { recursive: true, force: true })
+deleteStaleOutEntries(opened)
 cpSync(resolve(app, "landing"), dist, { recursive: true })
 const appAssets = resolve(dist, "app/assets")
 mkdirSync(appAssets, { recursive: true })
 cpSync(resolve(app, "landing/assets/404.html"), resolve(appAssets, "404.html"))
 applyTestersPageConfig(dist)
-console.log("assembled dist/: landing at /, wallet app at /app/")
+console.log(`assembled ${dist}: landing at /, wallet app at /app/`)
