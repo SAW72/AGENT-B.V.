@@ -667,6 +667,31 @@ button.task-link.secondary {
   text-decoration: none;
 }
 
+.identity-gateway {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.identity-gateway .kv-row {
+  grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.identity-gateway .kv-value,
+.identity-gateway .identity-uri,
+.identity-gateway .identity-uri-text {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .identity-gateway .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .step-primary { flex: 1; min-width: 0; }
 .step-primary button,
 .step-primary a.next-step { width: 100%; min-height: 44px; margin-top: 0; }

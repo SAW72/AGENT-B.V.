@@ -1,0 +1,8 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "TCS Grokbot",
+  "description": "TCS Grokbot is the Agent BV demo agent on Base Sepolia. This file is the agent URI for register(string) on the existing ERC-8004 Identity Registry. The owner signs that call from their own wallet. The agent id is assigned by the registry when the mint confirms, so this file has no registrations list yet.",
+  "services": [],
+  "active": true,
+  "x402Support": false
+}

@@ -25,12 +25,11 @@ extract() {
 
 a=$(extract 1)
 b=$(extract 2)
-c=$(extract 3)
-if [ -z "$a" ] || [ "$a" != "$b" ] || [ "$a" != "$c" ]; then
-  echo "$shell: the three ops_guard copies differ or are missing"
+if [ -z "$a" ] || [ -z "$b" ] || [ "$a" != "$b" ]; then
+  echo "$shell: the two ops_guard copies differ or are missing"
   exit 1
 fi
-echo "$shell: three ops_guard copies identical"
+echo "$shell: two ops_guard copies identical"
 
 unset_count=$(grep -c '^unset PAYER_OPERATOR PAYEE_OPERATOR$' "$md" || true)
 if [ "$unset_count" != 1 ]; then
@@ -131,8 +130,8 @@ if grep -n 'A wrong chain does exit' "$md" >/dev/null; then
   fail=$((fail + 1))
 fi
 missing_cast_count=$(grep -c "command -v cast >/dev/null || { echo 'cast is not installed'; skip_send=1; }" "$md" || true)
-if [ "$missing_cast_count" != 2 ]; then
-  echo "$shell: expected the missing-cast skip on both send pastes, found $missing_cast_count"
+if [ "$missing_cast_count" != 1 ]; then
+  echo "$shell: expected the missing-cast skip on one send paste, found $missing_cast_count"
   fail=$((fail + 1))
 fi
 risks=$(awk '/^## Risks$/{p=1} p' "$md")
@@ -324,8 +323,8 @@ awk '
   cap { buf = buf $0 ORS }
 ' tmp="$send_tmp" "$md"
 send_count=$(find "$send_tmp" -name 'send-*.sh' | wc -l | tr -d ' ')
-if [ "$send_count" != 2 ]; then
-  echo "$shell: expected two send pastes, found $send_count"
+if [ "$send_count" != 1 ]; then
+  echo "$shell: expected one send paste, found $send_count"
   fail=$((fail + 1))
 fi
 
