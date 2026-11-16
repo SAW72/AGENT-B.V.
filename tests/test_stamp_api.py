@@ -395,12 +395,24 @@ def test_agent_id_ascii_uint256_bounds():
 
 def test_agent_id_string_length_rejected_before_int(monkeypatch):
     recorded = []
+    builtin_int = int
 
-    class Spy(int):
+    class _IntCheck(type):
+        # stamp_api uses isinstance(agent_id, int) at the decimal check. A bare
+        # Spy(int) subclass fails that check for a real JSON integer, so the
+        # integer would 400 while the spy is installed. Delegate both checks
+        # to the builtin int. int("...") still goes through Spy.__new__.
+        def __instancecheck__(cls, instance):
+            return isinstance(instance, builtin_int)
+
+        def __subclasscheck__(cls, subclass):
+            return issubclass(subclass, builtin_int)
+
+    class Spy(builtin_int, metaclass=_IntCheck):
         def __new__(cls, value=0, *args, **kwargs):
             if isinstance(value, str):
                 recorded.append(value)
-            return int.__new__(cls, value, *args, **kwargs)
+            return builtin_int.__new__(cls, value, *args, **kwargs)
 
     monkeypatch.setattr(stamp_api_module, "int", Spy, raising=False)
 
@@ -435,6 +447,17 @@ def test_agent_id_string_length_rejected_before_int(monkeypatch):
     assert over_digits in recorded
     assert seventy_nine not in recorded
     assert seventy_nine_padded not in recorded
+
+    # JSON numbers skip int() and use isinstance. The metaclass keeps that path
+    # on the builtin int while the spy is still installed.
+    for agent_id in (1000, 2**256 - 1):
+        as_int = c.post("/v1/access/check", json={**bot, "agent_id": agent_id})
+        assert as_int.status_code == 200
+        assert as_int.json()["allowed"] is False
+        assert as_int.json()["reason"] == "unknown_bot"
+    too_big = c.post("/v1/access/check", json={**bot, "agent_id": 2**256})
+    assert too_big.status_code == 400
+    assert "decimal integer" in too_big.json()["detail"]
 
 
 def test_known_bot_accepts_optional_agent_id_without_next():

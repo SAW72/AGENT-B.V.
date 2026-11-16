@@ -7,11 +7,12 @@ import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyTestersPageConfig } from "./testers-page-policy.mjs"
+import { resolveWalletOutRoot } from "./out-dir.mjs"
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-// WALLET_UX_OUT_DIR is relative to this app, or absolute. Unset stays dist.
-// An absolute value wins inside resolve(); a relative value stays under app.
-const outRoot = process.env.WALLET_UX_OUT_DIR || "dist"
-const dist = resolve(app, outRoot)
+// Confined by scripts/out-dir.mjs. Unset WALLET_UX_OUT_DIR stays <app>/dist.
+// Resolve before any delete: a bad root throws instead of wiping that directory.
+const dist = resolveWalletOutRoot(process.env, app)
+console.log(`wallet-ux output dir: ${dist}`)
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
 for (const name of readdirSync(dist)) if (name !== "app") rmSync(resolve(dist, name), { recursive: true, force: true })
 cpSync(resolve(app, "landing"), dist, { recursive: true })

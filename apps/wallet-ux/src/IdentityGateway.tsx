@@ -82,8 +82,10 @@ export function IdentityGateway({
   const [staleHoldAt, setStaleHoldAt] = useState<number | null>(null)
   const signTicket = useRef(0)
 
-  const parsed = parseAgentId(agentInput)
-  const issue = agentIdIssue(agentInput)
+  // identity8004 stays strict (no trim). The field keeps what was typed.
+  const agentLookup = agentInput.trim()
+  const parsed = parseAgentId(agentLookup)
+  const issue = agentIdIssue(agentLookup)
   const identityQuery = useQuery({
     queryKey: ["erc8004-identity", rpcUrl, parsed?.toString() ?? ""],
     queryFn: () => readAgentIdentity(client, parsed as bigint),

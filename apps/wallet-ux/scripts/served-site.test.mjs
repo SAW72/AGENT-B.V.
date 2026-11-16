@@ -150,7 +150,13 @@ describe("built site", () => {
     // The real production build, in its own out dir so a parallel npm run build cannot clobber it.
     // vite writes <out>/app, assemble-site.mjs copies landing/ into <out>.
     siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
-    await run("npm", ["run", "build"], { ...process.env, WALLET_UX_OUT_DIR: siteDir })
+    const buildEnv = { ...process.env, WALLET_UX_OUT_DIR: siteDir }
+    // This temp dir is a local test build, not a deploy build. A parent shell may
+    // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
+    // workflow). Those signals refuse any WALLET_UX_OUT_DIR override.
+    delete buildEnv.CF_PAGES
+    delete buildEnv.GITHUB_WORKFLOW_REF
+    await run("npm", ["run", "build"], buildEnv)
     stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))
     server = spawn(
       process.execPath,
