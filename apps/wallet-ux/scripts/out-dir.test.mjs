@@ -77,6 +77,29 @@ function runBuild(env) {
   })
 }
 
+// vite.config.ts calls resolveWalletOutRoot when the config module loads, so a
+// refused override exits before tsc or rollup. assemble-site.mjs opens the same
+// root before it copies or deletes. One real `npm run build` stays at the bottom.
+const viteBin = join(appRoot, "node_modules", "vite", "bin", "vite.js")
+
+function runViteConfigLoad(env) {
+  return spawnSync(process.execPath, [viteBin, "build"], {
+    cwd: appRoot,
+    env,
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+}
+
+function runAssemble(env) {
+  return spawnSync(process.execPath, ["scripts/assemble-site.mjs"], {
+    cwd: appRoot,
+    env,
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+}
+
 function seedSentinels(dir) {
   mkdirSync(join(dir, "app"), { recursive: true })
   mkdirSync(join(dir, "sub"), { recursive: true })
@@ -503,6 +526,25 @@ describe("temp root", () => {
     }
   })
 
+  it("names the repo when TMPDIR is an ancestor of the repo", () => {
+    const ancestor = dirname(repoRoot)
+    const ghost = join(ancestor, `qa-repo-named-${hex()}`)
+    expect(existsSync(ghost)).toBe(false)
+    try {
+      let caught = null
+      try {
+        resolveWalletOutRoot({ TMPDIR: ancestor, WALLET_UX_OUT_DIR: ghost }, appRoot)
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(OutDirError)
+      expect(caught.message).toContain("contains the repo directory")
+      expect(existsSync(ghost)).toBe(false)
+    } finally {
+      if (existsSync(ghost)) rmSync(ghost, { recursive: true, force: true })
+    }
+  })
+
   it("refuses a world-writable temp root without the sticky bit", () => {
     const parent = tempRoot()
     chmodSync(parent, 0o777)
@@ -576,20 +618,20 @@ describe("assemble-time check", () => {
   })
 })
 
-describe("npm run build", () => {
+describe("build entry points refuse before writing", () => {
   it("refuses an outside directory before vite writes", () => {
     const sentinelDir = track(mkdtempSync(join(appRoot, "..", ".outdir-sentinel-")))
     const sentinel = join(sentinelDir, "sentinel.txt")
     const payload = randomBytes(32)
     writeFileSync(sentinel, payload)
-    const result = runBuild(childEnv({ WALLET_UX_OUT_DIR: sentinelDir }))
+    const result = runViteConfigLoad(childEnv({ WALLET_UX_OUT_DIR: sentinelDir }))
     const output = outputOf(result)
     expect(result.status, output).not.toBe(0)
     expect(output).toContain("outside the allowed output roots")
     expect(output).toContain(sentinelDir)
     expect(readFileSync(sentinel).equals(payload)).toBe(true)
     expect(readdirSync(sentinelDir)).toEqual(["sentinel.txt"])
-  }, 200_000)
+  })
 
   it("refuses the QA R1 pre-existing qa-x and wallet-ux-foreign directories", () => {
     const parent = tempRoot()
@@ -601,21 +643,27 @@ describe("npm run build", () => {
     chmodSync(foreign, 0o700)
     seedSentinels(qa)
     seedSentinels(foreign)
-    const result = runBuild(childEnv({ TMPDIR: parent, WALLET_UX_OUT_DIR: qa }))
-    const output = outputOf(result)
-    expect(result.status, output).not.toBe(0)
-    expect(output).toContain("OutDirError")
-    expectSentinels(qa)
-    expectSentinels(foreign)
-    expect(existsSync(join(qa, OUT_MARKER_NAME))).toBe(false)
-    expect(existsSync(join(foreign, OUT_MARKER_NAME))).toBe(false)
-    const foreignBuild = runBuild(childEnv({ TMPDIR: parent, WALLET_UX_OUT_DIR: foreign }))
-    const foreignOutput = outputOf(foreignBuild)
-    expect(foreignBuild.status, foreignOutput).not.toBe(0)
-    expect(foreignOutput).toContain("not created by wallet-ux")
-    expectSentinels(qa)
-    expectSentinels(foreign)
-  }, 400_000)
+    const qaEnv = childEnv({ TMPDIR: parent, WALLET_UX_OUT_DIR: qa })
+    for (const result of [runViteConfigLoad(qaEnv), runAssemble(qaEnv)]) {
+      const output = outputOf(result)
+      expect(result.status, output).not.toBe(0)
+      expect(output).toContain("OutDirError")
+      expectSentinels(qa)
+      expectSentinels(foreign)
+      expect(existsSync(join(qa, OUT_MARKER_NAME))).toBe(false)
+      expect(existsSync(join(foreign, OUT_MARKER_NAME))).toBe(false)
+    }
+    const foreignEnv = childEnv({ TMPDIR: parent, WALLET_UX_OUT_DIR: foreign })
+    for (const result of [runViteConfigLoad(foreignEnv), runAssemble(foreignEnv)]) {
+      const output = outputOf(result)
+      expect(result.status, output).not.toBe(0)
+      expect(output).toContain("not created by wallet-ux")
+      expectSentinels(qa)
+      expectSentinels(foreign)
+      expect(existsSync(join(qa, OUT_MARKER_NAME))).toBe(false)
+      expect(existsSync(join(foreign, OUT_MARKER_NAME))).toBe(false)
+    }
+  })
 
   it("refuses a HOME-equivalent TMPDIR before emptying an otherwise allowed out dir", () => {
     const fakeHome = tempRoot()
@@ -624,21 +672,65 @@ describe("npm run build", () => {
     chmodSync(out, 0o700)
     writeFileSync(join(out, OUT_MARKER_NAME), "wallet-ux\n", { mode: 0o600 })
     seedSentinels(out)
-    const result = runBuild(
-      childEnv({
-        HOME: fakeHome,
-        TMPDIR: fakeHome,
-        WALLET_UX_OUT_DIR: out,
-      }),
-    )
+    const env = childEnv({
+      HOME: fakeHome,
+      TMPDIR: fakeHome,
+      WALLET_UX_OUT_DIR: out,
+    })
+    for (const result of [runViteConfigLoad(env), runAssemble(env)]) {
+      const output = outputOf(result)
+      expect(result.status, output).not.toBe(0)
+      expect(output).toContain("Refusing temp root")
+      expectSentinels(out)
+      expect(existsSync(join(out, "index.html"))).toBe(false)
+      expect(existsSync(join(out, "app", "index.html"))).toBe(false)
+    }
+  })
+
+  it("refuses WALLET_UX_DEPLOY=1 with an otherwise allowed override and writes nothing", () => {
+    const out = track(mkdtempSync(join(tmpdir(), "wallet-ux-deploy-")))
+    chmodSync(out, 0o700)
+    writeFileSync(join(out, "SENTINEL.txt"), "keep")
+    const env = childEnv({ WALLET_UX_OUT_DIR: out, WALLET_UX_DEPLOY: "1" })
+    for (const result of [runViteConfigLoad(env), runAssemble(env)]) {
+      const output = outputOf(result)
+      expect(result.status, output).not.toBe(0)
+      expect(output).toContain("deploy build")
+      expect(readFileSync(join(out, "SENTINEL.txt"), "utf8")).toBe("keep")
+      expect(existsSync(join(out, OUT_MARKER_NAME))).toBe(false)
+      expect(existsSync(join(out, "app"))).toBe(false)
+      expect(existsSync(join(out, "index.html"))).toBe(false)
+    }
+  })
+
+  it("refuses CF_PAGES=1 at vite config load and does not create an allowed override", () => {
+    const out = track(join(tmpdir(), `wallet-ux-cf-${hex()}`))
+    expect(existsSync(out)).toBe(false)
+    const result = runViteConfigLoad(childEnv({ WALLET_UX_OUT_DIR: out, CF_PAGES: "1" }))
     const output = outputOf(result)
     expect(result.status, output).not.toBe(0)
-    expect(output).toContain("Refusing temp root")
-    expectSentinels(out)
+    expect(output).toContain("deploy build")
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(join(out, OUT_MARKER_NAME))).toBe(false)
+    expect(existsSync(join(out, "app"))).toBe(false)
     expect(existsSync(join(out, "index.html"))).toBe(false)
-    expect(existsSync(join(out, "app", "index.html"))).toBe(false)
-  }, 200_000)
+  })
 
+  it("refuses a deploy workflow ref at vite config load and does not create an allowed override", () => {
+    const out = track(join(tmpdir(), `wallet-ux-gh-${hex()}`))
+    expect(existsSync(out)).toBe(false)
+    const result = runViteConfigLoad(childEnv({ WALLET_UX_OUT_DIR: out, GITHUB_WORKFLOW_REF: deployRef }))
+    const output = outputOf(result)
+    expect(result.status, output).not.toBe(0)
+    expect(output).toContain("deploy build")
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(join(out, OUT_MARKER_NAME))).toBe(false)
+    expect(existsSync(join(out, "app"))).toBe(false)
+    expect(existsSync(join(out, "index.html"))).toBe(false)
+  })
+})
+
+describe("npm run build (single end-to-end)", () => {
   it("empties a prepared wallet-ux directory and keeps the marker", () => {
     const out = track(mkdtempSync(join(tmpdir(), "wallet-ux-")))
     chmodSync(out, 0o700)
@@ -656,19 +748,5 @@ describe("npm run build", () => {
     expect(lstatSync(join(out, OUT_MARKER_NAME)).isFile()).toBe(true)
     expect(output).toContain(`wallet-ux output dir: ${realpathSync(out)}`)
     expect(output).toContain(`assembled ${realpathSync(out)}: landing at /, wallet app at /app/`)
-  }, 200_000)
-
-  it("refuses WALLET_UX_DEPLOY=1 with an otherwise allowed override and writes nothing", () => {
-    const out = track(mkdtempSync(join(tmpdir(), "wallet-ux-deploy-")))
-    chmodSync(out, 0o700)
-    writeFileSync(join(out, "SENTINEL.txt"), "keep")
-    const result = runBuild(childEnv({ WALLET_UX_OUT_DIR: out, WALLET_UX_DEPLOY: "1" }))
-    const output = outputOf(result)
-    expect(result.status, output).not.toBe(0)
-    expect(output).toContain("deploy build")
-    expect(readFileSync(join(out, "SENTINEL.txt"), "utf8")).toBe("keep")
-    expect(existsSync(join(out, OUT_MARKER_NAME))).toBe(false)
-    expect(existsSync(join(out, "app"))).toBe(false)
-    expect(existsSync(join(out, "index.html"))).toBe(false)
   }, 200_000)
 })
