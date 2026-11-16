@@ -4,9 +4,11 @@ import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { applyBrandHtml, brandManifestSource } from "./src/brand.ts"
 import { requiredBuildEnvPlugin } from "./scripts/require-build-env.mjs"
+import { resolveWalletOutRoot } from "./scripts/out-dir.mjs"
 
 const port = Number(process.env.PORT) || 5173
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+const appRoot = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(appRoot, "../..")
 
 // Address book import is src/base-sepolia.json (inside this app).
 // scripts/sync-book.mjs refreshes it from the repo root when that file is visible.
@@ -42,13 +44,28 @@ function walletBrand(): Plugin {
 
 // The wallet app is served under /app/; the landing page owns the site root.
 // scripts/assemble-site.mjs puts landing/ at the out root and this build at <out root>/app/.
-// WALLET_UX_OUT_DIR overrides that root (relative to this app, or absolute). Unset stays dist,
-// so a production build writes the same dist/app tree as before.
-const walletOutRoot = process.env.WALLET_UX_OUT_DIR || "dist"
+// scripts/out-dir.mjs confines WALLET_UX_OUT_DIR. Unset stays <app>/dist, so a production
+// build writes the same dist/app tree as before. An override that escapes throws here, at
+// config load, before Vite writes.
+const walletOutRoot = resolveWalletOutRoot(process.env, appRoot)
+
+function walletOutDirLog(): Plugin {
+  let logged = false
+  return {
+    name: "wallet-ux-out-dir",
+    configResolved(config) {
+      // vitest loads this config with command "serve". Log the real root once per vite build.
+      if (config.command !== "build" || logged) return
+      logged = true
+      console.log(`wallet-ux output dir: ${walletOutRoot}`)
+    },
+  }
+}
+
 export default defineConfig({
   base: "/app/",
   build: { outDir: join(walletOutRoot, "app"), emptyOutDir: true },
-  plugins: [requiredBuildEnvPlugin(), react(), walletBrand()],
+  plugins: [walletOutDirLog(), requiredBuildEnvPlugin(), react(), walletBrand()],
   server: {
     host: "0.0.0.0",
     port,
