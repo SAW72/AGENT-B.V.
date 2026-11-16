@@ -90,9 +90,11 @@ function waitReady(proc) {
     const timer = setTimeout(() => reject(new Error(`wrangler did not become ready\n${log}`)), 90_000)
     const onData = (chunk) => {
       log += chunk.toString()
-      if (log.includes("Ready on")) {
+      const match = log.match(/Ready on (http:\/\/127\.0\.0\.1:(\d+))/)
+      const port = match ? Number(match[2]) : 0
+      if (port > 0) {
         clearTimeout(timer)
-        resolve()
+        resolve(match[1])
       }
     }
     proc.stdout?.on("data", onData)
@@ -150,8 +152,6 @@ describe("built site", () => {
     siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
     await run("npm", ["run", "build"], { ...process.env, WALLET_UX_OUT_DIR: siteDir })
     stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))
-    const port = 18000 + Math.floor(Math.random() * 20000)
-    base = `http://127.0.0.1:${port}`
     server = spawn(
       process.execPath,
       [
@@ -162,7 +162,7 @@ describe("built site", () => {
         "--ip",
         "127.0.0.1",
         "--port",
-        String(port),
+        "0",
         "--show-interactive-dev-session",
         "false",
         "--persist-to",
@@ -170,7 +170,7 @@ describe("built site", () => {
       ],
       { cwd: appRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
     )
-    await waitReady(server)
+    base = await waitReady(server)
   }, 180_000)
 
   afterAll(() => {
