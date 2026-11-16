@@ -197,19 +197,25 @@ export function registryDomainMatches(domain: RegistryDomain): boolean {
   )
 }
 
+const AGENT_ID_ASCII = /^[0-9]+$/
+const AGENT_ID_MAX_DIGITS = 78
+
 export function parseAgentId(raw: string): bigint | null {
-  if (agentIdIssue(raw) != null) return null
-  const trimmed = raw.trim()
-  if (trimmed === "") return null
-  return BigInt(trimmed)
+  // Null from agentIdIssue means empty or in range. Empty is not a bigint.
+  if (raw === "" || agentIdIssue(raw) != null) return null
+  return BigInt(raw)
 }
 
-/** `decimal` is not an integer. `range` is an integer above uint256. Null means empty or in range. */
+/**
+ * No trim. ASCII digits only, length 1 to 78, value < 2**256.
+ * `decimal` is not all ASCII digits. `range` is longer than 78 digits, or a 78-digit value >= 2**256.
+ * Length is checked before BigInt. Null means empty (no input yet) or in range.
+ */
 export function agentIdIssue(raw: string): "decimal" | "range" | null {
-  const trimmed = raw.trim()
-  if (trimmed === "") return null
-  if (!/^[0-9]+$/.test(trimmed)) return "decimal"
-  if (BigInt(trimmed) > UINT256_MAX) return "range"
+  if (raw === "") return null
+  if (!AGENT_ID_ASCII.test(raw)) return "decimal"
+  if (raw.length > AGENT_ID_MAX_DIGITS) return "range"
+  if (BigInt(raw) > UINT256_MAX) return "range"
   return null
 }
 

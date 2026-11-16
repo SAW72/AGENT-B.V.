@@ -28,9 +28,9 @@ let stateDir = ""
 let server
 let base = ""
 
-function run(command, args) {
+function run(command, args, env = process.env) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, { cwd: appRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] })
+    const proc = spawn(command, args, { cwd: appRoot, env, stdio: ["ignore", "pipe", "pipe"] })
     let log = ""
     proc.stdout?.on("data", (chunk) => {
       log += chunk.toString()
@@ -90,9 +90,11 @@ function waitReady(proc) {
     const timer = setTimeout(() => reject(new Error(`wrangler did not become ready\n${log}`)), 90_000)
     const onData = (chunk) => {
       log += chunk.toString()
-      if (log.includes("Ready on")) {
+      const match = log.match(/Ready on (http:\/\/127\.0\.0\.1:(\d+))/)
+      const port = match ? Number(match[2]) : 0
+      if (port > 0) {
         clearTimeout(timer)
-        resolve()
+        resolve(match[1])
       }
     }
     proc.stdout?.on("data", onData)
@@ -145,12 +147,11 @@ function forwardedHref(html, url) {
 
 describe("built site", () => {
   beforeAll(async () => {
-    // The real production build: vite writes dist/app, assemble-site.mjs copies landing/ into dist.
-    await run("npm", ["run", "build"])
-    siteDir = join(appRoot, "dist")
+    // The real production build, in its own out dir so a parallel npm run build cannot clobber it.
+    // vite writes <out>/app, assemble-site.mjs copies landing/ into <out>.
+    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
+    await run("npm", ["run", "build"], { ...process.env, WALLET_UX_OUT_DIR: siteDir })
     stateDir = mkdtempSync(join(tmpdir(), "wallet-ux-wrangler-"))
-    const port = 18000 + Math.floor(Math.random() * 20000)
-    base = `http://127.0.0.1:${port}`
     server = spawn(
       process.execPath,
       [
@@ -161,7 +162,7 @@ describe("built site", () => {
         "--ip",
         "127.0.0.1",
         "--port",
-        String(port),
+        "0",
         "--show-interactive-dev-session",
         "false",
         "--persist-to",
@@ -169,7 +170,7 @@ describe("built site", () => {
       ],
       { cwd: appRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
     )
-    await waitReady(server)
+    base = await waitReady(server)
   }, 180_000)
 
   afterAll(() => {
@@ -182,6 +183,7 @@ describe("built site", () => {
       }
     }
     if (stateDir) rmSync(stateDir, { recursive: true, force: true })
+    if (siteDir) rmSync(siteDir, { recursive: true, force: true })
   })
 
   it("copies landing files into dist", async () => {
