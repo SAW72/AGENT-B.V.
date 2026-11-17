@@ -4,7 +4,7 @@ import { defineConfig, type Plugin } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { applyBrandHtml, brandManifestSource } from "./src/brand.ts"
 import { requiredBuildEnvPlugin } from "./scripts/require-build-env.mjs"
-import { resolveWalletOutRoot } from "./scripts/out-dir.mjs"
+import { cleanVerifiedAppOut, prepareViteOutDir } from "./scripts/out-dir.mjs"
 
 const port = Number(process.env.PORT) || 5173
 const appRoot = dirname(fileURLToPath(import.meta.url))
@@ -44,28 +44,36 @@ function walletBrand(): Plugin {
 
 // The wallet app is served under /app/; the landing page owns the site root.
 // scripts/assemble-site.mjs puts landing/ at the out root and this build at <out root>/app/.
-// scripts/out-dir.mjs confines WALLET_UX_OUT_DIR. Unset stays <app>/dist, so a production
-// build writes the same dist/app tree as before. An override that escapes throws here, at
-// config load, before Vite writes.
-const walletOutRoot = resolveWalletOutRoot(process.env, appRoot)
+// prepareViteOutDir runs at config load, before Vite's renderStart emptyOutDir hook.
+// A symlinked dist, or a dist that resolves outside the app, throws here.
+// emptyOutDir stays false. buildStart cleans only the verified app directory.
+const prepared = prepareViteOutDir(process.env, appRoot)
+const walletOutRoot = prepared.outRoot
 
-function walletOutDirLog(): Plugin {
+function walletOutDirPlugin(): Plugin {
   let logged = false
+  let resolvedOutDir = ""
   return {
     name: "wallet-ux-out-dir",
     configResolved(config) {
+      resolvedOutDir = config.build.outDir
       // vitest loads this config with command "serve". Log the real root once per vite build.
       if (config.command !== "build" || logged) return
       logged = true
       console.log(`wallet-ux output dir: ${walletOutRoot}`)
+    },
+    buildStart() {
+      // An inline outDir (brand HTML tests) is not this app's dist/app tree.
+      if (resolve(resolvedOutDir) !== resolve(join(walletOutRoot, "app"))) return
+      cleanVerifiedAppOut(walletOutRoot, appRoot)
     },
   }
 }
 
 export default defineConfig({
   base: "/app/",
-  build: { outDir: join(walletOutRoot, "app"), emptyOutDir: true },
-  plugins: [walletOutDirLog(), requiredBuildEnvPlugin(), react(), walletBrand()],
+  build: { outDir: join(walletOutRoot, "app"), emptyOutDir: prepared.emptyOutDir },
+  plugins: [walletOutDirPlugin(), requiredBuildEnvPlugin(), react(), walletBrand()],
   server: {
     host: "0.0.0.0",
     port,

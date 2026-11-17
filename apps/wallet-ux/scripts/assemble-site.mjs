@@ -45,6 +45,7 @@ try {
 if (cleanable !== dist) {
   fail(`wallet-ux output dir ${dist} is not the expected ${cleanable}.`)
 }
+console.log(`wallet-ux pre-delete check: ${cleanable}`)
 
 for (const name of readdirSync(dist)) if (name !== "app") rmSync(resolve(dist, name), { recursive: true, force: true })
 cpSync(resolve(app, "landing"), dist, { recursive: true })

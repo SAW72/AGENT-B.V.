@@ -13,6 +13,7 @@ import {
   REQUIRED_BUILD_ENV_PATH_KEY,
   requiredBuildEnvPlugin,
 } from "./require-build-env.mjs"
+import { createWalletOutDir, WALLET_OUT_OVERRIDE_ENV } from "./out-dir.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const RELAYER_URL = "https://agent-bv-relayer-edge.s-a-wight72.workers.dev"
@@ -42,7 +43,7 @@ function tempRoot(contents) {
 }
 
 function runBuild(overrides) {
-  const outDir = mkdtempSync(join(tmpdir(), "wallet-ux-out-"))
+  const outDir = createWalletOutDir(appRoot)
   temps.push(outDir)
   const env = { ...process.env }
   delete env.VITE_CLAIM_RELAYER_URL
@@ -53,6 +54,7 @@ function runBuild(overrides) {
     else env[key] = value
   }
   env.WALLET_UX_OUT_DIR = outDir
+  env[WALLET_OUT_OVERRIDE_ENV] = "1"
   // This temp dir is a local test build, not a deploy build. A parent shell may
   // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
   // workflow). Those signals refuse any WALLET_UX_OUT_DIR override.

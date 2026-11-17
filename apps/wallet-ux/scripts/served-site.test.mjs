@@ -16,6 +16,7 @@ import {
   robotsTxtBody,
   sitemapXmlBody,
 } from "./testers-page-policy.mjs"
+import { createWalletOutDir, WALLET_OUT_OVERRIDE_ENV } from "./out-dir.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
@@ -149,8 +150,14 @@ describe("built site", () => {
   beforeAll(async () => {
     // The real production build, in its own out dir so a parallel npm run build cannot clobber it.
     // vite writes <out>/app, assemble-site.mjs copies landing/ into <out>.
-    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-out-"))
-    const buildEnv = { ...process.env, WALLET_UX_OUT_DIR: siteDir }
+    // createWalletOutDir writes the creation marker. The test-only flag opts this
+    // build out of the production refusal of WALLET_UX_OUT_DIR.
+    siteDir = createWalletOutDir(appRoot)
+    const buildEnv = {
+      ...process.env,
+      WALLET_UX_OUT_DIR: siteDir,
+      [WALLET_OUT_OVERRIDE_ENV]: "1",
+    }
     // This temp dir is a local test build, not a deploy build. A parent shell may
     // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
     // workflow). Those signals refuse any WALLET_UX_OUT_DIR override.
