@@ -1,11 +1,19 @@
-import { spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { dirname, join, relative } from "node:path"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
+import { basename, dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
-import { isDeployBuild, OutDirError, resolveWalletOutRoot } from "./out-dir.mjs"
+import {
+  assertReadyToClean,
+  createWalletOutDir,
+  deployOutDirSignal,
+  isDeployBuild,
+  OutDirError,
+  readSourceCommit,
+  resolveWalletOutRoot,
+} from "./out-dir.mjs"
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const distRoot = join(realpathSync(appRoot), "dist")
@@ -14,8 +22,33 @@ const deployRef = "SAW72/AGENT-B.V./.github/workflows/deploy-wallet-ux.yml@refs/
 const temps = []
 
 afterEach(() => {
-  for (const directory of temps.splice(0)) rmSync(directory, { recursive: true, force: true })
+  for (const directory of temps.splice(0)) {
+    try {
+      if (lstatSync(directory).isSymbolicLink()) unlinkSync(directory)
+      else rmSync(directory, { recursive: true, force: true })
+    } catch {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }
 })
+
+function withTmpdir(value, fn) {
+  const saved = process.env.TMPDIR
+  process.env.TMPDIR = value
+  try {
+    return fn()
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = saved
+  }
+}
+
+function scriptEnv(overrides) {
+  const env = { ...process.env, ...overrides }
+  delete env.CF_PAGES
+  delete env.GITHUB_WORKFLOW_REF
+  return env
+}
 
 function refused(env) {
   expect(() => resolveWalletOutRoot(env, appRoot)).toThrow(OutDirError)
@@ -38,11 +71,14 @@ describe("resolveWalletOutRoot", () => {
     expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "" }, appRoot)).toBe(distRoot)
   })
 
-  it("accepts a tmpdir child and a dist descendant", () => {
-    const child = mkdtempSync(join(tmpdir(), "wallet-ux-ok-"))
+  it("accepts a wallet-ux-out- directory this module created, and a dist descendant", () => {
+    const child = createWalletOutDir(appRoot)
     temps.push(child)
     const got = resolveWalletOutRoot({ WALLET_UX_OUT_DIR: child }, appRoot)
     expect(got).toBe(realpathSync(child))
+    expect(basename(got)).toMatch(/^wallet-ux-out-[A-Za-z0-9]{6}$/)
+    expect(dirname(got)).toBe(realTmp)
+    expect(assertReadyToClean(got, appRoot)).toBe(got)
     const rel = relative(realTmp, got)
     expect(rel !== "" && !rel.startsWith("..")).toBe(true)
     expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "dist" }, appRoot)).toBe(distRoot)
@@ -140,4 +176,105 @@ describe("resolveWalletOutRoot", () => {
       rmSync(sentinelDir, { recursive: true, force: true })
     }
   }, 200_000)
+
+  it("refuses '..', '/', $HOME, a symlink, and an unrelated /tmp child", () => {
+    const dotdot = refused({ WALLET_UX_OUT_DIR: ".." })
+    expect(dotdot.message).toContain("outside the allowed output roots")
+
+    const root = refused({ WALLET_UX_OUT_DIR: "/" })
+    expect(root.message).toContain("resolves to /")
+
+    const home = homedir()
+    const homeError = refused({ WALLET_UX_OUT_DIR: home })
+    expect(homeError.message).toContain(realpathSync(home))
+
+    const real = createWalletOutDir(appRoot)
+    temps.push(real)
+    const link = join(realTmp, "wallet-ux-out-SymLnk")
+    symlinkSync(real, link)
+    temps.push(link)
+    const linkError = refused({ WALLET_UX_OUT_DIR: link })
+    expect(linkError.message).toContain("symlink")
+    expect(lstatSync(link).isSymbolicLink()).toBe(true)
+
+    const unrelated = mkdtempSync(join(tmpdir(), "unrelated-"))
+    temps.push(unrelated)
+    writeFileSync(join(unrelated, "keep.txt"), "keep")
+    const unrelatedError = refused({ WALLET_UX_OUT_DIR: unrelated })
+    expect(unrelatedError.message).toContain("outside the allowed output roots")
+    expect(readFileSync(join(unrelated, "keep.txt"), "utf8")).toBe("keep")
+
+    const wrongPrefix = mkdtempSync(join(tmpdir(), "wallet-ux-ok-"))
+    temps.push(wrongPrefix)
+    refused({ WALLET_UX_OUT_DIR: wrongPrefix })
+  })
+
+  it("refuses a temp root of /, $HOME, the repo, an ancestor, a relative path, or '..'", () => {
+    const repoRoot = realpathSync(resolve(appRoot, "../.."))
+    expect(existsSync(join(repoRoot, ".git"))).toBe(true)
+    const cases = [
+      ["/", "resolves to /, which is refused"],
+      [homedir(), `$HOME (${realpathSync(homedir())})`],
+      [repoRoot, `repo root (${repoRoot})`],
+      [appRoot, `app root (${realpathSync(appRoot)})`],
+      [dirname(repoRoot), "ancestor of the app root"],
+      ["relative-tmp", "must be an absolute path"],
+      [`${realTmp}/../${basename(realTmp)}`, "must not contain '..'"],
+    ]
+    for (const [value, snippet] of cases) {
+      withTmpdir(value, () => {
+        let caught
+        try {
+          resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "dist" }, appRoot)
+        } catch (error) {
+          caught = error
+        }
+        expect(caught, `TMPDIR=${value}`).toBeInstanceOf(OutDirError)
+        expect(caught.message, `TMPDIR=${value}`).toContain(snippet)
+      })
+    }
+  })
+
+  it("prints the resolved out dir and source commit, and exits non-zero when the dir is not expected", () => {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8" }).trim()
+    expect(readSourceCommit(appRoot)).toBe(sha)
+    expect(sha).toMatch(/^[0-9a-f]{40}$/)
+
+    const child = createWalletOutDir(appRoot)
+    temps.push(child)
+    mkdirSync(join(child, "app"), { recursive: true })
+    writeFileSync(join(child, "app", "index.html"), "<!doctype html><title>wallet</title>\n")
+    writeFileSync(join(child, "stray.txt"), "gone")
+    const signal = deployOutDirSignal({ WALLET_UX_OUT_DIR: child }, appRoot)
+    expect(signal.outDir).toBe(realpathSync(child))
+    expect(signal.commit).toBe(sha)
+    expect(assertReadyToClean(signal.outDir, appRoot)).toBe(signal.outDir)
+
+    const built = spawnSync(process.execPath, ["scripts/assemble-site.mjs"], {
+      cwd: appRoot,
+      env: scriptEnv({ WALLET_UX_OUT_DIR: child }),
+      encoding: "utf8",
+    })
+    const builtOutput = `${built.stdout ?? ""}\n${built.stderr ?? ""}`
+    expect(built.status, builtOutput).toBe(0)
+    expect(builtOutput).toContain(`wallet-ux output dir: ${signal.outDir}`)
+    expect(builtOutput).toContain(`wallet-ux source commit: ${sha}`)
+    expect(existsSync(join(child, "stray.txt"))).toBe(false)
+    expect(existsSync(join(child, "index.html"))).toBe(true)
+    expect(existsSync(join(child, "app/index.html"))).toBe(true)
+
+    const unrelated = mkdtempSync(join(tmpdir(), "unrelated-"))
+    temps.push(unrelated)
+    writeFileSync(join(unrelated, "keep.txt"), "keep")
+    const refusedRun = spawnSync(process.execPath, ["scripts/assemble-site.mjs"], {
+      cwd: appRoot,
+      env: scriptEnv({ WALLET_UX_OUT_DIR: unrelated }),
+      encoding: "utf8",
+    })
+    const refusedOutput = `${refusedRun.stdout ?? ""}\n${refusedRun.stderr ?? ""}`
+    expect(refusedRun.status, refusedOutput).not.toBe(0)
+    expect(refusedOutput).toContain(`wallet-ux source commit: ${sha}`)
+    expect(refusedOutput).toContain("not the expected")
+    expect(readFileSync(join(unrelated, "keep.txt"), "utf8")).toBe("keep")
+  })
 })

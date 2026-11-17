@@ -42,7 +42,7 @@ function tempRoot(contents) {
 }
 
 function runBuild(overrides) {
-  const outDir = mkdtempSync(join(tmpdir(), "wallet-ux-build-"))
+  const outDir = mkdtempSync(join(tmpdir(), "wallet-ux-out-"))
   temps.push(outDir)
   const env = { ...process.env }
   delete env.VITE_CLAIM_RELAYER_URL

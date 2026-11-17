@@ -149,7 +149,7 @@ describe("built site", () => {
   beforeAll(async () => {
     // The real production build, in its own out dir so a parallel npm run build cannot clobber it.
     // vite writes <out>/app, assemble-site.mjs copies landing/ into <out>.
-    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-site-"))
+    siteDir = mkdtempSync(join(tmpdir(), "wallet-ux-out-"))
     const buildEnv = { ...process.env, WALLET_UX_OUT_DIR: siteDir }
     // This temp dir is a local test build, not a deploy build. A parent shell may
     // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
