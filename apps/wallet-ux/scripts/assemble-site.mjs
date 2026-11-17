@@ -7,13 +7,45 @@ import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyTestersPageConfig } from "./testers-page-policy.mjs"
-import { resolveWalletOutRoot } from "./out-dir.mjs"
+import { assertReadyToClean, readSourceCommit, resolveWalletOutRoot } from "./out-dir.mjs"
+
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-// Confined by scripts/out-dir.mjs. Unset WALLET_UX_OUT_DIR stays <app>/dist.
-// Resolve before any delete: a bad root throws instead of wiping that directory.
-const dist = resolveWalletOutRoot(process.env, app)
+
+function fail(message) {
+  console.error(message)
+  console.error("wallet-ux output dir is not the expected directory. Refusing to continue.")
+  process.exit(1)
+}
+
+// Print the source commit and the resolved out dir. Exit non-zero before any
+// removal when that directory is not the expected one.
+let commit
+try {
+  commit = readSourceCommit(app)
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}
+console.log(`wallet-ux source commit: ${commit}`)
+
+let dist
+try {
+  dist = resolveWalletOutRoot(process.env, app)
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}
 console.log(`wallet-ux output dir: ${dist}`)
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
+
+let cleanable
+try {
+  cleanable = assertReadyToClean(dist, app)
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}
+if (cleanable !== dist) {
+  fail(`wallet-ux output dir ${dist} is not the expected ${cleanable}.`)
+}
+
 for (const name of readdirSync(dist)) if (name !== "app") rmSync(resolve(dist, name), { recursive: true, force: true })
 cpSync(resolve(app, "landing"), dist, { recursive: true })
 const appAssets = resolve(dist, "app/assets")
