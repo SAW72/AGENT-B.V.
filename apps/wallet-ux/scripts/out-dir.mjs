@@ -10,11 +10,18 @@
 // owner is neither the current user nor root (that owner check is skipped when
 // process.getuid is missing). An unset WALLET_UX_OUT_DIR skips those two checks
 // and still writes <app>/dist. A symlink or an unrelated child of the temp
-// directory is refused. Ownership and the mkdtemp prefix are checked again
-// before any removal. assemble-site may pass the dev/ino it saw after resolve;
-// a changed identity is refused before any rm. There is no marker file. Default
-// dist stays unmarked. Vite and assemble-site call assertWalletAppDir so
-// <out>/app is not a symlink before anything is emptied or copied into it.
+// directory is refused. A dedicated run dir must be mode 0700 (no group or
+// other bits), owned by the current user, and not a symlink. That mode check
+// applies only to those temp children, not to <app>/dist or its descendants.
+// Ownership, mode, and the mkdtemp prefix are checked again before any removal.
+// assemble-site may pass the dev/ino it saw after resolve; a changed identity
+// is refused before any rm. There is no marker file. Default dist stays
+// unmarked. Vite and assemble-site call assertWalletAppDir so <out>/app is not
+// a symlink before anything is emptied or copied into it.
+// KNOWN RESIDUAL: same-uid only, microsecond window. Node has no
+// openat/unlinkat/fd-relative rm, so the ownership fd is closed before the
+// removal loop. A sticky temp root stops other users. The dev/ino, O_NOFOLLOW,
+// and ownership re-check narrow the window but cannot close it.
 //
 // Deploy-build signals. Production is a manual operator Direct Upload
 // (apps/wallet-ux/CLOUDFLARE_PAGES.md); Cloudflare does not build the site.
@@ -110,7 +117,7 @@ function findRepoRoot(appReal) {
 function allowedText(tmpReal, distRoot) {
   return (
     `Allowed output roots: ${distRoot} and its descendants, or a direct child of ${tmpReal} ` +
-    `named ${WALLET_OUT_TMP_PREFIX} plus 6 characters, owned by the current user, and not a symlink.`
+    `named ${WALLET_OUT_TMP_PREFIX} plus 6 characters, mode 0700, owned by the current user, and not a symlink.`
   )
 }
 
@@ -221,8 +228,11 @@ function currentUid() {
 }
 
 // Open with O_NOFOLLOW so a swapped symlink fails before any rm.
-function verifyOwnedDirectory(resolved) {
+// requirePrivateMode is only for a dedicated temp run dir. <app>/dist may be
+// a normal directory mode and is not checked here.
+function verifyOwnedDirectory(resolved, options) {
   const uid = currentUid()
+  const requirePrivateMode = Boolean(options && options.requirePrivateMode)
   const noFollow = constants.O_NOFOLLOW
   if (typeof noFollow !== "number" || typeof constants.O_DIRECTORY !== "number") {
     throw new OutDirError(
@@ -245,6 +255,12 @@ function verifyOwnedDirectory(resolved) {
         `wallet-ux output dir ${resolved} is not owned by uid ${uid}. Refusing to remove anything.`,
       )
     }
+    if (requirePrivateMode && (st.mode & 0o777) !== 0o700) {
+      const found = (st.mode & 0o777).toString(8).padStart(4, "0")
+      throw new OutDirError(
+        `wallet-ux output dir ${resolved} is mode ${found}, not 0700. Refusing to remove anything.`,
+      )
+    }
   } finally {
     closeSync(fd)
   }
@@ -260,7 +276,7 @@ function assertDedicatedRunDir(resolved, tmpReal) {
   if (listed.isSymbolicLink() || !listed.isDirectory()) {
     throw new OutDirError(`directory ${resolved} is a symlink or not a real directory.`)
   }
-  verifyOwnedDirectory(resolved)
+  verifyOwnedDirectory(resolved, { requirePrivateMode: true })
 }
 
 // The only temp override this module creates. Callers that need a per-run
