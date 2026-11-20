@@ -7,7 +7,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, rmSync, readdirSync } from "n
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyTestersPageConfig } from "./testers-page-policy.mjs"
-import { assertReadyToClean, readSourceCommit, resolveWalletOutRoot } from "./out-dir.mjs"
+import { assertReadyToClean, assertWalletAppDir, readSourceCommit, resolveWalletOutRoot } from "./out-dir.mjs"
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -34,6 +34,13 @@ try {
   fail(error instanceof Error ? error.message : String(error))
 }
 console.log(`wallet-ux output dir: ${dist}`)
+// Before any delete or copy. A symlink at <out>/app would be followed by the
+// later mkdir and cp of app/assets/404.html.
+try {
+  assertWalletAppDir(dist)
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
 
 // dev/ino from after resolve, before any rm. assertReadyToClean refuses a swap.

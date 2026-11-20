@@ -5,14 +5,16 @@
 //   prefix wallet-ux-out-.
 // The temp root comes from TMPDIR / os.tmpdir(). It is realpath'd and refused
 // when it is not absolute, contains '..', or is /, $HOME, the repo root, the
-// app root, or any ancestor of the app root. It is also refused when it is
-// world-writable without the sticky bit, or when its owner is neither the
-// current user nor root (that owner check is skipped when process.getuid is
-// missing). A symlink or an unrelated child of the temp directory is refused.
-// Ownership and the mkdtemp prefix are checked again before any removal.
-// assemble-site may pass the dev/ino it saw after resolve; a changed identity
-// is refused before any rm. There is no marker file. Default dist stays unmarked.
-// Vite calls assertWalletAppDir so <out>/app is not a symlink when emptyOutDir runs.
+// app root, or any ancestor of the app root. When an override is set, it is
+// also refused when it is world-writable without the sticky bit, or when its
+// owner is neither the current user nor root (that owner check is skipped when
+// process.getuid is missing). An unset WALLET_UX_OUT_DIR skips those two checks
+// and still writes <app>/dist. A symlink or an unrelated child of the temp
+// directory is refused. Ownership and the mkdtemp prefix are checked again
+// before any removal. assemble-site may pass the dev/ino it saw after resolve;
+// a changed identity is refused before any rm. There is no marker file. Default
+// dist stays unmarked. Vite and assemble-site call assertWalletAppDir so
+// <out>/app is not a symlink before anything is emptied or copied into it.
 //
 // Deploy-build signals. Production is a manual operator Direct Upload
 // (apps/wallet-ux/CLOUDFLARE_PAGES.md); Cloudflare does not build the site.
@@ -122,6 +124,7 @@ const STICKY = 0o1000
 export function assertSafeTmpRoot(appRoot, options) {
   if (!appRoot) throw new OutDirError("assertSafeTmpRoot requires appRoot.")
   const lstat = options && typeof options.lstat === "function" ? options.lstat : lstatSync
+  const skipModeAndOwner = Boolean(options && options.skipModeAndOwner)
   const raw = tmpdir()
   if (typeof raw !== "string" || raw === "" || !isAbsolute(raw) || pathHasDotDot(raw)) {
     throw new OutDirError(
@@ -159,6 +162,11 @@ export function assertSafeTmpRoot(appRoot, options) {
         `The temp root must not be /, $HOME (${homeReal}), the repo root (${repoReal}), ` +
         `the app root (${appReal}), or any ancestor of the app root ${appReal}.`,
     )
+  }
+  // Unset output skips the sticky-bit and owner checks. /, $HOME, the repo,
+  // the app, and ancestors were already refused above.
+  if (skipModeAndOwner) {
+    return { tmpReal, appReal, repoReal, homeReal, distRoot: join(appReal, "dist") }
   }
   let listed
   try {
@@ -272,9 +280,9 @@ export function createWalletOutDir(appRoot) {
 
 export function resolveWalletOutRoot(env = process.env, appRoot) {
   if (!appRoot) throw new OutDirError("resolveWalletOutRoot requires appRoot.")
-  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot)
   const raw = env.WALLET_UX_OUT_DIR
   const unset = raw == null || raw === ""
+  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot, unset ? { skipModeAndOwner: true } : undefined)
   if (!unset && isDeployBuild(env)) {
     let resolved
     try {
@@ -376,7 +384,10 @@ function identityChanged(identity, listed) {
 // deletes. identity is the dev/ino assemble-site saw after resolve. A swap for a
 // different directory, or for a symlink, is refused before any rm.
 export function assertReadyToClean(resolved, appRoot, identity) {
-  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot)
+  // The default dist path is what an unset override resolves to. Do not apply
+  // the temp-root sticky or owner check while cleaning that directory.
+  const base = assertSafeTmpRoot(appRoot, { skipModeAndOwner: true })
+  const { tmpReal, distRoot } = resolved === base.distRoot ? base : assertSafeTmpRoot(appRoot)
   if (typeof resolved !== "string" || !isAbsolute(resolved) || pathHasDotDot(resolved)) {
     throw new OutDirError(
       `wallet-ux output dir ${JSON.stringify(resolved)} is not the expected directory. Refusing to remove anything.`,

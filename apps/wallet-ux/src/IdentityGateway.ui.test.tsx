@@ -102,7 +102,10 @@ function signButton(): HTMLButtonElement | null {
 
 function expectNoEnabledSignButton() {
   const button = signButton()
-  if (button == null) return
+  if (button == null) {
+    expect(screen.queryByTestId("identity-sign")).toBeNull()
+    return
+  }
   expect(button.disabled).toBe(true)
 }
 

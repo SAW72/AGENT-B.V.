@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   assertReadyToClean,
   assertSafeTmpRoot,
@@ -24,6 +24,7 @@ const deployRef = "SAW72/AGENT-B.V./.github/workflows/deploy-wallet-ux.yml@refs/
 const temps = []
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const directory of temps.splice(0)) {
     try {
       if (lstatSync(directory).isSymbolicLink()) unlinkSync(directory)
@@ -456,7 +457,7 @@ describe("temp root mode and owner", () => {
     try {
       chmodSync(parent, 0o777)
       withTmpdir(parent, () => {
-        expect(() => resolveWalletOutRoot({}, appRoot)).toThrow(/sticky/)
+        expect(resolveWalletOutRoot({}, appRoot)).toBe(distRoot)
         expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "dist" }, appRoot)).toThrow(
           /world-writable without the sticky bit/,
         )
@@ -641,5 +642,148 @@ describe("same-process dev/ino recheck", () => {
     expect(readdirSync(target).sort()).toEqual(["SENTINEL.txt", "also.txt"].sort())
     expect(lstatSync(resolved).isSymbolicLink()).toBe(true)
     expect(readFileSync(join(kept, "SENTINEL.txt"), "utf8")).toBe("keep")
+  })
+})
+
+describe("unset out dir skips temp mode checks", () => {
+  it("skips the sticky-bit and owner checks when WALLET_UX_OUT_DIR is unset", () => {
+    const parent = mkdtempSync(join(tmpdir(), "wallet-ux-unset-"))
+    temps.push(parent)
+    const saved = lstatSync(parent).mode
+    const parentReal = realpathSync(parent)
+    const foreign = (path) => {
+      const st = lstatSync(path)
+      if (path === parent || path === parentReal) return withUid(st, 65534)
+      return st
+    }
+    try {
+      chmodSync(parent, 0o700)
+      withTmpdir(parent, () => {
+        expect(assertSafeTmpRoot(appRoot, { skipModeAndOwner: true, lstat: foreign }).distRoot).toBe(distRoot)
+        expect(() => assertSafeTmpRoot(appRoot, { lstat: foreign })).toThrow(/neither the current user nor root/)
+      })
+      chmodSync(parent, 0o777)
+      withTmpdir(parent, () => {
+        expect(resolveWalletOutRoot({}, appRoot)).toBe(distRoot)
+        expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "" }, appRoot)).toBe(distRoot)
+        expect(resolveWalletOutRoot({ WALLET_UX_DEPLOY: "1" }, appRoot)).toBe(distRoot)
+        expect(resolveWalletOutRoot({ WALLET_UX_DEPLOY: "1", WALLET_UX_OUT_DIR: "" }, appRoot)).toBe(distRoot)
+        expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: "dist" }, appRoot)).toThrow(/sticky/)
+        let caught
+        try {
+          assertReadyToClean(distRoot, appRoot)
+        } catch (error) {
+          caught = error
+        }
+        if (existsSync(distRoot)) {
+          expect(caught).toBeUndefined()
+        } else {
+          expect(caught).toBeInstanceOf(OutDirError)
+          expect(caught.message).not.toMatch(/sticky/)
+          expect(caught.message).toMatch(/not the expected directory/)
+        }
+      })
+    } finally {
+      try {
+        chmodSync(parent, saved)
+      } catch {
+        // afterEach removes the directory when the mode cannot be restored.
+      }
+    }
+  })
+})
+
+describe("assemble-site app symlink", () => {
+  it("refuses a symlink at app before it writes", () => {
+    const out = createWalletOutDir(appRoot)
+    temps.push(out)
+    const target = mkdtempSync(join(tmpdir(), "wallet-ux-app-assemble-"))
+    temps.push(target)
+    writeFileSync(join(target, "index.html"), "<!doctype html><title>sentinel</title>\n")
+    writeFileSync(join(target, "SENTINEL.txt"), "keep")
+    symlinkSync(target, join(out, "app"))
+    const before = readdirSync(target).sort()
+    const result = runAssemble(scriptEnv({ WALLET_UX_OUT_DIR: out }))
+    const output = outputOf(result)
+    expect(result.status, output).not.toBe(0)
+    expect(output).toContain(join(out, "app"))
+    expect(output).toContain("symlink")
+    expect(readdirSync(target).sort()).toEqual(before)
+    expect(existsSync(join(target, "assets", "404.html"))).toBe(false)
+    expect(readFileSync(join(target, "SENTINEL.txt"), "utf8")).toBe("keep")
+    expect(lstatSync(join(out, "app")).isSymbolicLink()).toBe(true)
+  }, 90_000)
+})
+
+describe("dedicated run dir guards", () => {
+  it("refuses a correctly named, empty run dir owned by someone else", () => {
+    // The temp root must be root-owned, or mocking getuid also fails the temp-root
+    // owner check and never reaches verifyOwnedDirectory. /tmp is that root here.
+    const candidates = []
+    try {
+      candidates.push(realpathSync(tmpdir()))
+    } catch {
+      // The process temp dir is checked below.
+    }
+    try {
+      candidates.push(realpathSync("/tmp"))
+    } catch {
+      // /tmp is absent. The assertion below reports that.
+    }
+    let rootOwned = null
+    for (const dir of candidates) {
+      const st = lstatSync(dir)
+      if (st.isDirectory() && !st.isSymbolicLink() && st.uid === 0 && (st.mode & 0o1000) !== 0) {
+        rootOwned = dir
+        break
+      }
+    }
+    expect(rootOwned, "a root-owned sticky temp root").toBeTruthy()
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    const bytes = randomBytes(6)
+    let suffix = ""
+    for (const byte of bytes) suffix += alphabet[byte % alphabet.length]
+    const dir = join(rootOwned, `wallet-ux-out-${suffix}`)
+    expect(existsSync(dir)).toBe(false)
+    withTmpdir(rootOwned, () => {
+      mkdirSync(dir, { mode: 0o700 })
+      temps.push(dir)
+      const realUid = process.getuid()
+      vi.spyOn(process, "getuid").mockReturnValue(realUid + 4242)
+      try {
+        expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: dir }, appRoot)).toThrow(OutDirError)
+        expect(() => assertReadyToClean(dir, appRoot)).toThrow(/not owned by uid/)
+        expect(readdirSync(dir)).toEqual([])
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+  })
+
+  it("refuses a nested run dir and wrong-length or wrong-charset names", () => {
+    const outer = mkdtempSync(join(realTmp, "wallet-ux-out-"))
+    temps.push(outer)
+    const inner = mkdtempSync(join(outer, "wallet-ux-out-"))
+    expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: inner }, appRoot)).toThrow(OutDirError)
+    expect(basename(inner)).toMatch(/^wallet-ux-out-[A-Za-z0-9]{6}$/)
+    expect(dirname(inner)).not.toBe(realTmp)
+    for (const name of ["wallet-ux-out-AAAAA", "wallet-ux-out-AAAAAAA", "wallet-ux-out-AA_AAA", "wallet-ux-out-AAAAA."]) {
+      const dir = join(realTmp, name)
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { mode: 0o700 })
+      temps.push(dir)
+      expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: dir }, appRoot), name).toThrow(OutDirError)
+      expect(readdirSync(dir)).toEqual([])
+    }
+  })
+
+  it("refuses a string-prefix sibling of dist", () => {
+    const sibling = join(appRoot, "dist-qa-sibling")
+    mkdirSync(sibling, { recursive: true })
+    temps.push(sibling)
+    writeFileSync(join(sibling, "SENTINEL.txt"), "keep")
+    expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: sibling }, appRoot)).toThrow(OutDirError)
+    expect(readFileSync(join(sibling, "SENTINEL.txt"), "utf8")).toBe("keep")
+    expect(readdirSync(sibling)).toEqual(["SENTINEL.txt"])
   })
 })
