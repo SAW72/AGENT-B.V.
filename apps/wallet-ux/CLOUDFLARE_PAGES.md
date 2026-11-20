@@ -28,11 +28,11 @@ npm ci
 cd ../apps/wallet-ux
 npm test
 unset WALLET_UX_OUT_DIR
-npm run build
+WALLET_UX_DEPLOY=1 npm run build
 node scripts/guard-claim-secret.mjs dist
 ```
 
-Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. A stray `WALLET_UX_OUT_DIR` would build outside `dist`, and `wrangler pages deploy dist` would then upload a stale tree.
+Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `WALLET_UX_DEPLOY=1` makes a set `WALLET_UX_OUT_DIR` fail the build. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. Before each upload (preview and main), confirm the build printed both `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled dist/: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of this checkout. Do not upload if either line is missing or names another directory.
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 

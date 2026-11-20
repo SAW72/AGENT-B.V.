@@ -54,9 +54,11 @@ function runBuild(overrides) {
   }
   env.WALLET_UX_OUT_DIR = outDir
   // This temp dir is a local test build, not a deploy build. A parent shell may
-  // set CF_PAGES or GITHUB_WORKFLOW_REF (Cloudflare Pages, or the stale deploy
-  // workflow). Those signals refuse any WALLET_UX_OUT_DIR override.
+  // set CF_PAGES, WALLET_UX_DEPLOY, or GITHUB_WORKFLOW_REF (Cloudflare Pages,
+  // the manual production signal, or the stale deploy workflow). Those signals
+  // refuse any WALLET_UX_OUT_DIR override.
   delete env.CF_PAGES
+  delete env.WALLET_UX_DEPLOY
   delete env.GITHUB_WORKFLOW_REF
   const result = spawnSync("npm", ["run", "build"], {
     cwd: appRoot,

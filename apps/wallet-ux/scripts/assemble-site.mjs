@@ -3,7 +3,7 @@
 // The same assets/404.html is also placed in dist/app/assets/. Pages has no
 // 404 status in _redirects. A 404.html in those directories makes a missing
 // asset 404. There is no top-level 404.html, so unknown pages still fall back.
-import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
+import { cpSync, existsSync, lstatSync, mkdirSync, rmSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyTestersPageConfig } from "./testers-page-policy.mjs"
@@ -36,9 +36,18 @@ try {
 console.log(`wallet-ux output dir: ${dist}`)
 if (!existsSync(resolve(dist, "app/index.html"))) throw new Error("dist/app/index.html missing: run vite build first")
 
+// dev/ino from after resolve, before any rm. assertReadyToClean refuses a swap.
+let identity
+try {
+  const st = lstatSync(dist)
+  identity = { dev: st.dev, ino: st.ino }
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}
+
 let cleanable
 try {
-  cleanable = assertReadyToClean(dist, app)
+  cleanable = assertReadyToClean(dist, app, identity)
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error))
 }
