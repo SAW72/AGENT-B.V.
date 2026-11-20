@@ -5,16 +5,25 @@
 //   prefix wallet-ux-out-.
 // The temp root comes from TMPDIR / os.tmpdir(). It is realpath'd and refused
 // when it is not absolute, contains '..', or is /, $HOME, the repo root, the
-// app root, or any ancestor of the app root. A symlink or an unrelated child
-// of the temp directory is refused. Ownership and the mkdtemp prefix are
-// checked again before any removal.
+// app root, or any ancestor of the app root. When an override is set, it is
+// also refused when it is world-writable without the sticky bit, or when its
+// owner is neither the current user nor root (that owner check is skipped when
+// process.getuid is missing). An unset WALLET_UX_OUT_DIR skips those two checks
+// and still writes <app>/dist. A symlink or an unrelated child of the temp
+// directory is refused. Ownership and the mkdtemp prefix are checked again
+// before any removal. assemble-site may pass the dev/ino it saw after resolve;
+// a changed identity is refused before any rm. There is no marker file. Default
+// dist stays unmarked. Vite and assemble-site call assertWalletAppDir so
+// <out>/app is not a symlink before anything is emptied or copied into it.
 //
-// Deploy-build signals. This repo has no explicit deploy flag. Production is a
-// manual operator Direct Upload (apps/wallet-ux/CLOUDFLARE_PAGES.md); Cloudflare
-// does not build the site. A build is a deploy build when either signal is set:
+// Deploy-build signals. Production is a manual operator Direct Upload
+// (apps/wallet-ux/CLOUDFLARE_PAGES.md); Cloudflare does not build the site.
+// A build is a deploy build when any signal is set:
 // - CF_PAGES === "1" (Cloudflare Pages build environment)
+// - WALLET_UX_DEPLOY === "1" (manual production build; exact "1" only)
 // - GITHUB_WORKFLOW_REF contains "/.github/workflows/deploy-wallet-ux.yml@"
 //   (the stale deploy workflow)
+// Deploy builds refuse every override. Unset still writes <app>/dist.
 import { execFileSync } from "node:child_process"
 import {
   closeSync,
@@ -44,6 +53,7 @@ export class OutDirError extends Error {
 
 export function isDeployBuild(env = process.env) {
   if (env.CF_PAGES === "1") return true
+  if (env.WALLET_UX_DEPLOY === "1") return true
   const ref = env.GITHUB_WORKFLOW_REF
   return typeof ref === "string" && ref.includes(DEPLOY_WORKFLOW_MARKER)
 }
@@ -104,10 +114,17 @@ function allowedText(tmpReal, distRoot) {
   )
 }
 
+const WORLD_WRITABLE = 0o002
+const STICKY = 0o1000
+
 // Resolve TMPDIR / os.tmpdir() and refuse a root that would make every path,
 // or the app itself, look like an allowed temp child.
-export function assertSafeTmpRoot(appRoot) {
+// options.lstat defaults to lstatSync. A test may pass a stand-in to simulate
+// a temp root owned by another uid. Production callers omit options.
+export function assertSafeTmpRoot(appRoot, options) {
   if (!appRoot) throw new OutDirError("assertSafeTmpRoot requires appRoot.")
+  const lstat = options && typeof options.lstat === "function" ? options.lstat : lstatSync
+  const skipModeAndOwner = Boolean(options && options.skipModeAndOwner)
   const raw = tmpdir()
   if (typeof raw !== "string" || raw === "" || !isAbsolute(raw) || pathHasDotDot(raw)) {
     throw new OutDirError(
@@ -146,6 +163,39 @@ export function assertSafeTmpRoot(appRoot) {
         `the app root (${appReal}), or any ancestor of the app root ${appReal}.`,
     )
   }
+  // Unset output skips the sticky-bit and owner checks. /, $HOME, the repo,
+  // the app, and ancestors were already refused above.
+  if (skipModeAndOwner) {
+    return { tmpReal, appReal, repoReal, homeReal, distRoot: join(appReal, "dist") }
+  }
+  let listed
+  try {
+    listed = lstat(tmpReal)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new OutDirError(
+      `tmpdir() ${JSON.stringify(raw)} resolves to ${tmpReal}, which cannot be inspected (${detail}).`,
+    )
+  }
+  if (listed.isSymbolicLink() || !listed.isDirectory()) {
+    throw new OutDirError(
+      `tmpdir() ${JSON.stringify(raw)} resolves to ${tmpReal}, which is not a real directory.`,
+    )
+  }
+  if ((listed.mode & WORLD_WRITABLE) !== 0 && (listed.mode & STICKY) === 0) {
+    throw new OutDirError(
+      `tmpdir() ${JSON.stringify(raw)} resolves to ${tmpReal}, which is world-writable without the sticky bit.`,
+    )
+  }
+  // Skip when getuid is missing. Removal still refuses there, via currentUid.
+  if (typeof process.getuid === "function") {
+    const uid = process.getuid()
+    if (uid != null && listed.uid !== uid && listed.uid !== 0) {
+      throw new OutDirError(
+        `tmpdir() ${JSON.stringify(raw)} resolves to ${tmpReal}, which is owned by uid ${listed.uid}, neither the current user nor root.`,
+      )
+    }
+  }
   return { tmpReal, appReal, repoReal, homeReal, distRoot: join(appReal, "dist") }
 }
 
@@ -155,7 +205,7 @@ function refusal(raw, resolved, tmpReal, distRoot, deploy) {
     return new OutDirError(
       `WALLET_UX_OUT_DIR ${JSON.stringify(raw)} is refused in a deploy build (resolved ${resolved}). ` +
         `Deploy builds write only ${distRoot}. ${allowed} ` +
-        `Deploy signals: CF_PAGES=1 or GITHUB_WORKFLOW_REF containing ${DEPLOY_WORKFLOW_MARKER}.`,
+        `Deploy signals: CF_PAGES=1, WALLET_UX_DEPLOY=1, or GITHUB_WORKFLOW_REF containing ${DEPLOY_WORKFLOW_MARKER}.`,
     )
   }
   return new OutDirError(
@@ -230,9 +280,9 @@ export function createWalletOutDir(appRoot) {
 
 export function resolveWalletOutRoot(env = process.env, appRoot) {
   if (!appRoot) throw new OutDirError("resolveWalletOutRoot requires appRoot.")
-  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot)
   const raw = env.WALLET_UX_OUT_DIR
   const unset = raw == null || raw === ""
+  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot, unset ? { skipModeAndOwner: true } : undefined)
   if (!unset && isDeployBuild(env)) {
     let resolved
     try {
@@ -280,6 +330,29 @@ export function resolveWalletOutRoot(env = process.env, appRoot) {
   throw refusal(raw, resolved, tmpReal, distRoot, false)
 }
 
+// Vite emptyOutDir writes <root>/app. A symlink there would empty the target.
+// A missing app directory is fine. lstat does not follow a symlink.
+export function assertWalletAppDir(root) {
+  if (typeof root !== "string" || root === "") {
+    throw new OutDirError("assertWalletAppDir requires an output root.")
+  }
+  const appDir = join(root, "app")
+  let st
+  try {
+    st = lstatSync(appDir)
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined
+    if (code === "ENOENT") return
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new OutDirError(`Cannot inspect ${appDir} (${detail}).`)
+  }
+  if (st.isSymbolicLink()) {
+    throw new OutDirError(
+      `WALLET_UX_OUT_DIR app directory ${appDir} is a symlink. Refusing to empty it.`,
+    )
+  }
+}
+
 export function readSourceCommit(cwd) {
   if (!cwd) throw new OutDirError("readSourceCommit requires a working directory.")
   let sha
@@ -301,9 +374,20 @@ export function readSourceCommit(cwd) {
   return sha
 }
 
-// Re-check realpath, prefix, and ownership immediately before assemble-site deletes.
-export function assertReadyToClean(resolved, appRoot) {
-  const { tmpReal, distRoot } = assertSafeTmpRoot(appRoot)
+function identityChanged(identity, listed) {
+  if (identity == null) return false
+  if (typeof identity !== "object" || identity.dev == null || identity.ino == null) return true
+  return identity.dev !== listed.dev || identity.ino !== listed.ino
+}
+
+// Re-check realpath, prefix, symlink, and ownership immediately before assemble-site
+// deletes. identity is the dev/ino assemble-site saw after resolve. A swap for a
+// different directory, or for a symlink, is refused before any rm.
+export function assertReadyToClean(resolved, appRoot, identity) {
+  // The default dist path is what an unset override resolves to. Do not apply
+  // the temp-root sticky or owner check while cleaning that directory.
+  const base = assertSafeTmpRoot(appRoot, { skipModeAndOwner: true })
+  const { tmpReal, distRoot } = resolved === base.distRoot ? base : assertSafeTmpRoot(appRoot)
   if (typeof resolved !== "string" || !isAbsolute(resolved) || pathHasDotDot(resolved)) {
     throw new OutDirError(
       `wallet-ux output dir ${JSON.stringify(resolved)} is not the expected directory. Refusing to remove anything.`,
@@ -321,6 +405,11 @@ export function assertReadyToClean(resolved, appRoot) {
   if (listed.isSymbolicLink()) {
     throw new OutDirError(
       `wallet-ux output dir ${resolved} is a symlink, not the expected directory. Refusing to remove anything.`,
+    )
+  }
+  if (identityChanged(identity, listed)) {
+    throw new OutDirError(
+      `wallet-ux output dir ${resolved} changed identity before delete. Refusing to remove anything.`,
     )
   }
   const real = realpathSync(resolved)
