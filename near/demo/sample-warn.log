@@ -1,0 +1,28 @@
+{
+  "demo": "agent-bv near warn demo",
+  "network": "testnet",
+  "run_at": "2026-11-11T20:48:32.552Z",
+  "policy_contract": "agentbv-policy-11111545.testnet",
+  "agent": "agentbv-agent-11111545.testnet",
+  "receiver": "agentbv-newvendor-11111545.testnet",
+  "human_prompt": [
+    {
+      "question": "Policy says WARN for paying agentbv-newvendor-11111545.testnet 1000000000000000000000 yoctoNEAR: receiver has no bot attestation on record. Submit anyway? [y/N] ",
+      "answer": "N"
+    }
+  ],
+  "result": {
+    "step": "wrapper",
+    "receiver": "agentbv-newvendor-11111545.testnet",
+    "amount_yocto": "1000000000000000000000",
+    "why": "task: pay a new vendor for a sample order",
+    "decision": {
+      "verdict": "warn",
+      "reasons": [
+        "receiver has no bot attestation on record"
+      ]
+    },
+    "action": "human_declined",
+    "signed": false
+  }
+}
