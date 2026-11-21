@@ -853,16 +853,49 @@ describe("dedicated run dir guards", () => {
     expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: tight }, appRoot)).toBe(realpathSync(tight))
     expect(assertReadyToClean(tight, appRoot)).toBe(realpathSync(tight))
 
-    const createdDist = !existsSync(distRoot)
-    if (createdDist) mkdirSync(distRoot)
-    const savedMode = lstatSync(distRoot).mode
-    try {
-      chmodSync(distRoot, 0o755)
-      expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: distRoot }, appRoot)).toBe(distRoot)
-      expect(assertReadyToClean(distRoot, appRoot)).toBe(distRoot)
-    } finally {
-      if (createdDist) rmSync(distRoot, { recursive: true, force: true })
-      else chmodSync(distRoot, savedMode)
+    // Fake app, sibling temp root. The real apps/wallet-ux/dist is never created,
+    // chmod'd, or removed. A default TMPDIR would be an ancestor of a fake app
+    // placed under it, so TMPDIR is the sibling tmp/.
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "wallet-ux-fake-root-")))
+    temps.push(scratch)
+    const fakeTmp = join(scratch, "tmp")
+    const fakeRepo = join(scratch, "repo")
+    const fakeApp = join(fakeRepo, "app")
+    const fakeDist = join(fakeApp, "dist")
+    mkdirSync(fakeTmp)
+    chmodSync(fakeTmp, 0o700)
+    mkdirSync(fakeRepo)
+    mkdirSync(join(fakeRepo, ".git"))
+    mkdirSync(fakeDist, { recursive: true })
+    chmodSync(fakeDist, 0o755)
+    expect(lstatSync(fakeDist).mode & 0o777).toBe(0o755)
+    withTmpdir(fakeTmp, () => {
+      const resolved = realpathSync(fakeDist)
+      expect(resolveWalletOutRoot({ WALLET_UX_OUT_DIR: fakeDist }, fakeApp)).toBe(resolved)
+      expect(assertReadyToClean(fakeDist, fakeApp)).toBe(resolved)
+    })
+    expect(lstatSync(fakeDist).mode & 0o777).toBe(0o755)
+  })
+
+  it("refuses own-uid run dirs at 0600, 0500, and 0750", () => {
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    for (const mode of [0o600, 0o500, 0o750]) {
+      const bytes = randomBytes(6)
+      let text = ""
+      for (const byte of bytes) text += alphabet[byte % alphabet.length]
+      const dir = join(realTmp, `wallet-ux-out-${text}`)
+      mkdirSync(dir)
+      temps.push(dir)
+      writeFileSync(join(dir, "SENTINEL.txt"), "keep")
+      chmodSync(dir, mode)
+      expect(lstatSync(dir).mode & 0o777, mode.toString(8)).toBe(mode)
+      expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: dir }, appRoot), mode.toString(8)).toThrow(/not 0700/)
+      expect(() => assertReadyToClean(dir, appRoot), mode.toString(8)).toThrow(/not 0700/)
+      expect(lstatSync(dir).mode & 0o777, mode.toString(8)).toBe(mode)
+      // 0600 has no execute bit, so restore a readable mode only to inspect the sentinel.
+      chmodSync(dir, 0o700)
+      expect(readFileSync(join(dir, "SENTINEL.txt"), "utf8")).toBe("keep")
+      expect(readdirSync(dir)).toEqual(["SENTINEL.txt"])
     }
   })
 
