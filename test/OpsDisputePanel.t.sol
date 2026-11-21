@@ -79,7 +79,7 @@ contract OpsDisputePanelGuardTest is Test {
             "ESC-M-1 redeploy, retired 2026-09-26"
         );
         assertEq(book.readString(".retired.BotAttestationEscrow.acceptOwnership"), "complete");
-        assertEq(book.readAddress(".retired.BotAttestationEscrow.owner"), liveTimelock);
+        assertEq(book.readAddress(".retired.BotAttestationEscrow.owner"), 0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33);
         assertEq(book.readAddress(".retired.BotAttestationEscrow.pendingOwner"), address(0));
         assertEq(
             book.readString(".retired.BotAttestationEscrow.acceptOwnershipTx"),
