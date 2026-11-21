@@ -29,6 +29,7 @@ import {
   screenFromStored,
   type SanctionsFetch,
 } from "../../src/sanctions.mjs";
+import { createPointsEnforcer } from "../../src/enforcer.mjs";
 
 type Sql = {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -703,6 +704,15 @@ export function insertLedgerRow(sql: Sql, row: Record<string, unknown>) {
 function loadSanctionsScreen(sql: Sql, now = Date.now()) {
   try {
     for (const statement of SANCTIONS_SCHEMA_SQL) sql.exec(statement);
+    return screenForRead(sql, now);
+  } catch {
+    return screenFromStored(null, [], now);
+  }
+}
+
+/** Read the stored SDN screen. Does not create tables. A missing cache is not a clear. */
+export function screenForRead(sql: Sql, now = Date.now()) {
+  try {
     const cache = one(sql, SANCTIONS_READ_CACHE);
     const wallets = all(sql, SANCTIONS_READ_WALLETS);
     return screenFromStored(cache, wallets, now);
@@ -857,6 +867,7 @@ export function rebuild(storage: Storage, options: { pepper?: string } = {}) {
   }));
 
   const screen = loadSanctionsScreen(sql);
+  const enforcer = createPointsEnforcer();
   storage.transactionSync(() => {
     run(sql, "DELETE FROM ledger_rows");
     const firstDay = new Map<string, number>();
@@ -897,7 +908,16 @@ export function rebuild(storage: Storage, options: { pepper?: string } = {}) {
       const link = linkFor(candidate, links, nonces);
       if (!link.ok) continue;
       const gate = gateReason(candidate, gates, pairDay, pairLife);
-      if (gate) continue;
+      if (gate) {
+        if (gate === "same_pair_day" || gate === "same_pair_lifetime") {
+          enforcer.flag({
+            kind: "PAIR_CAP",
+            wallet: candidate.wallet,
+            refs: [String(candidate.txHash), String(candidate.logIndex)],
+          });
+        }
+        continue;
+      }
       const vote = voteFields(candidate, register, weights);
       const inserted = tryInsert(rowFrom(candidate, {
         action: candidate.action,
@@ -945,5 +965,6 @@ export function rebuild(storage: Storage, options: { pepper?: string } = {}) {
     metaSet(sql, "rebuild_count", String(count + 1));
     metaSet(sql, "dirty", "0");
     metaSet(sql, "rebuild_capped", "0");
+    metaSet(sql, "enforcer_flags", JSON.stringify(enforcer.flags()));
   });
 }

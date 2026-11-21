@@ -433,7 +433,7 @@ describe("points read API", { concurrency: false }, () => {
       assert.equal(body.json.address, wallet);
       assert.equal(body.json.points_total, 0);
       assert.equal(body.json.points_withheld, true);
-      assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "ofac_unconfigured" });
+      assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
       assert.equal(body.json.rows_count, 2);
       assert.equal(body.json.first_activity_utc_day, 20_000);
       assert.equal(body.json.indexed_to_block, 100_000_000);
@@ -1726,7 +1726,8 @@ describe("points read API", { concurrency: false }, () => {
       config: { ratePerMinute: 30 },
     }, async (base) => {
       const config = await request(base, "/v1/points/config?chainId=84532");
-      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "disclaimer", "gates", "rule_version", "status", "weights"]);
+      assert.deepEqual(Object.keys(config.json).sort(), ["chainId", "disclaimer", "enforcer", "gates", "rule_version", "status", "weights"]);
+      assert.deepEqual(config.json.enforcer, { owner: "TBD", auto_cancel: false, flags: "review_only" });
       assert.equal(config.json.disclaimer.text, DISCLAIMER_TEXT);
       const address = await request(base, `/v1/points/${ADDRESS}?chainId=84532`);
       assert.deepEqual(Object.keys(address.json).sort(), [

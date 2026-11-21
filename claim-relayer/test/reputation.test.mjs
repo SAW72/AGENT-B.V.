@@ -164,6 +164,8 @@ describe("reputation config", () => {
   it("loads section 7 defaults as DRAFT/GUESS and refuses to hardcode them into the scorer", () => {
     const raw = JSON.parse(readFileSync(new URL("../../config/reputation/sepolia.json", import.meta.url), "utf8"));
     assert.equal(raw.caps._label, "DRAFT/GUESS");
+    assert.equal(raw.hooks.caps_lock_12, "pending");
+    assert.equal(loaded.latest.caps_status, "draft");
     assert.equal(raw.points._guess, true);
     assert.equal(raw.caps.usage_points_per_wallet_per_day.value, 20);
     assert.equal(raw.caps.usage_points_per_bot_per_day.value, 20);

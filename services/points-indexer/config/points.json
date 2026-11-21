@@ -12,5 +12,11 @@
     "same_pair_lifetime": null,
     "min_escrow_amount_wei": null,
     "min_escrow_duration_seconds": null
+  },
+  "enforcer": {
+    "owner": "TBD",
+    "auto_cancel": false,
+    "flags": "review_only",
+    "_note": "Owner is TBD. Spencer names the owner. Lawyer reviews the policy. Flags do not auto-cancel."
   }
 }

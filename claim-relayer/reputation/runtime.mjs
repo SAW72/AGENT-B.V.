@@ -132,7 +132,7 @@ function historyBody(runtime, result, wallet, url) {
 
 function configBody(runtime) {
   const latest = runtime.latest;
-  const status = /draft/i.test(latest.caps_label) ? "draft" : "locked";
+  const status = latest.caps_status === "locked" ? "locked" : "draft";
   const slot = (value) => ({ value, status });
   return {
     chainId: 84532,

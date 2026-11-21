@@ -9,6 +9,7 @@ import { ESCROW, ESCROW_START_BLOCK } from "../src/constants.mjs";
 import { openIndexer } from "../src/indexer.mjs";
 import { createReadApi } from "../src/readApi.mjs";
 import { createReadApiSqliteStore, resolveReadConfigPaths } from "../src/readApiSqliteStore.mjs";
+import { addressListSha256, canonicalAddressList } from "../src/sanctions.mjs";
 import { account, createdLog, creditCandidate } from "./support.mjs";
 
 const POINTS_FILE = fileURLToPath(new URL("../config/points.json", import.meta.url));
@@ -17,6 +18,14 @@ const DOCKER_FILE = fileURLToPath(new URL("../Dockerfile", import.meta.url));
 const ADAPTER_SOURCE = fileURLToPath(new URL("../src/readApiSqliteStore.mjs", import.meta.url));
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 const PAGE_WALLET = "0x00000000000000000000000000000000000000a1";
+
+function hexAddress(n) {
+  return `0x${n.toString(16).padStart(40, "0")}`;
+}
+
+const LISTED_WALLET = hexAddress(1);
+const PERSISTED_WALLET = `0x${"a".repeat(40)}`;
+const CLEAR_WALLET = `0x${"c".repeat(40)}`;
 
 const FORBIDDEN_KEYS = new Set([
   "identity_anchor",
@@ -190,7 +199,7 @@ function insertCommitted(db, row) {
     row.points,
     "unverified",
     "ofac_unconfigured",
-    1,
+    row.pointsWithheld ?? 1,
     null,
     0,
     null,
@@ -200,6 +209,38 @@ function insertCommitted(db, row) {
     null,
     null,
   );
+}
+
+/**
+ * A ready cache needs at least 100 addresses. The persisted wallet and the
+ * clear wallet stay off that cache so each case is one kind of match.
+ */
+function seedReadyCache(db) {
+  const addresses = canonicalAddressList(Array.from({ length: 100 }, (_, index) => hexAddress(index + 1)));
+  const hash = addressListSha256(addresses);
+  db.prepare(
+    `INSERT INTO sanctions_cache(id, fetched_at, source, list_version, addresses_json, addresses_sha256, raw_sha256)
+     VALUES(1, ?, 'test-ready', 'test-ready', ?, ?, ?)`,
+  ).run(Date.now(), JSON.stringify(addresses), hash, hash);
+}
+
+function seedUnrelatedLink(db) {
+  db.prepare(
+    `INSERT INTO sanctions_account_wallets(account_id, wallet_hash, wallet_sealed, linked_at)
+     VALUES('unrelated-account', ?, 'sealed-unrelated', 1)`,
+  ).run("11".repeat(32));
+}
+
+function seedPointsRow(db, wallet) {
+  insertCommitted(db, {
+    seq: 1,
+    wallet,
+    action: "fund",
+    points: 99,
+    pointsWithheld: 0,
+    utcDay: 20_100,
+    txHash: txHash(1),
+  });
 }
 
 describe("points read sqlite adapter", { concurrency: false }, () => {
@@ -313,6 +354,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       points_total: 0,
       rows_count: 0,
       first_activity_utc_day: null,
+      eligibility_reason: "sanctions_unavailable",
     });
     assert.deepEqual(store.listLedgerRows(ADDRESS, { limit: 25, after: null }), []);
   });
@@ -325,6 +367,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
       assert.equal(summary.points_total, 0);
       assert.equal(summary.rows_count, 2);
       assert.equal(summary.first_activity_utc_day, 20_000);
+      assert.equal(summary.eligibility_reason, "sanctions_unavailable");
       const stored = store.listLedgerRows(ctx.wallet, { limit: 10, afterSeq: 0 });
       assert.equal(stored.length, 2);
       assert.equal(stored[0].source_tx_hash, "sentinel-source-77ab");
@@ -336,6 +379,7 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         assert.equal(body.json.points_total, 0);
         assert.equal(body.json.rows_count, 2);
         assert.equal(body.json.points_withheld, true);
+        assert.deepEqual(body.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
         assert.equal(body.json.indexed_to_block, 100_000_000);
         const history = await request(base, `/v1/points/${ctx.wallet}/history?chainId=84532`);
         assert.equal(history.json.items.length, 2);
@@ -472,6 +516,89 @@ describe("points read sqlite adapter", { concurrency: false }, () => {
         assert.equal(next.response.status, 200);
         assert.equal(next.json.items.length, 1);
         assert.equal(next.json.items[0].tx_hash, txHash(2));
+      });
+    } finally {
+      indexer.close();
+    }
+  });
+
+  it("keeps a persisted match ineligible when an unrelated account link is stored", async () => {
+    const indexer = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 30 });
+    try {
+      seedReadyCache(indexer.db);
+      indexer.db.prepare(
+        `INSERT INTO sanctions_wallets(wallet, wallet_hash, reason, checked_at, list_version)
+         VALUES(?, '', 'sanctions_match', 1, 'test-ready')`,
+      ).run(PERSISTED_WALLET);
+      seedUnrelatedLink(indexer.db);
+      seedPointsRow(indexer.db, PERSISTED_WALLET);
+      const cached = JSON.parse(indexer.db.prepare("SELECT addresses_json FROM sanctions_cache WHERE id = 1").get().addresses_json);
+      assert.equal(cached.includes(PERSISTED_WALLET), false);
+      assert.equal(indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_account_wallets").get().n, 1);
+      const stored = indexer.db.prepare("SELECT points, points_withheld FROM ledger_rows WHERE wallet = ?").get(PERSISTED_WALLET);
+      assert.equal(stored.points, 99);
+      assert.equal(stored.points_withheld, 0);
+      const store = createReadApiSqliteStore(sourceFrom(indexer, true));
+      await withServer(store, async (base) => {
+        const matched = await request(base, `/v1/points/${PERSISTED_WALLET}?chainId=84532`);
+        assert.equal(matched.response.status, 200);
+        assert.deepEqual(matched.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        assert.equal(matched.json.points_total, 0);
+        assert.equal(matched.json.points_withheld, true);
+        assert.equal(matched.json.rows_count, 1);
+        const clear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.equal(clear.response.status, 200);
+        assert.deepEqual(clear.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
+        indexer.db.prepare("DELETE FROM sanctions_account_wallets").run();
+        const emptied = await request(base, `/v1/points/${PERSISTED_WALLET}?chainId=84532`);
+        assert.deepEqual(emptied.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        const emptiedClear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.deepEqual(emptiedClear.json.eligibility, { status: "unverified", reason: "unverified" });
+        indexer.db.exec("DROP TABLE sanctions_account_wallets");
+        const dropped = await request(base, `/v1/points/${PERSISTED_WALLET}?chainId=84532`);
+        assert.deepEqual(dropped.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        const droppedClear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.deepEqual(droppedClear.json.eligibility, { status: "unverified", reason: "unverified" });
+      });
+    } finally {
+      indexer.close();
+    }
+  });
+
+  it("keeps a ready-list match ineligible when an unrelated account link is stored", async () => {
+    const indexer = openIndexer({ path: ":memory:", finalizedBlock: ESCROW_START_BLOCK + 30 });
+    try {
+      seedReadyCache(indexer.db);
+      seedUnrelatedLink(indexer.db);
+      seedPointsRow(indexer.db, LISTED_WALLET);
+      const cached = JSON.parse(indexer.db.prepare("SELECT addresses_json FROM sanctions_cache WHERE id = 1").get().addresses_json);
+      assert.equal(cached.includes(LISTED_WALLET), true);
+      assert.equal(indexer.db.prepare("SELECT wallet FROM sanctions_wallets WHERE wallet = ?").get(LISTED_WALLET), undefined);
+      assert.equal(indexer.db.prepare("SELECT COUNT(*) AS n FROM sanctions_account_wallets").get().n, 1);
+      const stored = indexer.db.prepare("SELECT points, points_withheld FROM ledger_rows WHERE wallet = ?").get(LISTED_WALLET);
+      assert.equal(stored.points, 99);
+      assert.equal(stored.points_withheld, 0);
+      const store = createReadApiSqliteStore(sourceFrom(indexer, true));
+      await withServer(store, async (base) => {
+        const matched = await request(base, `/v1/points/${LISTED_WALLET}?chainId=84532`);
+        assert.equal(matched.response.status, 200);
+        assert.deepEqual(matched.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        assert.equal(matched.json.points_total, 0);
+        assert.equal(matched.json.points_withheld, true);
+        assert.equal(matched.json.rows_count, 1);
+        const clear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.equal(clear.response.status, 200);
+        assert.deepEqual(clear.json.eligibility, { status: "unverified", reason: "sanctions_unavailable" });
+        indexer.db.prepare("DELETE FROM sanctions_account_wallets").run();
+        const emptied = await request(base, `/v1/points/${LISTED_WALLET}?chainId=84532`);
+        assert.deepEqual(emptied.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        const emptiedClear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.deepEqual(emptiedClear.json.eligibility, { status: "unverified", reason: "unverified" });
+        indexer.db.exec("DROP TABLE sanctions_account_wallets");
+        const dropped = await request(base, `/v1/points/${LISTED_WALLET}?chainId=84532`);
+        assert.deepEqual(dropped.json.eligibility, { status: "ineligible", reason: "sanctions_match" });
+        const droppedClear = await request(base, `/v1/points/${CLEAR_WALLET}?chainId=84532`);
+        assert.deepEqual(droppedClear.json.eligibility, { status: "unverified", reason: "unverified" });
       });
     } finally {
       indexer.close();
