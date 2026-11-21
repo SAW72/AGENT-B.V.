@@ -102,10 +102,8 @@ function signButton(): HTMLButtonElement | null {
 
 function expectNoEnabledSignButton() {
   const button = signButton()
-  if (button == null) {
-    expect(screen.queryByTestId("identity-sign")).toBeNull()
-    return
-  }
+  expect(button).not.toBeNull()
+  if (button == null) throw new Error("identity-sign was not rendered")
   expect(button.disabled).toBe(true)
 }
 
@@ -155,7 +153,7 @@ describe("IdentityGateway agent id", () => {
       renderGateway()
       typeAgentId(value)
       expect(screen.getByText(AGENT_ID_RANGE_TEXT)).toBeTruthy()
-      expectNoEnabledSignButton()
+      expect(signButton()).toBeNull()
       await act(async () => {
         await Promise.resolve()
       })
@@ -176,11 +174,8 @@ describe("IdentityGateway agent id", () => {
     typeAgentId("15")
     await waitFor(() => {
       expect(readAgentIdentity).toHaveBeenCalledWith(expect.anything(), 15n)
-      expect(signButton()).not.toBeNull()
+      expectNoEnabledSignButton()
     })
-    const button = signButton()
-    if (button == null) throw new Error("identity-sign was not rendered")
-    expect(button.disabled).toBe(true)
   })
 
   it("leaves no enabled sign button after a valid id is replaced with an invalid one", async () => {
@@ -194,19 +189,17 @@ describe("IdentityGateway agent id", () => {
     renderGateway()
     typeAgentId("15")
     await waitFor(() => {
-      const button = signButton()
-      expect(button).not.toBeNull()
-      expect(button?.disabled).toBe(true)
+      expectNoEnabledSignButton()
     })
     typeAgentId("1.5")
     await waitFor(() => {
       expect(screen.getByText(AGENT_ID_DECIMAL_TEXT)).toBeTruthy()
-      expectNoEnabledSignButton()
+      expect(signButton()).toBeNull()
     })
     typeAgentId("1".repeat(79))
     await waitFor(() => {
       expect(screen.getByText(AGENT_ID_RANGE_TEXT)).toBeTruthy()
-      expectNoEnabledSignButton()
+      expect(signButton()).toBeNull()
     })
   })
 })

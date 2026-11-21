@@ -549,7 +549,7 @@ describe("npm run build", () => {
     const output = outputOf(result)
     expect(result.status).not.toBe(0)
     expect(output).toContain("VITE_CLAIM_RELAYER_URL is empty.")
-    expect(output).not.toContain("assembled dist")
+    expect(output).not.toContain("landing at /, wallet app at /app/")
   }, 60_000)
 
   it("fails when the relayer host is not pinned and does not fall back to the file", () => {
@@ -557,7 +557,7 @@ describe("npm run build", () => {
     const output = outputOf(result)
     expect(result.status).not.toBe(0)
     expect(output).toContain(RELAYER_URL_ERROR)
-    expect(output).not.toContain("assembled dist")
+    expect(output).not.toContain("landing at /, wallet app at /app/")
   }, 60_000)
 
   it("scans the checked-in build-env.required.json during the build", () => {
@@ -573,7 +573,7 @@ describe("npm run build", () => {
     const output = outputOf(result)
     expect(result.status).not.toBe(0)
     expect(output).toContain("build-env.required.json contains a secret.")
-    expect(output).not.toContain("assembled dist")
+    expect(output).not.toContain("landing at /, wallet app at /app/")
     expect(readFileSync(checkedIn, "utf8")).toBe(real)
   }, 60_000)
 
