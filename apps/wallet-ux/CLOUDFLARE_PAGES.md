@@ -14,7 +14,7 @@ Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is 
 
 A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
 
-Spencer is the production approver. Spencer is still required for mainnet, spending, outside messages, and deletes.
+A Base Sepolia (testnet) production deploy needs a Steward GO. Spencer is still required for mainnet, spending, outside messages, and deletes.
 
 Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
@@ -40,16 +40,16 @@ Unset `WALLET_UX_OUT_DIR` before this production build and again before each man
 
 Before the production upload, note the deployment ID of the live production deployment (the current `main` deployment). That ID is the rollback target. Preview deployment IDs are not rollback targets.
 
-Direct Upload has no promote. Upload the same `dist` twice. Wrangler reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the environment. The token is **Pages:Edit** scope only. Do not store either value as a repository secret.
+Direct Upload has no promote. Wrangler reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the environment. The token is **Pages:Edit** scope only. Do not store either value as a repository secret.
 
-Preview, with `<PR#>` the pull request that produced the merge and `<sha>` the merge SHA:
+Deploy production with the built `dist` and the merge SHA:
 
 ```bash
 unset WALLET_UX_OUT_DIR
-npx wrangler pages deploy dist --project-name=agent-bv --branch=preview-<PR#> --commit-hash=<sha>
+npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>
 ```
 
-Live-check that preview deployment before uploading `main`. From `apps/wallet-ux`, run the served-bundle check against the deployment URL Wrangler prints. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
+A preview upload is not required. Right after the production upload, live-check the new deployment URL Wrangler prints, then the production alias `https://agent-bv.pages.dev`. From `apps/wallet-ux`, run the served-bundle check against the new deployment URL. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
 
 ```bash
 DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html node scripts/verify-served-bundle.mjs
@@ -57,7 +57,7 @@ DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html 
 
 The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
 
-The same preview URL also has to pass these checks. The script does not cover them:
+The same new deployment URL also has to pass these checks. The script does not cover them:
 
 - `GET /` returns 200.
 - `GET /app/` returns 200.
@@ -65,16 +65,7 @@ The same preview URL also has to pass these checks. The script does not cover th
 - Redirects go to `/app/`. `/app` (no trailing slash), `/points`, `/claim`, and `/release` are 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
 - The security headers are present: `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`.
 
-A failed preview check stops the deploy. Do not upload `--branch=main`.
-
-Then deploy production with the same `dist` and the same merge SHA:
-
-```bash
-unset WALLET_UX_OUT_DIR
-npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>
-```
-
-Run `scripts/verify-served-bundle.mjs` again with `DEPLOYMENT_URL` set to the production deployment URL Wrangler prints, and the same `APP_PATH` and `DIST_INDEX`. Run the same `/`, `/app/`, content-type, redirect, and security-header checks against `https://agent-bv.pages.dev`. If any production check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
+Then run `scripts/verify-served-bundle.mjs` again with `DEPLOYMENT_URL` set to `https://agent-bv.pages.dev`, and the same `APP_PATH` and `DIST_INDEX`. Run the same `/`, `/app/`, content-type, redirect, and security-header checks against `https://agent-bv.pages.dev`. If any check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
 
 ### Deploy record
 
@@ -168,7 +159,7 @@ Both retired addresses also appear in the top-level `notes` string of [`src/base
 
 ## Rollback
 
-Before `wrangler pages deploy ... --branch=main`, note the current production deployment ID. That ID is the rollback target. If any live check fails after the production upload, roll back to that ID, then investigate the failed check. A failed preview check never reaches this upload.
+Before `wrangler pages deploy ... --branch=main`, note the current production deployment ID. That ID is the rollback target. If any live check fails after the production upload, roll back to that ID, then investigate the failed check.
 
 In the Cloudflare dashboard, open **Workers & Pages**, select the Pages project **agent-bv**, then open **Deployments**. This rollback is only for `agent-bv`. The deleted project `agent-a-wallet-ux` is not a rollback target, and this step does not recreate it. In **All deployments**, open the actions menu on the noted production deployment and choose **Rollback to this deployment**. Confirm the dialog. Production switches to that deployment immediately. Preview deployments are not valid rollback targets, including `preview-<PR#>`. Cloudflare documents that dashboard action at [Rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/).
 
