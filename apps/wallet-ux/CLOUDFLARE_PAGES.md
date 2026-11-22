@@ -10,11 +10,11 @@ Wallet UX is a static Vite app. The browser calls the claim relayer through the 
 
 ## Production deploy
 
-Gates and Grok Bot's per-SHA GO apply to the PR head SHA. The set, in order, is CI, Look, QA, Verifier, Security, and Lawyer when copy or legal text changes, then Grok Bot's per-SHA GO for that head. A GO for a different SHA does not cover this head. Nothing reaches `main` without every gate on that head.
+Gates and Steward's per-SHA GO, with the D2 cross-check (rule 1g), apply to the PR head SHA. The set, in order, is CI, Look, QA, Verifier, Security, and Lawyer when copy or legal text changes, then Steward's per-SHA GO and the D2 cross-check for that head. A GO for a different SHA does not cover this head. Nothing reaches `main` without every gate on that head.
 
 A squash merge creates a new commit. That merge SHA is what gets deployed and recorded. It is not the head SHA the GO named.
 
-A Base Sepolia (testnet) production deploy needs a Steward GO. Spencer is still required for mainnet, spending, outside messages, and deletes.
+A Base Sepolia (testnet) production deploy needs a Steward GO. Spencer is still required for spending real money, deleting a GitHub repo or project, and blockchain mainnet.
 
 Build at the merge SHA on Node 22. That major is `.node-version` in this directory. There is no `.nvmrc`, and `package.json` has no `engines` field. It is the same major as the `wallet-ux` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
@@ -32,7 +32,7 @@ WALLET_UX_DEPLOY=1 npm run build
 node scripts/guard-claim-secret.mjs dist
 ```
 
-Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `WALLET_UX_DEPLOY=1` makes a set `WALLET_UX_OUT_DIR` fail the build. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. Before each upload (preview and main), confirm the build printed both `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of this checkout. Do not upload if either line is missing or names another directory.
+Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `WALLET_UX_DEPLOY=1` makes a set `WALLET_UX_OUT_DIR` fail the build. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. Before each upload, confirm the build printed both `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of this checkout. Do not upload if either line is missing or names another directory.
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
@@ -75,7 +75,6 @@ Write one record for the deploy. The head SHA is the PR head the gates and the G
 PR:
 head SHA:
 merge SHA:
-preview deploy ID:
 production deploy ID:
 rollback target:
 relayer deploy ID:
@@ -155,7 +154,7 @@ The script imports `ADDRESSES`, `FALLBACK_PIN`, and `SUPERSEDED`. `SUPERSEDED` i
 
 Both retired addresses also appear in the top-level `notes` string of [`src/base-sepolia.json`](src/base-sepolia.json). Those sentences are not the `SUPERSEDED` literals. The script allowlists `SUPERSEDED`, `retired.*`, `superseded.*`, and the top-level notes. Any other client occurrence fails the check. The built `dist` must contain each retired address exactly as many times as those allowlisted sources. At this commit `0x141214F04b0E1d949B6e6bf32D019Ad7Ab5B284c` is 3 (SUPERSEDED, `retired.BotAttestationEscrow.address`, and notes). `0x1069aA6597f08F1E8B8ad39AA40EDE1D0c77298d` is 8 (SUPERSEDED plus seven allowlisted JSON fields, including `retired.BotAttestationEscrow.supersededBy`).
 
-`npm test` runs these guards. Deploy the merge SHA only after every gate on the PR head is green and Grok Bot has given a GO for that head SHA.
+`npm test` runs these guards. Deploy the merge SHA only after every gate on the PR head is green and Steward has given a per-SHA GO, with the D2 cross-check (rule 1g), for that head SHA.
 
 ## Rollback
 
