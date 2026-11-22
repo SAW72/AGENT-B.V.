@@ -389,7 +389,7 @@ export function App() {
         </div>
         {connectError ? (
           <p className="bad" role="alert">
-            {errorText(connectError)} Install MetaMask if no injected wallet is available.
+            {errorText(connectError)} Install a browser wallet if no injected wallet is available.
           </p>
         ) : null}
         <dl className="status-list">
