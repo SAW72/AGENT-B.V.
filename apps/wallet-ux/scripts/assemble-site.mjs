@@ -62,10 +62,14 @@ if (cleanable !== dist) {
   fail(`wallet-ux output dir ${dist} is not the expected ${cleanable}.`)
 }
 
+// KNOWN RESIDUAL: same-uid only, microsecond window. The ownership fd is closed
+// before this removal. Node has no openat/unlinkat/fd-relative rm, so no real
+// fix exists in this tool. A sticky temp root stops other users. The dev/ino,
+// O_NOFOLLOW, and ownership re-check narrow the window but cannot close it.
 for (const name of readdirSync(dist)) if (name !== "app") rmSync(resolve(dist, name), { recursive: true, force: true })
 cpSync(resolve(app, "landing"), dist, { recursive: true })
 const appAssets = resolve(dist, "app/assets")
 mkdirSync(appAssets, { recursive: true })
 cpSync(resolve(app, "landing/assets/404.html"), resolve(appAssets, "404.html"))
 applyTestersPageConfig(dist)
-console.log("assembled dist/: landing at /, wallet app at /app/")
+console.log(`assembled ${dist}: landing at /, wallet app at /app/`)
