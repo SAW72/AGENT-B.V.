@@ -21,8 +21,8 @@ import {
 export const NEEDS_WALLET_LABEL = "Connect a wallet on Base Sepolia"
 export const NO_WALLET_REASON = "No wallet connected"
 export const WRONG_NETWORK_LABEL = "Switch to Base Sepolia"
-export const CONFIRM_WALLET_LABEL = "Confirm in MetaMask…"
-export const WALLET_HINT_TEXT = "No MetaMask window? Click the MetaMask icon in your browser toolbar."
+export const CONFIRM_WALLET_LABEL = "Confirm in your wallet…"
+export const WALLET_HINT_TEXT = "No wallet window? Open your wallet from your browser toolbar."
 export const PENDING_NETWORK_LABEL = TX_PENDING_TEXT
 export const DONE_LABEL = TX_CONFIRMED_TEXT
 export const CHECKING_LABEL = "Checking…"

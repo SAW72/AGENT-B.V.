@@ -1,3 +1,31 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+# Landing page. Its <meta> CSP already limits scripts, styles and fonts and
+# carries the inline-script hash. A meta CSP cannot send frame-ancestors, so this
+# header adds only that. Both policies apply, and the stricter result wins.
+/
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+
+# Wallet app, every route (/app/ and the SPA fallback, e.g. /app/identity).
+# connect-src is the Base Sepolia RPC and the relayer edge Worker, nothing else.
+# No unsafe-inline and no unsafe-eval: the built app has no inline script or
+# style and never evaluates strings.
+/app/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src https://sepolia.base.org https://agent-bv-relayer-edge.s-a-wight72.workers.dev; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
+  X-Frame-Options: DENY
+
+# Vite names these files by content hash, so a year-long immutable cache is safe.
+# Cache-Control is set only here. HTML keeps the Pages default (max-age=0,
+# must-revalidate), so no rule above or below matches HTML with it. Pages merges
+# every matching rule, so do not add a Cache-Control to /* or /app/*.
+/app/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The shared not-found page is not content-hashed. Keep it out of the year cache.
+/app/assets/404.html
+  ! Cache-Control
+/app/assets/404
+  ! Cache-Control

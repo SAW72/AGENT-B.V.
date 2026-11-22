@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { BUILD_COMMIT_PATTERN, readBuildCommitStamp } from "./build-stamp.mjs"
 
 class VerifyExit extends Error {
   constructor(status = 1) {
@@ -56,6 +57,15 @@ function runGuard(args) {
   if (result.status !== 0) throw new VerifyExit(result.status ?? 1)
 }
 
+// The build commit stamp in a page: a 40-hex SHA, or null when the page has none.
+function stampOf(html, label) {
+  try {
+    return readBuildCommitStamp(html)
+  } catch (error) {
+    fail(`Verify failed: ${label} ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function referencedAssets(html) {
   return [...new Set([...html.matchAll(/(?:\/app)?\/assets\/[A-Za-z0-9._-]+\.(?:js|css)/g)].map((match) => match[0]))].sort()
 }
@@ -106,6 +116,24 @@ if (expectedAssets.length === 0 || expectedAssets.join("\n") !== servedAssets.jo
   )
 }
 console.log(`Served index.html references the built asset hashes: ${servedAssets.join(", ")}.`)
+
+// Build commit stamp (F3). A page built before the stamp existed has none, and a
+// rollback to such a build still verifies against a local build of that commit.
+// When the local build has a stamp, the served page must carry the same one. When
+// EXPECT_COMMIT is set (the deploy record's commit), the served stamp must equal it.
+const builtStamp = stampOf(builtHtml, "built index")
+const servedStamp = stampOf(html, "served index")
+const expectCommit = (process.env.EXPECT_COMMIT ?? "").trim().toLowerCase()
+if (expectCommit && !BUILD_COMMIT_PATTERN.test(expectCommit)) {
+  fail("Verify failed: EXPECT_COMMIT must be a 40-hex commit SHA.")
+}
+if (builtStamp !== null && servedStamp !== builtStamp) {
+  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} does not match the built ${builtStamp}.`)
+}
+if (expectCommit && servedStamp !== expectCommit) {
+  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} is not the expected ${expectCommit}.`)
+}
+console.log(servedStamp === null ? "Served index.html has no build commit stamp." : `Served build commit: ${servedStamp}.`)
 const pending = servedAssets.filter((assetPath) => assetPath.endsWith(".js"))
 if (pending.length === 0) {
   fail("Verify failed: deployed index HTML does not reference /assets/*.js.")

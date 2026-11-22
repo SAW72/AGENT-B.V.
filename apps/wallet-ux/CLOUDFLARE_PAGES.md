@@ -32,7 +32,7 @@ WALLET_UX_DEPLOY=1 npm run build
 node scripts/guard-claim-secret.mjs dist
 ```
 
-Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `WALLET_UX_DEPLOY=1` makes a set `WALLET_UX_OUT_DIR` fail the build. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. Before each upload, confirm the build printed both `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of this checkout. Do not upload if either line is missing or names another directory.
+Unset `WALLET_UX_OUT_DIR` before this production build and again before each manual Direct Upload below. `WALLET_UX_DEPLOY=1` makes a set `WALLET_UX_OUT_DIR` fail the build. `scripts/assemble-site.mjs` prints the resolved output directory and the source commit from `git rev-parse HEAD`. It exits non-zero if that directory is not the expected one. The same `git rev-parse HEAD` is written into `dist/app/index.html` as `<meta name="agent-bv-build-commit" content="<40-hex sha>">` (see Build commit stamp below). Before each upload, confirm the build printed both `wallet-ux output dir: <checkout>/apps/wallet-ux/dist` and `assembled <checkout>/apps/wallet-ux/dist: landing at /, wallet app at /app/`. `<checkout>` is the absolute path of this checkout. Do not upload if either line is missing or names another directory.
 
 `npm ci` in `claim-relayer` is required because the wallet-ux tests load that package as Node modules. `npm run build` runs `scripts/sync-book.mjs`, then `node scripts/require-build-env.mjs`, then `tsc --noEmit`, then `vite build` (output `dist/app`), then `scripts/assemble-site.mjs`. That script copies `landing/` onto `dist/`, so the landing page is at `/` and the wallet app is at `/app/`. `dist/` is gitignored. A clean claim-secret scan logs `Claim leak scan passed`. Do not upload if that command fails.
 
@@ -49,13 +49,19 @@ unset WALLET_UX_OUT_DIR
 npx wrangler pages deploy dist --project-name=agent-bv --branch=main --commit-hash=<sha>
 ```
 
-A preview upload is not required. Right after the production upload, live-check the new deployment URL Wrangler prints, then the production alias `https://agent-bv.pages.dev`. From `apps/wallet-ux`, run the served-bundle check against the new deployment URL. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
+**Exposure window.** A preview upload is not required, so the production upload publishes the bundle on the alias `https://agent-bv.pages.dev` immediately. If that bundle is bad, it stays live on the alias until the live checks below finish and, when one fails, the rollback below also finishes. Plan for that window. Keep the checks and the rollback ready before uploading, and run them straight after the upload without a pause.
+
+**Preview is an optional canary.** An upload with `--branch=<name>` other than `main` creates a preview deployment on its own URL and does not touch the alias. An operator may use one to try a risky change first. It is never required, and a preview ID is never a rollback target. A preview upload is an extra upload, so check that Steward's GO covers it before doing one.
+
+Right after the production upload, live-check the new deployment URL Wrangler prints, then the production alias `https://agent-bv.pages.dev`. From `apps/wallet-ux`, run the served-bundle check against the new deployment URL. `DEPLOYMENT_URL` is required. `APP_PATH` defaults to `/`, which is the landing page and has no hashed bundle, so set it to `/app/`. `DIST_INDEX` defaults to `dist/index.html`; the built app index is `dist/app/index.html`.
 
 ```bash
-DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html node scripts/verify-served-bundle.mjs
+DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html EXPECT_COMMIT="<merge-sha>" node scripts/verify-served-bundle.mjs
 ```
 
-The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
+`EXPECT_COMMIT` is the full 40-character merge SHA that was built. It is optional for a rollback check against an older build that has no stamp. For a new deploy, always set it.
+
+The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. It also reads the build commit stamp from the served HTML (`Served build commit: <sha>.`). When the local `DIST_INDEX` has a stamp, the served page must carry the same one, so equal asset hashes from a different commit still fail. When `EXPECT_COMMIT` is set, the served stamp must equal it. A local build from before the stamp existed has none, and a served page without one then passes with `Served index.html has no build commit stamp.` A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
 
 The same new deployment URL also has to pass these checks. The script does not cover them:
 
@@ -63,7 +69,8 @@ The same new deployment URL also has to pass these checks. The script does not c
 - `GET /app/` returns 200.
 - Asset content types are right. Wallet JavaScript (`/app/assets/*.js`) is `text/javascript`, `application/javascript`, or `application/x-javascript` (a `charset` parameter is fine). Landing CSS is `text/css`. Landing PNG assets are `image/png`.
 - Redirects go to `/app/`. `/app` (no trailing slash), `/points`, `/claim`, and `/release` are 301 to `/app/`. The destination has no query string, so Pages keeps the incoming query string.
-- The security headers are present: `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`.
+- The security headers are present on `/app/` and `/app/identity`: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, and a `Content-Security-Policy` that ends in `frame-ancestors 'none'`. `/` has `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` as headers.
+- Cache headers: a hashed `/app/assets/*.js` file returns `Cache-Control: public, max-age=31536000, immutable`. `/` and `/app/` do not return `immutable`.
 
 Then run `scripts/verify-served-bundle.mjs` again with `DEPLOYMENT_URL` set to `https://agent-bv.pages.dev`, and the same `APP_PATH` and `DIST_INDEX`. Run the same `/`, `/app/`, content-type, redirect, and security-header checks against `https://agent-bv.pages.dev`. If any check fails, roll back to the production deployment ID noted before this upload. Follow Rollback below.
 
@@ -82,6 +89,7 @@ relayer deploy ID:
 relayer rollback target:
 VITE_CLAIM_RELAYER_URL:
 check results:
+served build commit (from /app/):
 ```
 
 `VITE_CLAIM_RELAYER_URL` is the public URL baked into that build. A build that passes has it set to exactly `https://agent-bv-relayer-edge.s-a-wight72.workers.dev`, `https://agent-bv-relayer-edge.s-a-wight72.workers.dev/`, or `https://agent-bv-relayer-edge.s-a-wight72.workers.dev/v1/claims`. It is not a secret. `/health build.commit` is the full 40-character SHA from `GET /health` on the origin, through the Worker. The relayer rollback target is the last good Render deploy ID.
@@ -204,7 +212,25 @@ There is no top-level `404.html`. Without one, Pages serves the landing page wit
 
 Missing files under `/assets/` and `/app/assets/` return **404**. [`landing/assets/404.html`](landing/assets/404.html) is copied to `dist/assets/404.html` and to `dist/app/assets/404.html`. Pages serves the nearest `404.html` for a path that is not a real file and is not rewritten to a page. `wrangler pages dev` returns 404 for `/assets/nope.png` and `/app/assets/nope.js`, and still returns the real image and the built JavaScript with status 200.
 
-[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. It sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. Those are the security headers the live Pages host already sends. That file does not set `Content-Security-Policy`. The landing page pins its own script hash. `scripts/guard-pages-headers.mjs` fails when `landing/_headers` bytes change, and `npm test` runs the guard. A later upload of this `dist` applies the same headers on `agent-bv`. It does not recreate `agent-a-wallet-ux`.
+[`landing/_headers`](landing/_headers) is copied to `dist/_headers` the same way. `scripts/guard-pages-headers.mjs` pins its exact bytes, and `npm test` runs the guard, so a header change is a reviewed change to both files. Pages merges every matching rule and joins a repeated header name into one value, so the rules do not overlap on a header name:
+
+- `/*` sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. The live Pages host already sent those two.
+- `/` sets `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`. The landing page keeps its own `<meta>` CSP with the inline-script hash. A meta CSP cannot send `frame-ancestors`, so only that directive is a header. Both policies apply.
+- `/app/*` (the app, and every SPA route such as `/app/identity`) sets `X-Frame-Options: DENY` and this CSP: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src https://sepolia.base.org https://agent-bv-relayer-edge.s-a-wight72.workers.dev; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'`. There is no `unsafe-inline` and no `unsafe-eval`. The built app has no inline script or style attribute and never evaluates a string. `connect-src` is the Base Sepolia RPC and the relayer edge Worker. The wallet connector is `injected()` only (EIP-6963), so no WalletConnect or wallet-provider host is needed. If `VITE_BASE_SEPOLIA_RPC_URL` or the relayer URL changes, change this CSP in the same commit. The test in `scripts/guards.test.mjs` ties `connect-src` to those constants.
+- `/app/assets/*` sets `Cache-Control: public, max-age=31536000, immutable`. Vite names those files by content hash. It is the only rule that sets `Cache-Control`, so HTML keeps the Pages default (`public, max-age=0, must-revalidate`) and never gets `immutable`. `/app/assets/404.html` and `/app/assets/404` detach it with `! Cache-Control` because the shared not-found page is not content-hashed.
+- Landing assets under `/assets/*` are not content-hashed (`Poppins-*.ttf`, `mascot-*.png`, `og-image.png`, icons), so they get no `immutable` rule. Do not add one unless those files get hashed names.
+
+`scripts/served-site.test.mjs` serves the real build with `wrangler pages dev`, asserts these headers on the served responses, and loads `/`, `/app/`, and `/app/identity` in headless Chrome with zero CSP violations. A later upload of this `dist` applies the same headers on `agent-bv`. It does not recreate `agent-a-wallet-ux`.
+
+### Build commit stamp
+
+`dist/app/index.html` carries `<meta name="agent-bv-build-commit" content="<40-hex sha>">`. `scripts/build-stamp.mjs` writes it during `vite build` from `git rev-parse HEAD` in `apps/wallet-ux`, the same commit `assemble-site.mjs` logs as `wallet-ux source commit`. There is no timestamp, host name, or random value in it. Rules:
+
+- The same commit rebuilds byte-identical, on Node 22 and Node 24. A different commit changes only that one meta tag in `dist/app/index.html`. The hashed JS and CSS do not carry the stamp, so their file names and bytes do not depend on the commit.
+- `curl -s https://agent-bv.pages.dev/app/ | grep agent-bv-build-commit` shows which commit is live.
+- The build uses `HEAD`, even in a dirty tree. Build a deploy from a clean checkout of the merge SHA, as above.
+- A rebuild comparison at the merge SHA still works: build that SHA, and compare `dist/` file hashes with the served files. The stamp is part of the comparison. A rebuild at another commit differs in `app/index.html` only.
+- A rollback to a deployment from before this stamp has no stamp. Verify it against a local build of that older commit, which has none either.
 
 ## Address book
 

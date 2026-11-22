@@ -159,3 +159,13 @@ describe("ActionButton states", () => {
     expect(screen.getByTestId("tx-confirmed").textContent).toBe("Escrow funded")
   })
 })
+
+describe("wallet-neutral waiting copy", () => {
+  it("names no specific wallet brand and keeps the exact wording", () => {
+    expect(CONFIRM_WALLET_LABEL).toBe("Confirm in your wallet…")
+    expect(WALLET_HINT_TEXT).toBe("No wallet window? Open your wallet from your browser toolbar.")
+    for (const text of [CONFIRM_WALLET_LABEL, WALLET_HINT_TEXT]) {
+      expect(text).not.toMatch(/metamask|rabby|coinbase|phantom|brave/i)
+    }
+  })
+})
