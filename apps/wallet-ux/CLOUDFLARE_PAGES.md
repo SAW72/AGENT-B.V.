@@ -59,7 +59,7 @@ Right after the production upload, live-check the new deployment URL Wrangler pr
 DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html EXPECT_COMMIT="<merge-sha>" node scripts/verify-served-bundle.mjs
 ```
 
-`EXPECT_COMMIT` is the full 40-character merge SHA that was built. It is optional for a rollback check against an older build that has no stamp. For a new deploy, always set it.
+`EXPECT_COMMIT` is the full 40-character merge SHA that was built. It is optional for a rollback check against an older build that has no stamp. For a new deploy, always set it. Operator note: set `EXPECT_COMMIT` on the first stamped deploy (this change, and every stamped deploy after). Leave it unset when checking a rollback to the unstamped deploy `2c57aa1d-4d9c-4e78-9d5d-12a6439150b8` (main `cdb3232`), which has no stamp. A page with no stamp fails when `EXPECT_COMMIT` is set, and a page with more than one `agent-bv-build-commit` tag always fails.
 
 The script fetches `<deployment-url>/app/`, requires that HTML to reference the same `/app/assets/*` hashes as `dist/app/index.html`, downloads those `.js` files and any `./chunk.js` imports, and requires a JavaScript content type. An empty script, or a body that starts with `<` after a UTF-8 BOM and leading whitespace, fails the check. It then runs `scripts/guard-escrow-addresses.mjs` and `scripts/guard-claim-secret.mjs` on the served HTML plus JavaScript. It also reads the build commit stamp from the served HTML (`Served build commit: <sha>.`). When the local `DIST_INDEX` has a stamp, the served page must carry the same one, so equal asset hashes from a different commit still fail. When `EXPECT_COMMIT` is set, the served stamp must equal it. A local build from before the stamp existed has none, and a served page without one then passes with `Served index.html has no build commit stamp.` A pass logs `Served bundle at <url> passed the escrow, phrase, and claim-secret checks.` A failure prints `Verify failed:` and exits non-zero.
 
@@ -226,11 +226,11 @@ Missing files under `/assets/` and `/app/assets/` return **404**. [`landing/asse
 
 `dist/app/index.html` carries `<meta name="agent-bv-build-commit" content="<40-hex sha>">`. `scripts/build-stamp.mjs` writes it during `vite build` from `git rev-parse HEAD` in `apps/wallet-ux`, the same commit `assemble-site.mjs` logs as `wallet-ux source commit`. There is no timestamp, host name, or random value in it. Rules:
 
-- The same commit rebuilds byte-identical, on Node 22 and Node 24. A different commit changes only that one meta tag in `dist/app/index.html`. The hashed JS and CSS do not carry the stamp, so their file names and bytes do not depend on the commit.
-- `curl -s https://agent-bv.pages.dev/app/ | grep agent-bv-build-commit` shows which commit is live.
-- The build uses `HEAD`, even in a dirty tree. Build a deploy from a clean checkout of the merge SHA, as above.
-- A rebuild comparison at the merge SHA still works: build that SHA, and compare `dist/` file hashes with the served files. The stamp is part of the comparison. A rebuild at another commit differs in `app/index.html` only.
-- A rollback to a deployment from before this stamp has no stamp. Verify it against a local build of that older commit, which has none either.
+- The same commit rebuilds byte-identical, on Node 22 and Node 24. A different commit changes only that one meta tag in `dist/app/index.html` when the app sources are unchanged. A commit that changes app sources also changes the hashed JS or CSS. The hashed JS and CSS do not carry the stamp, so their file names and bytes do not depend on the commit.
+- `curl -s https://agent-bv.pages.dev/app/ | grep agent-bv-build-commit` shows which commit is live. The served page must have exactly one stamp tag. `scripts/verify-served-bundle.mjs` fails on more than one tag. Zero tags pass only when `EXPECT_COMMIT` is unset (a rollback to a pre-stamp build).
+- A `WALLET_UX_DEPLOY=1` production build refuses to stamp a dirty git tree and exits with a message that names the dirty files (`git status --porcelain`). Other builds, including the test suite, may still stamp `HEAD` in a dirty tree. Build a deploy from a clean checkout of the merge SHA, as above.
+- A rebuild comparison at the merge SHA still works: build that SHA, and compare `dist/` file hashes with the served files. The stamp is part of the comparison. A rebuild at another commit differs in `app/index.html` only when the app sources are unchanged.
+- A rollback to a deployment from before this stamp has no stamp. Verify it against a local build of that older commit, which has none either, and leave `EXPECT_COMMIT` unset. For the current production deployment, that unstamped rollback target is `2c57aa1d-4d9c-4e78-9d5d-12a6439150b8`.
 
 ## Address book
 

@@ -173,7 +173,10 @@ describe("built site", () => {
     // This temp dir is a local test build, not a deploy build. A parent shell may
     // set CF_PAGES, WALLET_UX_DEPLOY, or GITHUB_WORKFLOW_REF (Cloudflare Pages,
     // the manual production signal, or the stale deploy workflow). Those signals
-    // refuse any WALLET_UX_OUT_DIR override.
+    // refuse any WALLET_UX_OUT_DIR override. A WALLET_UX_DEPLOY=1 build also
+    // refuses to stamp a dirty git tree. This test must not set that signal, so
+    // the dirty-tree guard stays strict for production and this suite can run
+    // in a dirty worktree without weakening it.
     delete buildEnv.CF_PAGES
     delete buildEnv.WALLET_UX_DEPLOY
     delete buildEnv.GITHUB_WORKFLOW_REF

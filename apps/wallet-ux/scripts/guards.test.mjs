@@ -240,9 +240,9 @@ describe("guard-claim-secret", () => {
 describe("verify-served-bundle", () => {
   const hash = "app-abc123"
 
-  function fixture({ servedHtml, javascript, extra, builtStamp }) {
+  function fixture({ servedHtml, javascript, extra, builtStamp, builtHtml }) {
     const directory = tempDir()
-    const built = `<script src="/assets/${hash}.js"></script><link href="/assets/${hash}.css">${builtStamp ? stampTag(builtStamp) : ""}`
+    const built = builtHtml ?? `<script src="/assets/${hash}.js"></script><link href="/assets/${hash}.css">${builtStamp ? stampTag(builtStamp) : ""}`
     writeFileSync(join(directory, "built.html"), built)
     const served = servedHtml ?? built
     const files = new Map([
@@ -345,6 +345,19 @@ describe("verify-served-bundle", () => {
     const result = await verify(fixture({ servedHtml: `${pages}${stampTag("not-a-sha")}` }))
     assertCleanExit(result)
     expect(result.stderr).toContain("is not a 40-hex commit SHA")
+  })
+
+  it("fails when the served or built page has more than one stamp tag, even if the first matches", async () => {
+    const one = stampTag(shaA)
+    const two = `${one}${stampTag(shaB)}`
+    const servedDup = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${two}` }))
+    assertCleanExit(servedDup)
+    expect(servedDup.stderr).toContain("served index")
+    expect(servedDup.stderr).toContain("appears 2 times; expected at most one")
+    const builtDup = await verify(fixture({ builtHtml: `${pages}${two}`, servedHtml: `${pages}${one}` }))
+    assertCleanExit(builtDup)
+    expect(builtDup.stderr).toContain("built index")
+    expect(builtDup.stderr).toContain("appears 2 times; expected at most one")
   })
 
   it("fails when served index.html references a different asset hash", async () => {
