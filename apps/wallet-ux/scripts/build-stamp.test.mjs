@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -380,5 +380,58 @@ describe("stamp parser fail-closed edges (P3-2)", () => {
   it("a stamp only inside a real HTML comment is still ignored after script-first stripping", () => {
     expect(readBuildCommitStamp(`<head><!-- ${official} --></head>`)).toBeNull()
     expect(readBuildCommitStamp(`<head>${official}<!-- <meta name="agent-bv-build-commit" content="${shaB}"> --></head>`)).toBe(shaA)
+  })
+})
+
+describe("dirty-tree git -c overrides (P3-4)", () => {
+  it("repo-local status.showUntrackedFiles=no cannot hide an untracked file", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-untracked-cfg-"))
+    try {
+      const git = initRepo(app)
+      git(["config", "status.showUntrackedFiles", "no"])
+      writeFileSync(join(app, "hidden-untracked.txt"), "x\n")
+      const raw = execFileSync("git", ["-C", app, "status", "--porcelain"], { encoding: "utf8" })
+      expect(raw, "control: repo config hides untracked without -c").not.toMatch(/hidden-untracked/)
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? hidden-untracked\.txt/)
+      expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty)).toThrow(/dirty git tree/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+
+  it("an included gitconfig that sets showUntrackedFiles=no cannot hide dirt", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-include-cfg-"))
+    try {
+      const git = initRepo(app)
+      const included = join(app, "hide-untracked.cfg")
+      writeFileSync(included, "[status]\n\tshowUntrackedFiles = no\n")
+      git(["config", "include.path", included])
+      writeFileSync(join(app, "included-untracked.txt"), "x\n")
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? included-untracked\.txt/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+
+  it("repo-local core.fsmonitor is not executed and untracked files still appear", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-fsmonitor-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-fsmonitor-side-"))
+    try {
+      const git = initRepo(app)
+      writeFileSync(join(app, "u.txt"), "x\n")
+      const marker = join(side, "fsmonitor-ran")
+      const hook = join(side, "fsmonitor.sh")
+      writeFileSync(hook, `#!/bin/sh\nprintf ran > "${marker}"\nexit 0\n`)
+      chmodSync(hook, 0o755)
+      git(["config", "core.fsmonitor", hook])
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? u\.txt/)
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
   })
 })

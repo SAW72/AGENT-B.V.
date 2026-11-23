@@ -132,14 +132,23 @@ export function isAllowUnpinnedRollback(value) {
 }
 
 // Porcelain output of `git status` at cwd, or throws. An empty string is clean.
-// Untracked files are included (no -uno). git is run with inherited GIT_* vars
-// dropped and `git -C <cwd>`, so a dummy GIT_DIR/GIT_WORK_TREE cannot hide dirt
-// or retarget the commit.
+// Untracked files are included (no -uno). The command forces
+// status.showUntrackedFiles=all and core.fsmonitor=false so a repo-local,
+// user, or system gitconfig cannot hide untracked files or run an fsmonitor
+// hook. Inherited GIT_* vars are dropped and git is run with `git -C <cwd>`,
+// so a dummy GIT_DIR/GIT_WORK_TREE cannot hide dirt or retarget the commit.
 export function readGitDirtyState(cwd, env = process.env) {
   if (!cwd) throw new Error("readGitDirtyState requires a working directory.")
   let text
   try {
-    text = runGitInRepo(cwd, ["status", "--porcelain"], env)
+    text = runGitInRepo(cwd, [
+      "-c",
+      "status.showUntrackedFiles=all",
+      "-c",
+      "core.fsmonitor=false",
+      "status",
+      "--porcelain",
+    ], env)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`git status --porcelain failed (${detail}).`)
