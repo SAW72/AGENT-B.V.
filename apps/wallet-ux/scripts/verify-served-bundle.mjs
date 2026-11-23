@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BUILD_COMMIT_PATTERN, readBuildCommitStamp } from "./build-stamp.mjs"
+import { evaluateServedStamp, readBuildCommitStamp } from "./build-stamp.mjs"
 
 class VerifyExit extends Error {
   constructor(status = 1) {
@@ -130,22 +130,13 @@ console.log(`Served index.html references the built asset hashes: ${servedAssets
 //   EXPECT_COMMIT, and it is not used on a new deploy.
 const builtStamp = stampOf(builtHtml, "built index")
 const servedStamp = stampOf(html, "served index")
-const expectCommit = (process.env.EXPECT_COMMIT ?? "").trim().toLowerCase()
-const allowUnpinned = (process.env.ALLOW_UNPINNED_ROLLBACK ?? "").trim() === "1"
-if (expectCommit && !BUILD_COMMIT_PATTERN.test(expectCommit)) {
-  fail("Verify failed: EXPECT_COMMIT must be a 40-hex commit SHA.")
-}
-if (builtStamp !== null && servedStamp !== builtStamp) {
-  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} does not match the built ${builtStamp}.`)
-}
-if (expectCommit && servedStamp !== expectCommit) {
-  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} is not the expected ${expectCommit}.`)
-}
-if (!expectCommit && (builtStamp !== null || servedStamp !== null) && !allowUnpinned) {
-  fail(
-    "Verify failed: a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1.",
-  )
-}
+const decision = evaluateServedStamp({
+  builtStamp,
+  servedStamp,
+  expectCommit: process.env.EXPECT_COMMIT,
+  allowUnpinnedRollback: (process.env.ALLOW_UNPINNED_ROLLBACK ?? "").trim() === "1",
+})
+if (!decision.ok) fail(`Verify failed: ${decision.message}`)
 console.log(servedStamp === null ? "Served index.html has no build commit stamp." : `Served build commit: ${servedStamp}.`)
 const pending = servedAssets.filter((assetPath) => assetPath.endsWith(".js"))
 if (pending.length === 0) {

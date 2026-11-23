@@ -8,6 +8,7 @@ import {
   BUILD_COMMIT_META_NAME,
   assertDeployStampAllowed,
   buildCommitMetaTag,
+  evaluateServedStamp,
   listBuildCommitStamps,
   readBuildCommitStamp,
   readGitDirtyState,
@@ -243,5 +244,35 @@ describe("deploy stamp dirty-tree guard", () => {
       rmSync(app, { recursive: true, force: true })
       rmSync(dummy, { recursive: true, force: true })
     }
+  })
+})
+
+describe("evaluateServedStamp matrix", () => {
+  const rows = [
+    { name: "unstamped, EXPECT unset, no flag: pre-stamp rollback passes", built: null, served: null, expect: "", flag: false, ok: true },
+    { name: "unstamped, EXPECT unset, flag: flag is a no-op, still passes", built: null, served: null, expect: "", flag: true, ok: true },
+    { name: "unstamped, EXPECT set: fails, flag does not override", built: null, served: null, expect: shaA, flag: false, ok: false, message: "served build commit (none) is not the expected" },
+    { name: "unstamped, EXPECT set, flag: still fails", built: null, served: null, expect: shaA, flag: true, ok: false, message: "served build commit (none) is not the expected" },
+    { name: "stamped match, EXPECT set: new deploy passes", built: shaA, served: shaA, expect: shaA, flag: false, ok: true },
+    { name: "stamped match, uppercase EXPECT: still passes", built: shaA, served: shaA, expect: shaA.toUpperCase(), flag: false, ok: true },
+    { name: "stamped match, EXPECT unset, no flag: fails closed", built: shaA, served: shaA, expect: "", flag: false, ok: false, message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+    { name: "stamped match, EXPECT unset, flag: documented unpinned rollback", built: shaA, served: shaA, expect: "", flag: true, ok: true },
+    { name: "stamped match, wrong EXPECT, flag: still fails", built: shaA, served: shaA, expect: shaB, flag: true, ok: false, message: `served build commit ${shaA} is not the expected ${shaB}` },
+    { name: "stamped mismatch, EXPECT unset: built/served first", built: shaA, served: shaB, expect: "", flag: false, ok: false, message: `served build commit ${shaB} does not match the built ${shaA}` },
+    { name: "stamped mismatch, flag: still a mismatch", built: shaA, served: shaB, expect: "", flag: true, ok: false, message: `served build commit ${shaB} does not match the built ${shaA}` },
+    { name: "served stamp, unstamped built, EXPECT unset: fails", built: null, served: shaA, expect: "", flag: false, ok: false, message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+    { name: "served stamp, unstamped built, EXPECT=served: passes", built: null, served: shaA, expect: shaA, flag: false, ok: true },
+    { name: "built stamp, unstamped served: mismatch", built: shaA, served: null, expect: "", flag: false, ok: false, message: "served build commit (none) does not match" },
+    { name: "short EXPECT_COMMIT: fails closed", built: shaA, served: shaA, expect: "cdb3232", flag: false, ok: false, message: "EXPECT_COMMIT must be a 40-hex commit SHA" },
+  ]
+  it.each(rows)("$name", (row) => {
+    const decision = evaluateServedStamp({
+      builtStamp: row.built,
+      servedStamp: row.served,
+      expectCommit: row.expect,
+      allowUnpinnedRollback: row.flag,
+    })
+    expect(decision.ok, row.name).toBe(row.ok)
+    if (!row.ok) expect(decision.message, row.name).toContain(row.message)
   })
 })

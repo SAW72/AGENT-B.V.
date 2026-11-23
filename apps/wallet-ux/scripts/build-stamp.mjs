@@ -63,6 +63,37 @@ export function readBuildCommitStamp(html) {
   return commit
 }
 
+
+// Rules for verify-served-bundle.mjs. Stamps are already parsed (null, a SHA, or
+// thrown on more than one / malformed). expectCommit is the raw EXPECT_COMMIT
+// string (may be empty). allowUnpinnedRollback is true only for exact "1".
+export function evaluateServedStamp({ builtStamp, servedStamp, expectCommit, allowUnpinnedRollback }) {
+  const expected = String(expectCommit ?? "").trim().toLowerCase()
+  const allowUnpinned = allowUnpinnedRollback === true
+  if (expected && !BUILD_COMMIT_PATTERN.test(expected)) {
+    return { ok: false, message: "EXPECT_COMMIT must be a 40-hex commit SHA." }
+  }
+  if (builtStamp !== null && servedStamp !== builtStamp) {
+    return {
+      ok: false,
+      message: `served build commit ${servedStamp ?? "(none)"} does not match the built ${builtStamp}.`,
+    }
+  }
+  if (expected && servedStamp !== expected) {
+    return {
+      ok: false,
+      message: `served build commit ${servedStamp ?? "(none)"} is not the expected ${expected}.`,
+    }
+  }
+  if (!expected && (builtStamp !== null || servedStamp !== null) && !allowUnpinned) {
+    return {
+      ok: false,
+      message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1.",
+    }
+  }
+  return { ok: true }
+}
+
 // Porcelain output of `git status` at cwd, or throws. An empty string is clean.
 // Untracked files are included (no -uno). git is run with inherited GIT_* vars
 // dropped and `git -C <cwd>`, so a dummy GIT_DIR/GIT_WORK_TREE cannot hide dirt
