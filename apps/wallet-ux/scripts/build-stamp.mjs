@@ -20,27 +20,56 @@ export function buildCommitMetaTag(commit) {
 }
 
 // Comments, <script>, and <template> can mention the tag without being a stamp.
+// Scripts and templates are stripped first so a "<!--" in one script string and
+// a "-->" in another cannot hide a real stamp between them (HTML comments do
+// not start inside a script). Then comments are stripped.
 function stripIgnoredHtml(html) {
   return String(html)
-    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
 }
 
 function attributeMap(raw) {
   const attrs = {}
-  const attr = /([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+  // Quoted values may contain ">"; unquoted values run to whitespace or ">".
+  const attr = /([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g
   for (const match of String(raw).matchAll(attr)) {
-    attrs[match[1].toLowerCase()] = match[2] ?? match[3]
+    attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4]
   }
   return attrs
+}
+
+// Collect <meta ...> inner text without stopping at a ">" that sits inside a
+// quoted attribute (e.g. title="a>b" before name=).
+function metaAttributeSources(html) {
+  const inners = []
+  const open = /<meta\b/gi
+  let found
+  while ((found = open.exec(html))) {
+    let i = found.index + found[0].length
+    let quote = null
+    while (i < html.length) {
+      const c = html[i]
+      if (quote) {
+        if (c === quote) quote = null
+      } else if (c === '"' || c === "'") {
+        quote = c
+      } else if (c === ">") {
+        inners.push(html.slice(found.index + found[0].length, i))
+        break
+      }
+      i += 1
+    }
+  }
+  return inners
 }
 
 export function listBuildCommitStamps(html) {
   const visible = stripIgnoredHtml(html)
   const stamps = []
-  for (const match of visible.matchAll(/<meta\b([^>]*?)\/?>/gi)) {
-    const attrs = attributeMap(match[1])
+  for (const inner of metaAttributeSources(visible)) {
+    const attrs = attributeMap(inner)
     if (attrs.name === BUILD_COMMIT_META_NAME) stamps.push(attrs.content ?? "")
   }
   return stamps
@@ -48,8 +77,10 @@ export function listBuildCommitStamps(html) {
 
 // The stamp in an HTML page, or null when the page has none (a build from before
 // this stamp existed, or the landing page). More than one real tag is an error.
-// Attribute order, single or double quotes, extra attributes, and spaces around
-// `=` are accepted. Tags inside comments, <script>, or <template> are ignored.
+// Attribute order, single or double quotes, unquoted values, extra attributes,
+// spaces around `=`, and `>` inside a quoted attribute are accepted. Tags
+// inside comments, <script>, or <template> are ignored. A stamp-like tag that
+// is missing content still fails closed.
 export function readBuildCommitStamp(html) {
   const found = listBuildCommitStamps(html)
   if (found.length > 1) {

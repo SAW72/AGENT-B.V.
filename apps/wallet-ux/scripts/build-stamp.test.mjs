@@ -345,3 +345,40 @@ describe("isAllowUnpinnedRollback (P3-1)", () => {
     }
   })
 })
+
+describe("stamp parser fail-closed edges (P3-2)", () => {
+  const official = `<meta name="agent-bv-build-commit" content="${shaA}">`
+  const cases = [
+    { name: "unquoted name and content", html: `<meta name=agent-bv-build-commit content=${shaA}>`, stamp: shaA },
+    { name: "unquoted name only", html: `<meta name=agent-bv-build-commit content="${shaA}">`, stamp: shaA },
+    { name: "unquoted content only", html: `<meta name="agent-bv-build-commit" content=${shaA}>`, stamp: shaA },
+    { name: "> inside a quoted attr before name", html: `<meta title="a>b" name="agent-bv-build-commit" content="${shaA}">`, stamp: shaA },
+    { name: "> inside a quoted attr after content", html: `<meta name="agent-bv-build-commit" content="${shaA}" title="a>b">`, stamp: shaA },
+    {
+      name: "comment opener in one script and closer in another, stamp between",
+      html: `<script>var a="<!--"</script><meta name="agent-bv-build-commit" content="${shaA}"><script>var b="-->"</script>`,
+      stamp: shaA,
+    },
+  ]
+  it.each(cases)("$name is a real stamp", (row) => {
+    expect(readBuildCommitStamp(`<head>${row.html}</head>`), row.name).toBe(row.stamp)
+  })
+
+  it("a prefixed or suffixed name is not a stamp", () => {
+    expect(readBuildCommitStamp(`<head>${official}<meta name="x-agent-bv-build-commit" content="${shaB}"></head>`)).toBe(shaA)
+    expect(readBuildCommitStamp(`<head><meta name="agent-bv-build-commit-2" content="${shaB}"></head>`)).toBeNull()
+  })
+
+  it("a stamp tag with no content attribute is refused, not read as no stamp", () => {
+    expect(() => readBuildCommitStamp(`<head><meta name="agent-bv-build-commit"></head>`)).toThrow("40-hex")
+  })
+
+  it("the name value is matched exactly (case)", () => {
+    expect(readBuildCommitStamp(`<head><meta name="AGENT-BV-BUILD-COMMIT" content="${shaA}"></head>`)).toBeNull()
+  })
+
+  it("a stamp only inside a real HTML comment is still ignored after script-first stripping", () => {
+    expect(readBuildCommitStamp(`<head><!-- ${official} --></head>`)).toBeNull()
+    expect(readBuildCommitStamp(`<head>${official}<!-- <meta name="agent-bv-build-commit" content="${shaB}"> --></head>`)).toBe(shaA)
+  })
+})
