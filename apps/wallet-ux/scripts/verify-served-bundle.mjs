@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { evaluateServedStamp, readBuildCommitStamp } from "./build-stamp.mjs"
+import { evaluateServedStamp, isAllowUnpinnedRollback, readBuildCommitStamp } from "./build-stamp.mjs"
 
 class VerifyExit extends Error {
   constructor(status = 1) {
@@ -134,7 +134,7 @@ const decision = evaluateServedStamp({
   builtStamp,
   servedStamp,
   expectCommit: process.env.EXPECT_COMMIT,
-  allowUnpinnedRollback: (process.env.ALLOW_UNPINNED_ROLLBACK ?? "").trim() === "1",
+  allowUnpinnedRollback: isAllowUnpinnedRollback(process.env.ALLOW_UNPINNED_ROLLBACK),
 })
 if (!decision.ok) fail(`Verify failed: ${decision.message}`)
 console.log(servedStamp === null ? "Served index.html has no build commit stamp." : `Served build commit: ${servedStamp}.`)

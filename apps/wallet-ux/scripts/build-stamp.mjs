@@ -94,6 +94,12 @@ export function evaluateServedStamp({ builtStamp, servedStamp, expectCommit, all
   return { ok: true }
 }
 
+// ALLOW_UNPINNED_ROLLBACK is exact "1" only. Surrounding whitespace is not
+// accepted, matching the operator docs and the WALLET_UX_DEPLOY=1 convention.
+export function isAllowUnpinnedRollback(value) {
+  return value === "1"
+}
+
 // Porcelain output of `git status` at cwd, or throws. An empty string is clean.
 // Untracked files are included (no -uno). git is run with inherited GIT_* vars
 // dropped and `git -C <cwd>`, so a dummy GIT_DIR/GIT_WORK_TREE cannot hide dirt

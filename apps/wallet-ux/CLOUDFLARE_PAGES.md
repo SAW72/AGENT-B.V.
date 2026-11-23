@@ -59,7 +59,7 @@ Right after the production upload, live-check the new deployment URL Wrangler pr
 DEPLOYMENT_URL="<deployment-url>" APP_PATH=/app/ DIST_INDEX=dist/app/index.html EXPECT_COMMIT="<merge-sha>" node scripts/verify-served-bundle.mjs
 ```
 
-`EXPECT_COMMIT` is the full 40-character merge SHA that was built. For a new stamped deploy, always set it. The script fails if a served or built page has a stamp and `EXPECT_COMMIT` is unset, unless the operator also sets `ALLOW_UNPINNED_ROLLBACK=1` (exact `1` only).
+`EXPECT_COMMIT` is the full 40-character merge SHA that was built. For a new stamped deploy, always set it. The script fails if a served or built page has a stamp and `EXPECT_COMMIT` is unset, unless the operator also sets `ALLOW_UNPINNED_ROLLBACK=1` (exact `1` only; surrounding whitespace is not accepted).
 
 Operator notes:
 

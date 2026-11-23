@@ -9,6 +9,7 @@ import {
   assertDeployStampAllowed,
   buildCommitMetaTag,
   evaluateServedStamp,
+  isAllowUnpinnedRollback,
   listBuildCommitStamps,
   readBuildCommitStamp,
   readGitDirtyState,
@@ -332,6 +333,15 @@ describe("GIT_CONFIG_* and GIT_INDEX_FILE are dropped (P3-3)", () => {
       expect(() => walletBuildStampPlugin(app, readSourceCommit, readGitDirtyState, env).configResolved()).toThrow(/dirty git tree/)
     } finally {
       rmSync(app, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("isAllowUnpinnedRollback (P3-1)", () => {
+  it("is exact \"1\" only: surrounding whitespace, 0, and true are refused", () => {
+    expect(isAllowUnpinnedRollback("1")).toBe(true)
+    for (const value of [" 1 ", "1 ", " 1", "\t1", "1\n", "true", "0", "yes", "", undefined, null]) {
+      expect(isAllowUnpinnedRollback(value), JSON.stringify(value)).toBe(false)
     }
   })
 })
