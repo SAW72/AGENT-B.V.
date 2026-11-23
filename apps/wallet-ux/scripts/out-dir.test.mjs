@@ -11,6 +11,7 @@ import {
   assertWalletAppDir,
   createWalletOutDir,
   deployOutDirSignal,
+  gitChildEnv,
   isDeployBuild,
   OutDirError,
   readSourceCommit,
@@ -907,5 +908,79 @@ describe("dedicated run dir guards", () => {
     expect(() => resolveWalletOutRoot({ WALLET_UX_OUT_DIR: sibling }, appRoot)).toThrow(OutDirError)
     expect(readFileSync(join(sibling, "SENTINEL.txt"), "utf8")).toBe("keep")
     expect(readdirSync(sibling)).toEqual(["SENTINEL.txt"])
+  })
+})
+
+describe("gitChildEnv drops every GIT_* key (P3-3)", () => {
+  it("returns an env with no GIT_* key, including CONFIG and INDEX vars, and keeps PATH", () => {
+    const child = gitChildEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/x",
+      GIT_DIR: "/tmp/dummy.git",
+      GIT_WORK_TREE: "/tmp/dummy",
+      GIT_COMMON_DIR: "/tmp/dummy.git",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "status.showUntrackedFiles",
+      GIT_CONFIG_VALUE_0: "no",
+      GIT_CONFIG_PARAMETERS: "'status.showUntrackedFiles=no'",
+      GIT_CONFIG_GLOBAL: "/tmp/global.cfg",
+      GIT_INDEX_FILE: "/tmp/other-index",
+      GIT_EXEC_PATH: "/tmp/git-exec",
+      GIT_OBJECT_DIRECTORY: "/tmp/objects",
+    })
+    expect(Object.keys(child).filter((key) => key.startsWith("GIT_"))).toEqual([])
+    expect(child.PATH).toBe("/usr/bin")
+    expect(child.HOME).toBe("/home/x")
+  })
+})
+
+describe("readSourceCommit fails closed (P3-5)", () => {
+  function repo(root, extra = []) {
+    const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" })
+    git(["-c", "init.defaultBranch=main", ...extra, "init", "-q"])
+    git(["config", "user.email", "s@t"])
+    git(["config", "user.name", "s"])
+    writeFileSync(join(root, "a.txt"), "ok\n")
+    git(["add", "a.txt"])
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "i"])
+    return git
+  }
+
+  it("throws OutDirError outside a git repo (does not return zeros or empty)", () => {
+    const none = mkdtempSync(join(tmpdir(), "outdir-nogit-"))
+    temps.push(none)
+    expect(() => readSourceCommit(none)).toThrow(OutDirError)
+    expect(() => readSourceCommit(none)).toThrow(/git rev-parse HEAD failed/)
+  })
+
+  it("throws in a repo with no commit yet", () => {
+    const empty = mkdtempSync(join(tmpdir(), "outdir-empty-"))
+    temps.push(empty)
+    execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: empty })
+    expect(() => readSourceCommit(empty)).toThrow(OutDirError)
+    expect(() => readSourceCommit(empty)).toThrow(/git rev-parse HEAD failed/)
+  })
+
+  it("refuses a rev-parse result that is not a 40-hex SHA (sha256 repo gives 64 hex)", () => {
+    const root = mkdtempSync(join(tmpdir(), "outdir-sha256-"))
+    temps.push(root)
+    const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" })
+    git(["init", "-q", "--object-format=sha256"])
+    git(["config", "user.email", "s@t"])
+    git(["config", "user.name", "s"])
+    writeFileSync(join(root, "a.txt"), "ok\n")
+    git(["add", "a.txt"])
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "i"])
+    const raw = git(["rev-parse", "HEAD"]).trim()
+    expect(raw).toMatch(/^[0-9a-f]{64}$/)
+    expect(() => readSourceCommit(root)).toThrow(OutDirError)
+    expect(() => readSourceCommit(root)).toThrow(/not a commit SHA/)
+  })
+
+  it("returns the real 40-hex HEAD of a repo", () => {
+    const root = mkdtempSync(join(tmpdir(), "outdir-ok-"))
+    temps.push(root)
+    const git = repo(root)
+    expect(readSourceCommit(root)).toBe(git(["rev-parse", "HEAD"]).trim())
   })
 })

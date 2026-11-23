@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -9,6 +9,7 @@ import {
   assertDeployStampAllowed,
   buildCommitMetaTag,
   evaluateServedStamp,
+  isAllowUnpinnedRollback,
   listBuildCommitStamps,
   readBuildCommitStamp,
   readGitDirtyState,
@@ -274,5 +275,163 @@ describe("evaluateServedStamp matrix", () => {
     })
     expect(decision.ok, row.name).toBe(row.ok)
     if (!row.ok) expect(decision.message, row.name).toContain(row.message)
+  })
+})
+
+describe("GIT_CONFIG_* and GIT_INDEX_FILE are dropped (P3-3)", () => {
+  const cases = (dir) => {
+    const cfg = join(dir, "global.cfg")
+    writeFileSync(cfg, "[status]\n\tshowUntrackedFiles = no\n")
+    return {
+      "GIT_CONFIG_COUNT/KEY/VALUE": { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "status.showUntrackedFiles", GIT_CONFIG_VALUE_0: "no" },
+      "GIT_CONFIG_PARAMETERS": { GIT_CONFIG_PARAMETERS: "'status.showUntrackedFiles=no'" },
+      "GIT_CONFIG_GLOBAL": { GIT_CONFIG_GLOBAL: cfg },
+    }
+  }
+  it("an inherited config cannot hide an untracked file from the dirty read", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-cfg-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-cfg-side-"))
+    try {
+      initRepo(app)
+      writeFileSync(join(app, "untracked-only.txt"), "x\n")
+      for (const [name, vars] of Object.entries(cases(side))) {
+        const dirty = readGitDirtyState(app, { ...process.env, ...vars })
+        expect(dirty, name).toMatch(/\?\? untracked-only\.txt/)
+        expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty), name).toThrow(/dirty git tree/)
+      }
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
+  })
+  it("GIT_INDEX_FILE cannot make a clean tree look dirty or hide edits", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-idx-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-idx-side-"))
+    try {
+      initRepo(app)
+      const env = { ...process.env, GIT_INDEX_FILE: join(side, "other-index") }
+      expect(readGitDirtyState(app, env)).toBe("")
+      writeFileSync(join(app, "file.txt"), "changed\n")
+      expect(readGitDirtyState(app, env)).toMatch(/file\.txt/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
+  })
+  it("the build plugin on a dirty tree refuses with config env set, and passes env to both readers", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-plug-app-"))
+    try {
+      initRepo(app)
+      writeFileSync(join(app, "u.txt"), "x\n")
+      const env = {
+        ...process.env,
+        WALLET_UX_DEPLOY: "1",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "status.showUntrackedFiles",
+        GIT_CONFIG_VALUE_0: "no",
+      }
+      expect(() => walletBuildStampPlugin(app, readSourceCommit, readGitDirtyState, env).configResolved()).toThrow(/dirty git tree/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("isAllowUnpinnedRollback (P3-1)", () => {
+  it("is exact \"1\" only: surrounding whitespace, 0, and true are refused", () => {
+    expect(isAllowUnpinnedRollback("1")).toBe(true)
+    for (const value of [" 1 ", "1 ", " 1", "\t1", "1\n", "true", "0", "yes", "", undefined, null]) {
+      expect(isAllowUnpinnedRollback(value), JSON.stringify(value)).toBe(false)
+    }
+  })
+})
+
+describe("stamp parser fail-closed edges (P3-2)", () => {
+  const official = `<meta name="agent-bv-build-commit" content="${shaA}">`
+  const cases = [
+    { name: "unquoted name and content", html: `<meta name=agent-bv-build-commit content=${shaA}>`, stamp: shaA },
+    { name: "unquoted name only", html: `<meta name=agent-bv-build-commit content="${shaA}">`, stamp: shaA },
+    { name: "unquoted content only", html: `<meta name="agent-bv-build-commit" content=${shaA}>`, stamp: shaA },
+    { name: "> inside a quoted attr before name", html: `<meta title="a>b" name="agent-bv-build-commit" content="${shaA}">`, stamp: shaA },
+    { name: "> inside a quoted attr after content", html: `<meta name="agent-bv-build-commit" content="${shaA}" title="a>b">`, stamp: shaA },
+    {
+      name: "comment opener in one script and closer in another, stamp between",
+      html: `<script>var a="<!--"</script><meta name="agent-bv-build-commit" content="${shaA}"><script>var b="-->"</script>`,
+      stamp: shaA,
+    },
+  ]
+  it.each(cases)("$name is a real stamp", (row) => {
+    expect(readBuildCommitStamp(`<head>${row.html}</head>`), row.name).toBe(row.stamp)
+  })
+
+  it("a prefixed or suffixed name is not a stamp", () => {
+    expect(readBuildCommitStamp(`<head>${official}<meta name="x-agent-bv-build-commit" content="${shaB}"></head>`)).toBe(shaA)
+    expect(readBuildCommitStamp(`<head><meta name="agent-bv-build-commit-2" content="${shaB}"></head>`)).toBeNull()
+  })
+
+  it("a stamp tag with no content attribute is refused, not read as no stamp", () => {
+    expect(() => readBuildCommitStamp(`<head><meta name="agent-bv-build-commit"></head>`)).toThrow("40-hex")
+  })
+
+  it("the name value is matched exactly (case)", () => {
+    expect(readBuildCommitStamp(`<head><meta name="AGENT-BV-BUILD-COMMIT" content="${shaA}"></head>`)).toBeNull()
+  })
+
+  it("a stamp only inside a real HTML comment is still ignored after script-first stripping", () => {
+    expect(readBuildCommitStamp(`<head><!-- ${official} --></head>`)).toBeNull()
+    expect(readBuildCommitStamp(`<head>${official}<!-- <meta name="agent-bv-build-commit" content="${shaB}"> --></head>`)).toBe(shaA)
+  })
+})
+
+describe("dirty-tree git -c overrides (P3-4)", () => {
+  it("repo-local status.showUntrackedFiles=no cannot hide an untracked file", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-untracked-cfg-"))
+    try {
+      const git = initRepo(app)
+      git(["config", "status.showUntrackedFiles", "no"])
+      writeFileSync(join(app, "hidden-untracked.txt"), "x\n")
+      const raw = execFileSync("git", ["-C", app, "status", "--porcelain"], { encoding: "utf8" })
+      expect(raw, "control: repo config hides untracked without -c").not.toMatch(/hidden-untracked/)
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? hidden-untracked\.txt/)
+      expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty)).toThrow(/dirty git tree/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+
+  it("an included gitconfig that sets showUntrackedFiles=no cannot hide dirt", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-include-cfg-"))
+    try {
+      const git = initRepo(app)
+      const included = join(app, "hide-untracked.cfg")
+      writeFileSync(included, "[status]\n\tshowUntrackedFiles = no\n")
+      git(["config", "include.path", included])
+      writeFileSync(join(app, "included-untracked.txt"), "x\n")
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? included-untracked\.txt/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+
+  it("repo-local core.fsmonitor is not executed and untracked files still appear", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-fsmonitor-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-fsmonitor-side-"))
+    try {
+      const git = initRepo(app)
+      writeFileSync(join(app, "u.txt"), "x\n")
+      const marker = join(side, "fsmonitor-ran")
+      const hook = join(side, "fsmonitor.sh")
+      writeFileSync(hook, `#!/bin/sh\nprintf ran > "${marker}"\nexit 0\n`)
+      chmodSync(hook, 0o755)
+      git(["config", "core.fsmonitor", hook])
+      const dirty = readGitDirtyState(app)
+      expect(dirty).toMatch(/\?\? u\.txt/)
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
   })
 })

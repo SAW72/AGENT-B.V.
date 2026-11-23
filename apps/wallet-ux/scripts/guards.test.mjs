@@ -323,6 +323,11 @@ describe("verify-served-bundle", () => {
     })
     assertCleanExit(notOne)
     expect(notOne.stderr).toContain("a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1")
+    const spaced = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }), {
+      ALLOW_UNPINNED_ROLLBACK: " 1 ",
+    })
+    assertCleanExit(spaced)
+    expect(spaced.stderr).toContain("a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1")
   })
 
   it("fails when the served build commit differs from the built one, even with the same asset hashes", async () => {
