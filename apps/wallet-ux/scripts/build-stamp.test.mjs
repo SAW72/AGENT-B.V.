@@ -276,3 +276,62 @@ describe("evaluateServedStamp matrix", () => {
     if (!row.ok) expect(decision.message, row.name).toContain(row.message)
   })
 })
+
+describe("GIT_CONFIG_* and GIT_INDEX_FILE are dropped (P3-3)", () => {
+  const cases = (dir) => {
+    const cfg = join(dir, "global.cfg")
+    writeFileSync(cfg, "[status]\n\tshowUntrackedFiles = no\n")
+    return {
+      "GIT_CONFIG_COUNT/KEY/VALUE": { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "status.showUntrackedFiles", GIT_CONFIG_VALUE_0: "no" },
+      "GIT_CONFIG_PARAMETERS": { GIT_CONFIG_PARAMETERS: "'status.showUntrackedFiles=no'" },
+      "GIT_CONFIG_GLOBAL": { GIT_CONFIG_GLOBAL: cfg },
+    }
+  }
+  it("an inherited config cannot hide an untracked file from the dirty read", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-cfg-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-cfg-side-"))
+    try {
+      initRepo(app)
+      writeFileSync(join(app, "untracked-only.txt"), "x\n")
+      for (const [name, vars] of Object.entries(cases(side))) {
+        const dirty = readGitDirtyState(app, { ...process.env, ...vars })
+        expect(dirty, name).toMatch(/\?\? untracked-only\.txt/)
+        expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty), name).toThrow(/dirty git tree/)
+      }
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
+  })
+  it("GIT_INDEX_FILE cannot make a clean tree look dirty or hide edits", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-idx-app-"))
+    const side = mkdtempSync(join(tmpdir(), "stamp-idx-side-"))
+    try {
+      initRepo(app)
+      const env = { ...process.env, GIT_INDEX_FILE: join(side, "other-index") }
+      expect(readGitDirtyState(app, env)).toBe("")
+      writeFileSync(join(app, "file.txt"), "changed\n")
+      expect(readGitDirtyState(app, env)).toMatch(/file\.txt/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+      rmSync(side, { recursive: true, force: true })
+    }
+  })
+  it("the build plugin on a dirty tree refuses with config env set, and passes env to both readers", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-plug-app-"))
+    try {
+      initRepo(app)
+      writeFileSync(join(app, "u.txt"), "x\n")
+      const env = {
+        ...process.env,
+        WALLET_UX_DEPLOY: "1",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "status.showUntrackedFiles",
+        GIT_CONFIG_VALUE_0: "no",
+      }
+      expect(() => walletBuildStampPlugin(app, readSourceCommit, readGitDirtyState, env).configResolved()).toThrow(/dirty git tree/)
+    } finally {
+      rmSync(app, { recursive: true, force: true })
+    }
+  })
+})
