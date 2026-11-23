@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto"
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { JSDOM } from "jsdom"
+import puppeteer from "puppeteer-core"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { readWalletRoute, taskHref } from "../src/routes.ts"
+import { APP_CSP, IMMUTABLE_CACHE_CONTROL, LANDING_CSP_HEADER } from "./guard-pages-headers.mjs"
+import { BUILD_COMMIT_META_NAME, readBuildCommitStamp } from "./build-stamp.mjs"
 import {
   LAWYER_SIGNUP_DISCLAIMER,
   applyTestersPageConfig,
@@ -84,6 +87,21 @@ function expectAbsoluteHttps(value) {
   expect(url.hostname).not.toBe("")
 }
 
+function chromePath() {
+  if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH
+  for (const candidate of [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/local/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+  throw new Error("Chrome is required for the CSP check. Set CHROME_PATH.")
+}
+
 function waitReady(proc) {
   return new Promise((resolve, reject) => {
     let log = ""
@@ -112,6 +130,7 @@ async function get(path) {
   return {
     status: response.status,
     location: response.headers.get("location"),
+    headers: response.headers,
     type: response.headers.get("content-type") ?? "",
     body,
     text: body.toString("utf8"),
@@ -154,7 +173,10 @@ describe("built site", () => {
     // This temp dir is a local test build, not a deploy build. A parent shell may
     // set CF_PAGES, WALLET_UX_DEPLOY, or GITHUB_WORKFLOW_REF (Cloudflare Pages,
     // the manual production signal, or the stale deploy workflow). Those signals
-    // refuse any WALLET_UX_OUT_DIR override.
+    // refuse any WALLET_UX_OUT_DIR override. A WALLET_UX_DEPLOY=1 build also
+    // refuses to stamp a dirty git tree. This test must not set that signal, so
+    // the dirty-tree guard stays strict for production and this suite can run
+    // in a dirty worktree without weakening it.
     delete buildEnv.CF_PAGES
     delete buildEnv.WALLET_UX_DEPLOY
     delete buildEnv.GITHUB_WORKFLOW_REF
@@ -559,4 +581,121 @@ describe("built site", () => {
     expect(policy[1]).toContain("default-src 'none'")
     expect(script).toContain('location.replace("/app/"+location.search+location.hash)')
   })
+
+  it("stamps the app index with the build commit, and nothing else carries it", async () => {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8" }).trim()
+    const app = await get("/app/")
+    expect(readBuildCommitStamp(app.text)).toBe(head)
+    expect(app.text.match(new RegExp(BUILD_COMMIT_META_NAME, "g"))).toHaveLength(1)
+    const root = await get("/")
+    expect(readBuildCommitStamp(root.text)).toBeNull()
+    const script = app.text.match(/src="(\/app\/assets\/[^"]+\.js)"/)
+    const css = app.text.match(/href="(\/app\/assets\/[^"]+\.css)"/)
+    for (const asset of [script[1], css[1]]) {
+      expect((await get(asset)).text, asset).not.toContain(head)
+    }
+  })
+
+  it("serves the pinned CSP, frame, and cache headers", async () => {
+    const root = await get("/")
+    expect(root.headers.get("content-security-policy")).toBe(LANDING_CSP_HEADER)
+    expect(root.headers.get("x-frame-options")).toBe("DENY")
+    for (const path of ["/app/", "/app/identity", "/app/fund"]) {
+      const page = await get(path)
+      expect(page.status, path).toBe(200)
+      expect(page.headers.get("content-security-policy"), path).toBe(APP_CSP)
+      expect(page.headers.get("x-frame-options"), path).toBe("DENY")
+      expect(page.headers.get("x-content-type-options"), path).toBe("nosniff")
+      expect(page.headers.get("referrer-policy"), path).toBe("strict-origin-when-cross-origin")
+    }
+    const app = await get("/app/")
+    for (const html of [root, app, await get("/app/identity"), await get("/legal/")]) {
+      expect(html.headers.get("cache-control")).not.toMatch(/immutable|max-age=[1-9]/)
+    }
+    const hashed = [...app.text.matchAll(/(?:src|href)="(\/app\/assets\/[^"]+\.(?:js|css))"/g)].map((match) => match[1])
+    expect(hashed).toHaveLength(2)
+    for (const asset of hashed) {
+      expect((await get(asset)).headers.get("cache-control"), asset).toBe(IMMUTABLE_CACHE_CONTROL)
+    }
+    const missing = await get("/app/assets/nope.js")
+    expect(missing.status).toBe(404)
+    expect(missing.headers.get("cache-control") ?? "").not.toMatch(/immutable/)
+    expect((await get("/app/assets/404")).headers.get("cache-control") ?? "").not.toMatch(/immutable/)
+    // Landing assets are not content-hashed, so they get no year-long cache.
+    expect((await get("/styles.css")).headers.get("cache-control") ?? "").not.toMatch(/immutable/)
+  })
+
+  // Real Chrome against the served build. The RPC host is answered locally and every other
+  // external host is refused, so this needs no network. A CSP that blocks something the app
+  // does shows up as a securitypolicyviolation event.
+  it("loads /, /app/ and /app/identity in Chrome with no CSP violation", async () => {
+    const browser = await puppeteer.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] })
+    try {
+      const violations = async (path, probe = false) => {
+        const page = await browser.newPage()
+        const rpcMethods = []
+        const refused = []
+        await page.setRequestInterception(true)
+        page.on("request", (request) => {
+          const url = new URL(request.url())
+          if (url.hostname === "127.0.0.1") return void request.continue()
+          if (url.hostname === "sepolia.base.org") {
+            const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*" }
+            if (request.method() === "OPTIONS") return void request.respond({ status: 204, headers: cors })
+            const body = JSON.parse(request.postData() ?? "{}")
+            const answer = (call) => {
+              rpcMethods.push(call.method)
+              return { jsonrpc: "2.0", id: call.id, result: call.method === "eth_chainId" ? "0x14a34" : "0x" }
+            }
+            return void request.respond({
+              status: 200,
+              headers: cors,
+              contentType: "application/json",
+              body: JSON.stringify(Array.isArray(body) ? body.map(answer) : answer(body)),
+            })
+          }
+          refused.push(request.url())
+          void request.abort()
+        })
+        await page.evaluateOnNewDocument(`window.__csp = []; document.addEventListener("securitypolicyviolation", (e) => window.__csp.push(e.violatedDirective + " " + e.blockedURI))`)
+        await page.goto(`${base}${path}`, { waitUntil: "load", timeout: 30_000 })
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        const found = await page.evaluate(() => window.__csp.slice())
+        let control
+        if (probe) {
+          control = await page.evaluate(async () => {
+            let fetchBlocked = false
+            try {
+              await fetch("https://example.com/")
+            } catch {
+              fetchBlocked = true
+            }
+            window.__ran = false
+            const script = document.createElement("script")
+            script.textContent = "window.__ran = true"
+            document.head.appendChild(script)
+            return { fetchBlocked, inlineRan: window.__ran }
+          })
+        }
+        await page.close()
+        return { found, rpcMethods, refused, control }
+      }
+
+      const landing = await violations("/")
+      expect(landing.found).toEqual([])
+      const app = await violations("/app/", true)
+      expect(app.found).toEqual([])
+      // The app reached the RPC host allowed by connect-src.
+      expect(app.rpcMethods).toContain("eth_chainId")
+      // Enforcement is real: an unlisted host and an inline script are both blocked.
+      expect(app.control).toEqual({ fetchBlocked: true, inlineRan: false })
+      const identity = await violations("/app/identity")
+      expect(identity.found).toEqual([])
+      expect(identity.rpcMethods).toContain("eth_chainId")
+      expect(landing.refused.concat(app.refused, identity.refused).filter((url) => !/example\.com/.test(url))).toEqual([])
+    } finally {
+      await browser.close()
+    }
+  }, 60_000)
 })
+

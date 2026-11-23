@@ -242,6 +242,8 @@ function GuidedFlow({
   )
 }
 
+export const INSTALL_WALLET_HINT = "Install a browser wallet if no injected wallet is available."
+
 export function App() {
   const account = useAccount()
   const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
@@ -389,7 +391,7 @@ export function App() {
         </div>
         {connectError ? (
           <p className="bad" role="alert">
-            {errorText(connectError)} Install MetaMask if no injected wallet is available.
+            {errorText(connectError)} {INSTALL_WALLET_HINT}
           </p>
         ) : null}
         <dl className="status-list">

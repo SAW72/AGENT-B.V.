@@ -212,7 +212,7 @@ describe("phase 1 wallet forms", () => {
     expect(readFileSync(join(src, "FlowPreview.tsx"), "utf8")).toContain('data-testid="relayer-submit"')
   })
 
-  it("shows the MetaMask hint only after about 5 seconds with no wallet response", async () => {
+  it("shows the wallet hint only after about 5 seconds with no wallet response", async () => {
     vi.useFakeTimers()
     sendTransactionAsync.mockImplementation(() => releaseSend.arm())
     renderSurfaces()

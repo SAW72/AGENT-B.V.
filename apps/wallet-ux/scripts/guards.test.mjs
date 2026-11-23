@@ -15,7 +15,18 @@ import {
   RETIRED_ESCROW_ESC_M1,
 } from "./guard-escrow-addresses.mjs"
 import { DOMAIN_NAME, FORBIDDEN_DASHES, scanDist, scanDistBuffer, scanSourceBuffer, scanSources } from "./guard-domain-dashes.mjs"
-import { PAGES_HEADERS_FILE, assertPagesHeaders } from "./guard-pages-headers.mjs"
+import {
+  APP_CSP,
+  IMMUTABLE_CACHE_CONTROL,
+  LANDING_CSP_HEADER,
+  PAGES_HEADERS_FILE,
+  assertPagesHeaders,
+  matchingRules,
+  parseCsp,
+  parsePagesHeaders,
+} from "./guard-pages-headers.mjs"
+import { PINNED_RELAYER_HOST, RPC_HOST_ALLOWLIST } from "./require-build-env.mjs"
+import { DEFAULT_RPC_URL } from "../src/read.ts"
 
 const HEADER = "x-claim-secret"
 const ENV_NAME = "VITE_CLAIM_API_SECRET"
@@ -229,9 +240,9 @@ describe("guard-claim-secret", () => {
 describe("verify-served-bundle", () => {
   const hash = "app-abc123"
 
-  function fixture({ servedHtml, javascript, extra }) {
+  function fixture({ servedHtml, javascript, extra, builtStamp, builtHtml }) {
     const directory = tempDir()
-    const built = `<script src="/assets/${hash}.js"></script><link href="/assets/${hash}.css">`
+    const built = builtHtml ?? `<script src="/assets/${hash}.js"></script><link href="/assets/${hash}.css">${builtStamp ? stampTag(builtStamp) : ""}`
     writeFileSync(join(directory, "built.html"), built)
     const served = servedHtml ?? built
     const files = new Map([
@@ -254,7 +265,12 @@ describe("verify-served-bundle", () => {
     expect(result.stderr).not.toContain("Unhandled")
   }
 
-  async function verify(setup) {
+  const stampTag = (commit) => `<meta name="agent-bv-build-commit" content="${commit}">`
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const pages = `<script src="/assets/${hash}.js"></script><link href="/assets/${hash}.css">`
+
+  async function verify(setup, env = {}) {
     const server = await listen((request, response) => {
       const entry = setup.files.get(request.url ?? "")
       if (entry === undefined) {
@@ -272,6 +288,7 @@ describe("verify-served-bundle", () => {
     const result = await runNodeAsync("scripts/verify-served-bundle.mjs", [], {
       DEPLOYMENT_URL: `http://127.0.0.1:${port}`,
       DIST_INDEX: join(setup.directory, "built.html"),
+      ...env,
     })
     server.closeAllConnections?.()
     await new Promise((resolve) => server.close(resolve))
@@ -283,6 +300,64 @@ describe("verify-served-bundle", () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain(`/assets/${hash}.js`)
     expect(result.stdout).toContain("retired escrow count 3")
+  })
+
+  it("passes when the served build commit stamp equals the built one", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }))
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain(`Served build commit: ${shaA}.`)
+  })
+
+  it("fails when the served build commit differs from the built one, even with the same asset hashes", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaB)}` }))
+    assertCleanExit(result)
+    expect(result.stderr).toContain(`served build commit ${shaB} does not match the built ${shaA}`)
+  })
+
+  it("fails when the local build has a stamp and the served page has none", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: pages }))
+    assertCleanExit(result)
+    expect(result.stderr).toContain("served build commit (none) does not match")
+  })
+
+  it("still verifies a build from before the stamp existed (rollback), and says there is none", async () => {
+    const result = await verify(fixture({}))
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("Served index.html has no build commit stamp.")
+  })
+
+  it("requires the served stamp to equal EXPECT_COMMIT when it is set", async () => {
+    const stamped = { builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }
+    const same = await verify(fixture(stamped), { EXPECT_COMMIT: shaA.toUpperCase() })
+    expect(same.status, same.stderr).toBe(0)
+    const other = await verify(fixture(stamped), { EXPECT_COMMIT: shaB })
+    assertCleanExit(other)
+    expect(other.stderr).toContain(`served build commit ${shaA} is not the expected ${shaB}`)
+    const none = await verify(fixture({}), { EXPECT_COMMIT: shaA })
+    assertCleanExit(none)
+    expect(none.stderr).toContain("served build commit (none) is not the expected")
+    const bad = await verify(fixture(stamped), { EXPECT_COMMIT: "cdb3232" })
+    assertCleanExit(bad)
+    expect(bad.stderr).toContain("EXPECT_COMMIT must be a 40-hex commit SHA")
+  })
+
+  it("rejects a malformed stamp on either page", async () => {
+    const result = await verify(fixture({ servedHtml: `${pages}${stampTag("not-a-sha")}` }))
+    assertCleanExit(result)
+    expect(result.stderr).toContain("is not a 40-hex commit SHA")
+  })
+
+  it("fails when the served or built page has more than one stamp tag, even if the first matches", async () => {
+    const one = stampTag(shaA)
+    const two = `${one}${stampTag(shaB)}`
+    const servedDup = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${two}` }))
+    assertCleanExit(servedDup)
+    expect(servedDup.stderr).toContain("served index")
+    expect(servedDup.stderr).toContain("appears 2 times; expected at most one")
+    const builtDup = await verify(fixture({ builtHtml: `${pages}${two}`, servedHtml: `${pages}${one}` }))
+    assertCleanExit(builtDup)
+    expect(builtDup.stderr).toContain("built index")
+    expect(builtDup.stderr).toContain("appears 2 times; expected at most one")
   })
 
   it("fails when served index.html references a different asset hash", async () => {
@@ -488,15 +563,81 @@ describe("deploy-wallet-ux workflow", () => {
 })
 
 describe("pages security headers", () => {
-  it("keeps landing/_headers byte-for-byte, with no Content-Security-Policy", () => {
+  const rules = parsePagesHeaders(PAGES_HEADERS_FILE)
+  const valuesFor = (path, name) =>
+    matchingRules(rules, path)
+      .flatMap((rule) => rule.set.filter(([header]) => header === name).map(([, value]) => value))
+
+  it("keeps landing/_headers byte-for-byte as the pinned file", () => {
     const file = readFileSync(new URL("../landing/_headers", import.meta.url), "utf8")
     expect(file).toBe(PAGES_HEADERS_FILE)
     expect(file).toContain("X-Content-Type-Options: nosniff")
     expect(file).toContain("Referrer-Policy: strict-origin-when-cross-origin")
-    expect(file.toLowerCase()).not.toContain("content-security-policy")
     expect(() => assertPagesHeaders()).not.toThrow()
     const cli = runNode("scripts/guard-pages-headers.mjs", [])
     expect(cli.status).toBe(0)
     expect(cli.stdout).toContain("Pages headers unchanged")
+  })
+
+  it("sends a CSP with frame-ancestors none and X-Frame-Options DENY on /, /app/ and every /app route", () => {
+    for (const path of ["/", "/app/", "/app/identity", "/app/fund", "/app/assets/index-abc.js"]) {
+      expect(valuesFor(path, "x-frame-options"), path).toEqual(["DENY"])
+      const csp = valuesFor(path, "content-security-policy")
+      expect(csp, path).toHaveLength(1)
+      expect(parseCsp(csp[0])["frame-ancestors"], path).toEqual(["'none'"])
+    }
+    expect(valuesFor("/", "content-security-policy")).toEqual([LANDING_CSP_HEADER])
+    expect(valuesFor("/app/", "content-security-policy")).toEqual([APP_CSP])
+    expect(valuesFor("/app/identity", "content-security-policy")).toEqual([APP_CSP])
+  })
+
+  it("keeps the app CSP strict and limited to the hosts the app calls", () => {
+    const csp = parseCsp(APP_CSP)
+    expect(APP_CSP).not.toMatch(/unsafe-inline|unsafe-eval|unsafe-hashes|wasm-unsafe-eval/)
+    expect(APP_CSP).not.toMatch(/\*|https?:\/\/\*|\bdata:|\bblob:/)
+    expect(csp["default-src"]).toEqual(["'none'"])
+    expect(csp["script-src"]).toEqual(["'self'"])
+    expect(csp["style-src"]).toEqual(["'self'"])
+    expect(csp["object-src"]).toEqual(["'none'"])
+    expect(csp["base-uri"]).toEqual(["'none'"])
+    expect(csp["form-action"]).toEqual(["'none'"])
+    // connect-src is exactly the RPC the app reads and the relayer edge Worker it pins. A change to
+    // either constant must change this CSP in the same commit.
+    const rpcHost = new URL(DEFAULT_RPC_URL).hostname
+    expect(RPC_HOST_ALLOWLIST).toEqual([rpcHost])
+    expect([...csp["connect-src"]].sort()).toEqual([`https://${rpcHost}`, `https://${PINNED_RELAYER_HOST}`].sort())
+    // No wallet-provider or WalletConnect host: wagmi uses injected() only.
+    const wagmi = readFileSync(new URL("../src/wagmi.ts", import.meta.url), "utf8")
+    expect(wagmi).toContain("connectors: [injected()]")
+  })
+
+  it("sets Cache-Control only on the hashed /app/assets files and never on HTML", () => {
+    expect(valuesFor("/app/assets/index-abc123.js", "cache-control")).toEqual([IMMUTABLE_CACHE_CONTROL])
+    expect(valuesFor("/app/assets/index-abc123.css", "cache-control")).toEqual([IMMUTABLE_CACHE_CONTROL])
+    for (const html of ["/", "/index.html", "/app/", "/app/index.html", "/app/identity", "/app/fund", "/legal/", "/testers/"]) {
+      expect(valuesFor(html, "cache-control"), html).toEqual([])
+    }
+    // The shared 404 page is not content-hashed, so it detaches the header.
+    for (const path of ["/app/assets/404.html", "/app/assets/404"]) {
+      const detached = matchingRules(rules, path).flatMap((rule) => rule.detach)
+      expect(detached, path).toContain("cache-control")
+    }
+    // Only one rule sets Cache-Control, so Pages cannot join two values into one header.
+    const setters = rules.filter((rule) => rule.set.some(([name]) => name === "cache-control"))
+    expect(setters.map((rule) => rule.pattern)).toEqual(["/app/assets/*"])
+    // /* carries only the two headers no other rule sets.
+    expect(rules[0].pattern).toBe("/*")
+    expect(rules[0].set.map(([name]) => name)).toEqual(["x-content-type-options", "referrer-policy"])
+  })
+
+  it("rejects a changed headers file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pages-headers-"))
+    try {
+      mkdirSync(join(dir, "landing"))
+      writeFileSync(join(dir, "landing", "_headers"), PAGES_HEADERS_FILE.replace("DENY", "SAMEORIGIN"))
+      expect(() => assertPagesHeaders(dir)).toThrow("landing/_headers content changed")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

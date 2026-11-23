@@ -42,7 +42,7 @@ The connected header at 320px measures 48px tall, on two rows: the Agent-BV name
 | `after-*-vote-review` | `/app/vote?dispute=…&step=2` lands on step 1, id filled, nothing prepared |
 | `after-*-withdraw-input` | Withdraw input, live credit read |
 | `after-*-withdraw-review` | `/app/withdraw?step=2` lands on step 1, nothing prepared |
-| `after-*-fund-waiting` | Confirm in MetaMask, with the popup hint |
+| `after-*-fund-waiting` | Confirm in your wallet, with the popup hint |
 | `after-*-fund-cancelled` | Cancelled in the fixture wallet (4001) |
 | `after-*-fund-pending` | Waiting for Base Sepolia |
 | `after-*-pending-strip` | Pending transactions strip, including Copy on the escrow id |
