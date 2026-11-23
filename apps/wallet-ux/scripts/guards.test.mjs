@@ -302,10 +302,45 @@ describe("verify-served-bundle", () => {
     expect(result.stdout).toContain("retired escrow count 3")
   })
 
-  it("passes when the served build commit stamp equals the built one", async () => {
-    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }))
+  it("passes when the served build commit stamp equals the built one and EXPECT_COMMIT", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }), {
+      EXPECT_COMMIT: shaA,
+    })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain(`Served build commit: ${shaA}.`)
+  })
+
+  it("covers the stamp / EXPECT_COMMIT / ALLOW_UNPINNED_ROLLBACK matrix", async () => {
+    const stamped = { builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }
+    const unstamped = {}
+    const mismatch = { builtStamp: shaA, servedHtml: `${pages}${stampTag(shaB)}` }
+    const servedOnly = { servedHtml: `${pages}${stampTag(shaA)}` } // built has no stamp
+    const rows = [
+      { name: "unstamped, EXPECT unset, no flag: pre-stamp rollback passes", setup: unstamped, env: {}, ok: true, stdout: "has no build commit stamp" },
+      { name: "unstamped, EXPECT unset, flag=1: flag is a no-op, still passes", setup: unstamped, env: { ALLOW_UNPINNED_ROLLBACK: "1" }, ok: true, stdout: "has no build commit stamp" },
+      { name: "unstamped, EXPECT set: fails, flag does not override", setup: unstamped, env: { EXPECT_COMMIT: shaA }, ok: false, stderr: "served build commit (none) is not the expected" },
+      { name: "unstamped, EXPECT set, flag=1: still fails", setup: unstamped, env: { EXPECT_COMMIT: shaA, ALLOW_UNPINNED_ROLLBACK: "1" }, ok: false, stderr: "served build commit (none) is not the expected" },
+      { name: "stamped match, EXPECT set: new deploy passes", setup: stamped, env: { EXPECT_COMMIT: shaA }, ok: true, stdout: `Served build commit: ${shaA}.` },
+      { name: "stamped match, EXPECT unset, no flag: fails closed", setup: stamped, env: {}, ok: false, stderr: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+      { name: "stamped match, EXPECT unset, flag=1: documented unpinned rollback", setup: stamped, env: { ALLOW_UNPINNED_ROLLBACK: "1" }, ok: true, stdout: `Served build commit: ${shaA}.` },
+      { name: "stamped match, EXPECT unset, flag=true: only exact 1 is accepted", setup: stamped, env: { ALLOW_UNPINNED_ROLLBACK: "true" }, ok: false, stderr: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+      { name: "stamped match, wrong EXPECT: fails, flag does not override", setup: stamped, env: { EXPECT_COMMIT: shaB, ALLOW_UNPINNED_ROLLBACK: "1" }, ok: false, stderr: `served build commit ${shaA} is not the expected ${shaB}` },
+      { name: "stamped mismatch, EXPECT unset: built/served mismatch first", setup: mismatch, env: {}, ok: false, stderr: `served build commit ${shaB} does not match the built ${shaA}` },
+      { name: "stamped mismatch, flag=1: still a mismatch", setup: mismatch, env: { ALLOW_UNPINNED_ROLLBACK: "1" }, ok: false, stderr: `served build commit ${shaB} does not match the built ${shaA}` },
+      { name: "served stamp, unstamped built, EXPECT unset: fails", setup: servedOnly, env: {}, ok: false, stderr: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+      { name: "served stamp, unstamped built, EXPECT=served: built may be unstamped, served pinned", setup: servedOnly, env: { EXPECT_COMMIT: shaA }, ok: true, stdout: `Served build commit: ${shaA}.` },
+      { name: "built stamp, unstamped served: mismatch, not a rollback", setup: { builtStamp: shaA, servedHtml: pages }, env: {}, ok: false, stderr: "served build commit (none) does not match" },
+    ]
+    for (const row of rows) {
+      const result = await verify(fixture(row.setup), row.env)
+      if (row.ok) {
+        expect(result.status, `${row.name}\n${result.stderr}`).toBe(0)
+        expect(result.stdout, row.name).toContain(row.stdout)
+      } else {
+        assertCleanExit(result)
+        expect(result.stderr, row.name).toContain(row.stderr)
+      }
+    }
   })
 
   it("fails when the served build commit differs from the built one, even with the same asset hashes", async () => {

@@ -369,15 +369,32 @@ export function assertWalletAppDir(root) {
   }
 }
 
-export function readSourceCommit(cwd) {
+// Child env for git. Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+// GIT_COMMON_DIR, and every other GIT_* variable are dropped so a dummy repo
+// in the environment cannot redirect the commit or dirty-tree read. PATH and
+// the rest of the environment are kept. Callers also pass `git -C <cwd>`.
+export function gitChildEnv(env = process.env) {
+  const child = { ...env }
+  for (const key of Object.keys(child)) {
+    if (key.startsWith("GIT_")) delete child[key]
+  }
+  return child
+}
+
+export function runGitInRepo(cwd, args, env = process.env) {
+  if (!cwd) throw new Error("runGitInRepo requires a working directory.")
+  return execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: gitChildEnv(env),
+  })
+}
+
+export function readSourceCommit(cwd, env = process.env) {
   if (!cwd) throw new OutDirError("readSourceCommit requires a working directory.")
   let sha
   try {
-    sha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim()
+    sha = runGitInRepo(cwd, ["rev-parse", "HEAD"], env).trim()
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new OutDirError(`git rev-parse HEAD failed (${detail}).`)
