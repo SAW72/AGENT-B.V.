@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process"
-import { readSourceCommit } from "./out-dir.mjs"
+import { readSourceCommit, runGitInRepo } from "./out-dir.mjs"
 
 // Build commit stamp. The production build writes the git commit it was built
 // from into dist/app/index.html as one <meta> tag, so a served page can say
@@ -12,10 +11,6 @@ import { readSourceCommit } from "./out-dir.mjs"
 // the stamp, so their filenames and bytes do not depend on the commit.
 export const BUILD_COMMIT_META_NAME = "agent-bv-build-commit"
 export const BUILD_COMMIT_PATTERN = /^[0-9a-f]{40}$/
-const BUILD_COMMIT_TAG = new RegExp(
-  `<meta\\s+name="${BUILD_COMMIT_META_NAME}"\\s+content="([^"]*)"\\s*/?>`,
-  "g",
-)
 
 export function buildCommitMetaTag(commit) {
   if (typeof commit !== "string" || !BUILD_COMMIT_PATTERN.test(commit)) {
@@ -24,12 +19,37 @@ export function buildCommitMetaTag(commit) {
   return `<meta name="${BUILD_COMMIT_META_NAME}" content="${commit}">`
 }
 
+// Comments, <script>, and <template> can mention the tag without being a stamp.
+function stripIgnoredHtml(html) {
+  return String(html)
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, "")
+}
+
+function attributeMap(raw) {
+  const attrs = {}
+  const attr = /([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+  for (const match of String(raw).matchAll(attr)) {
+    attrs[match[1].toLowerCase()] = match[2] ?? match[3]
+  }
+  return attrs
+}
+
 export function listBuildCommitStamps(html) {
-  return [...String(html).matchAll(BUILD_COMMIT_TAG)].map((match) => match[1])
+  const visible = stripIgnoredHtml(html)
+  const stamps = []
+  for (const match of visible.matchAll(/<meta\b([^>]*?)\/?>/gi)) {
+    const attrs = attributeMap(match[1])
+    if (attrs.name === BUILD_COMMIT_META_NAME) stamps.push(attrs.content ?? "")
+  }
+  return stamps
 }
 
 // The stamp in an HTML page, or null when the page has none (a build from before
-// this stamp existed, or the landing page). More than one tag is an error.
+// this stamp existed, or the landing page). More than one real tag is an error.
+// Attribute order, single or double quotes, extra attributes, and spaces around
+// `=` are accepted. Tags inside comments, <script>, or <template> are ignored.
 export function readBuildCommitStamp(html) {
   const found = listBuildCommitStamps(html)
   if (found.length > 1) {
@@ -43,16 +63,46 @@ export function readBuildCommitStamp(html) {
   return commit
 }
 
+
+// Rules for verify-served-bundle.mjs. Stamps are already parsed (null, a SHA, or
+// thrown on more than one / malformed). expectCommit is the raw EXPECT_COMMIT
+// string (may be empty). allowUnpinnedRollback is true only for exact "1".
+export function evaluateServedStamp({ builtStamp, servedStamp, expectCommit, allowUnpinnedRollback }) {
+  const expected = String(expectCommit ?? "").trim().toLowerCase()
+  const allowUnpinned = allowUnpinnedRollback === true
+  if (expected && !BUILD_COMMIT_PATTERN.test(expected)) {
+    return { ok: false, message: "EXPECT_COMMIT must be a 40-hex commit SHA." }
+  }
+  if (builtStamp !== null && servedStamp !== builtStamp) {
+    return {
+      ok: false,
+      message: `served build commit ${servedStamp ?? "(none)"} does not match the built ${builtStamp}.`,
+    }
+  }
+  if (expected && servedStamp !== expected) {
+    return {
+      ok: false,
+      message: `served build commit ${servedStamp ?? "(none)"} is not the expected ${expected}.`,
+    }
+  }
+  if (!expected && (builtStamp !== null || servedStamp !== null) && !allowUnpinned) {
+    return {
+      ok: false,
+      message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1.",
+    }
+  }
+  return { ok: true }
+}
+
 // Porcelain output of `git status` at cwd, or throws. An empty string is clean.
-export function readGitDirtyState(cwd) {
+// Untracked files are included (no -uno). git is run with inherited GIT_* vars
+// dropped and `git -C <cwd>`, so a dummy GIT_DIR/GIT_WORK_TREE cannot hide dirt
+// or retarget the commit.
+export function readGitDirtyState(cwd, env = process.env) {
   if (!cwd) throw new Error("readGitDirtyState requires a working directory.")
   let text
   try {
-    text = execFileSync("git", ["status", "--porcelain"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    })
+    text = runGitInRepo(cwd, ["status", "--porcelain"], env)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`git status --porcelain failed (${detail}).`)
@@ -87,8 +137,8 @@ export function walletBuildStampPlugin(
     name: "wallet-ux-build-stamp",
     apply: "build",
     configResolved() {
-      assertDeployStampAllowed(env, readDirty(appRoot))
-      commit = readCommit(appRoot)
+      assertDeployStampAllowed(env, readDirty(appRoot, env))
+      commit = readCommit(appRoot, env)
     },
     transformIndexHtml() {
       buildCommitMetaTag(commit) // validates the SHA before it is written

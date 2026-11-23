@@ -2,7 +2,7 @@
 
 Gate A status for the Agent-BV contracts on **Base Sepolia (chain id 84532)**. The display name lives in `src/brand.ts`.
 
-This app connects an injected wallet (MetaMask), checks the wallet chain, and reads the live contracts through a Base Sepolia RPC. Claim and dispute forms build calldata, then the connected wallet can submit that calldata when it is on Base Sepolia. Ethereum mainnet (chain id 1) and Base mainnet (chain id 8453) are refused. There is no mainnet config.
+This app connects an injected browser wallet, checks the wallet chain, and reads the live contracts through a Base Sepolia RPC. Claim and dispute forms build calldata, then the connected wallet can submit that calldata when it is on Base Sepolia. Ethereum mainnet (chain id 1) and Base mainnet (chain id 8453) are refused. There is no mainnet config.
 
 ## Run locally
 
@@ -37,7 +37,7 @@ Reads use the public endpoint `https://sepolia.base.org` unless you set `VITE_BA
 
 ## What you should see
 
-1. Connect MetaMask and switch the wallet to Base Sepolia.
+1. Connect a browser wallet and switch it to Base Sepolia.
 2. Denylist and Vault: `owner()` is the governance timelock from the address book (`governanceTimelock`, `0xa1abD23Ae5A3aaAfda29345Df64F9Aa45ac6ca33`), `pendingOwner()` is none, and Vault `denylist()` is the pinned Denylist `0xeE76876bECcFc1B58fC06fF4E654a517d784B224`.
 3. DisputePanel: Gate B is seated when `arbitratorCount` is at least `PANEL_SIZE` (3). Below that, the page says **panel not seated / Gate B not seated**.
 4. BotAttestationEscrow shows the book address and read-only owner, pending owner, governance, funding gate, and linked `disputePanel()`. Lookup by escrow id is a view call. Create, release, refund, openDispute, and dispute build calldata. **Submit on Base Sepolia** sends that calldata with the connected wallet (`chainId` 84532). With no wallet, or on any other chain, the control stays disabled and is labeled with the refusal. `createEscrow` still succeeds only when that wallet is the payer's Vault operator. If `VITE_CLAIM_RELAYER_URL` is set, and the relayer health check is up, refund can also be signed by the connected wallet and posted live (`POST /v1/claims`). The wallet signs an approval for that claim. The relayer builds the calldata. No shared secret is sent. Release stays on the payer's own wallet. Only the payer can release an open escrow; after an upheld dispute, the payer or the payee. Opening a dispute reads the subject from the escrow and fills the time the claim was created from that claim. That time is not typed. Create, dispute, and `openDispute` stay on the connected wallet. Unset `VITE_CLAIM_RELAYER_URL` keeps submits wallet-direct. BVT stays **not deployed on Sepolia yet**.

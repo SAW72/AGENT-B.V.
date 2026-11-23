@@ -302,10 +302,27 @@ describe("verify-served-bundle", () => {
     expect(result.stdout).toContain("retired escrow count 3")
   })
 
-  it("passes when the served build commit stamp equals the built one", async () => {
-    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }))
+  it("passes when the served build commit stamp equals the built one and EXPECT_COMMIT", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }), {
+      EXPECT_COMMIT: shaA,
+    })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain(`Served build commit: ${shaA}.`)
+  })
+
+  it("fails closed when a matching stamp is present and EXPECT_COMMIT is unset", async () => {
+    const result = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }))
+    assertCleanExit(result)
+    expect(result.stderr).toContain("a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1")
+    const flagged = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }), {
+      ALLOW_UNPINNED_ROLLBACK: "1",
+    })
+    expect(flagged.status, flagged.stderr).toBe(0)
+    const notOne = await verify(fixture({ builtStamp: shaA, servedHtml: `${pages}${stampTag(shaA)}` }), {
+      ALLOW_UNPINNED_ROLLBACK: "true",
+    })
+    assertCleanExit(notOne)
+    expect(notOne.stderr).toContain("a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1")
   })
 
   it("fails when the served build commit differs from the built one, even with the same asset hashes", async () => {

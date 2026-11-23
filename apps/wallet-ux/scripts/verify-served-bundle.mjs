@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BUILD_COMMIT_PATTERN, readBuildCommitStamp } from "./build-stamp.mjs"
+import { evaluateServedStamp, readBuildCommitStamp } from "./build-stamp.mjs"
 
 class VerifyExit extends Error {
   constructor(status = 1) {
@@ -117,22 +117,26 @@ if (expectedAssets.length === 0 || expectedAssets.join("\n") !== servedAssets.jo
 }
 console.log(`Served index.html references the built asset hashes: ${servedAssets.join(", ")}.`)
 
-// Build commit stamp (F3). A page built before the stamp existed has none, and a
-// rollback to such a build still verifies against a local build of that commit.
-// When the local build has a stamp, the served page must carry the same one. When
-// EXPECT_COMMIT is set (the deploy record's commit), the served stamp must equal it.
+// Build commit stamp (F3).
+// - More than one real tag always fails.
+// - An unstamped page (and unstamped local index) passes only when
+//   EXPECT_COMMIT is unset: that is the rollback to a pre-stamp build
+//   (currently 2c57aa1d). ALLOW_UNPINNED_ROLLBACK does not override this.
+// - A stamped page (served or built) requires EXPECT_COMMIT, which must equal
+//   the served stamp. Leaving EXPECT_COMMIT unset on a stamped page fails,
+//   unless the operator sets ALLOW_UNPINNED_ROLLBACK=1 (exact "1" only). That
+//   flag is a documented exception for verifying a stamped rollback target
+//   without pinning a SHA. It does not waive a stamp mismatch or a wrong
+//   EXPECT_COMMIT, and it is not used on a new deploy.
 const builtStamp = stampOf(builtHtml, "built index")
 const servedStamp = stampOf(html, "served index")
-const expectCommit = (process.env.EXPECT_COMMIT ?? "").trim().toLowerCase()
-if (expectCommit && !BUILD_COMMIT_PATTERN.test(expectCommit)) {
-  fail("Verify failed: EXPECT_COMMIT must be a 40-hex commit SHA.")
-}
-if (builtStamp !== null && servedStamp !== builtStamp) {
-  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} does not match the built ${builtStamp}.`)
-}
-if (expectCommit && servedStamp !== expectCommit) {
-  fail(`Verify failed: served build commit ${servedStamp ?? "(none)"} is not the expected ${expectCommit}.`)
-}
+const decision = evaluateServedStamp({
+  builtStamp,
+  servedStamp,
+  expectCommit: process.env.EXPECT_COMMIT,
+  allowUnpinnedRollback: (process.env.ALLOW_UNPINNED_ROLLBACK ?? "").trim() === "1",
+})
+if (!decision.ok) fail(`Verify failed: ${decision.message}`)
 console.log(servedStamp === null ? "Served index.html has no build commit stamp." : `Served build commit: ${servedStamp}.`)
 const pending = servedAssets.filter((assetPath) => assetPath.endsWith(".js"))
 if (pending.length === 0) {

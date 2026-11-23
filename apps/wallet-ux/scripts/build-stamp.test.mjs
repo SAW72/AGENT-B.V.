@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { readSourceCommit } from "./out-dir.mjs"
 import {
   BUILD_COMMIT_META_NAME,
   assertDeployStampAllowed,
   buildCommitMetaTag,
+  evaluateServedStamp,
   listBuildCommitStamps,
   readBuildCommitStamp,
   readGitDirtyState,
@@ -20,6 +22,17 @@ function stamped(commit) {
   const plugin = walletBuildStampPlugin("/app-root", () => commit, () => "", {})
   plugin.configResolved()
   return plugin.transformIndexHtml()
+}
+
+function initRepo(root, message = "init") {
+  const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" })
+  git(["-c", "init.defaultBranch=main", "init", "-q"])
+  git(["config", "user.email", "stamp@test"])
+  git(["config", "user.name", "stamp"])
+  writeFileSync(join(root, "file.txt"), "ok\n")
+  git(["add", "file.txt"])
+  git(["-c", "commit.gpgsign=false", "commit", "-m", message])
+  return git
 }
 
 describe("build commit stamp", () => {
@@ -37,12 +50,59 @@ describe("build commit stamp", () => {
     expect(() => readBuildCommitStamp('<meta name="agent-bv-build-commit" content="nope">')).toThrow("40-hex")
   })
 
-  it("refuses more than one stamp tag, even when the first is a valid SHA", () => {
+  it("parses official and odd stamp forms, and ignores comment/script/template tags", () => {
+    const official = `<meta name="agent-bv-build-commit" content="${shaA}">`
+    const cases = [
+      { html: official, stamp: shaA, name: "official name-then-content, double quotes" },
+      { html: `<meta content="${shaA}" name="agent-bv-build-commit">`, stamp: shaA, name: "reversed attributes" },
+      { html: `<meta name='agent-bv-build-commit' content='${shaA}'>`, stamp: shaA, name: "single quotes" },
+      { html: `<meta content='${shaA}' name="agent-bv-build-commit">`, stamp: shaA, name: "mixed quotes, reversed" },
+      {
+        html: `<meta  data-x="1" name = "${shaA ? "agent-bv-build-commit" : ""}"  content = "${shaA}" charset="utf-8" />`,
+        stamp: shaA,
+        name: "extra attributes and spaces around =",
+      },
+      { html: `<META NAME="agent-bv-build-commit" CONTENT="${shaA}">`, stamp: shaA, name: "uppercase tag and attrs" },
+      { html: `<!-- <meta name="agent-bv-build-commit" content="${shaA}"> -->`, stamp: null, name: "only a comment" },
+      { html: `<script><meta name="agent-bv-build-commit" content="${shaA}"></script>`, stamp: null, name: "only in script" },
+      {
+        html: `<template><meta name="agent-bv-build-commit" content="${shaA}"></template>`,
+        stamp: null,
+        name: "only in template",
+      },
+      {
+        html: `<!-- <meta name="agent-bv-build-commit" content="${shaB}"> -->${official}`,
+        stamp: shaA,
+        name: "real tag plus a commented tag",
+      },
+      {
+        html: `<script>const x = '<meta name="agent-bv-build-commit" content="${shaB}">'</script>${official}`,
+        stamp: shaA,
+        name: "real tag plus a script string",
+      },
+      {
+        html: `<template><meta name="agent-bv-build-commit" content="${shaB}"></template>${official}`,
+        stamp: shaA,
+        name: "real tag plus a template tag",
+      },
+    ]
+    for (const row of cases) {
+      expect(readBuildCommitStamp(`<head>${row.html}</head>`), row.name).toBe(row.stamp)
+    }
+  })
+
+  it("refuses more than one real stamp tag, even when the first is a valid SHA or the second is hidden in a comment it would have counted before", () => {
     const two = `<head>${buildCommitMetaTag(shaA)}${buildCommitMetaTag(shaB)}</head>`
     const twice = `<head>${buildCommitMetaTag(shaA)}${buildCommitMetaTag(shaA)}</head>`
+    const reversed = `<head><meta content="${shaA}" name="agent-bv-build-commit"><meta name='agent-bv-build-commit' content='${shaB}'></head>`
     expect(listBuildCommitStamps(two)).toEqual([shaA, shaB])
     expect(() => readBuildCommitStamp(two)).toThrow("appears 2 times; expected at most one")
     expect(() => readBuildCommitStamp(twice)).toThrow("appears 2 times; expected at most one")
+    expect(() => readBuildCommitStamp(reversed)).toThrow("appears 2 times; expected at most one")
+    // A commented second tag is not a real stamp, so the page still has exactly one.
+    expect(
+      readBuildCommitStamp(`<head>${buildCommitMetaTag(shaA)}<!-- ${buildCommitMetaTag(shaB)} --></head>`),
+    ).toBe(shaA)
   })
 
   it("is a pure function of the commit: same commit, same tag. Another commit changes only the SHA", () => {
@@ -83,7 +143,6 @@ describe("deploy stamp dirty-tree guard", () => {
     expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty)).toThrow("?? scratch.txt")
     expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, "")).not.toThrow()
     expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, "\n")).not.toThrow()
-    // Not a production deploy: dirty is allowed (test builds, local builds).
     expect(() => assertDeployStampAllowed({}, dirty)).not.toThrow()
     expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "true" }, dirty)).not.toThrow()
     expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "0" }, dirty)).not.toThrow()
@@ -100,22 +159,120 @@ describe("deploy stamp dirty-tree guard", () => {
     expect(cleanDeploy.transformIndexHtml()[0].attrs.content).toBe(shaA)
   })
 
-  it("reads git status --porcelain from a real repo (unit, no production build)", () => {
+  it("reads git status --porcelain from a real repo, including untracked files, and fails closed without git", () => {
     const root = mkdtempSync(join(tmpdir(), "stamp-git-"))
+    const missing = mkdtempSync(join(tmpdir(), "stamp-nogit-"))
     try {
-      const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" })
-      git(["-c","init.defaultBranch=main","init","-q"])
-      git(["config", "user.email", "stamp@test"])
-      git(["config", "user.name", "stamp"])
-      writeFileSync(join(root, "file.txt"), "ok\n")
-      git(["add", "file.txt"])
-      git(["-c","commit.gpgsign=false","commit","-m","init"])
+      initRepo(root)
       expect(readGitDirtyState(root)).toBe("")
       writeFileSync(join(root, "file.txt"), "dirty\n")
       expect(readGitDirtyState(root)).toMatch(/file\.txt/)
       expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, readGitDirtyState(root))).toThrow("file.txt")
+      writeFileSync(join(root, "untracked.txt"), "new\n")
+      const withUntracked = readGitDirtyState(root)
+      expect(withUntracked).toMatch(/\?\? untracked\.txt/)
+      expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, withUntracked)).toThrow("untracked.txt")
+
+      // Only untracked dirt, no tracked changes.
+      const clean = mkdtempSync(join(tmpdir(), "stamp-untracked-"))
+      try {
+        initRepo(clean)
+        writeFileSync(join(clean, "only-untracked.txt"), "x\n")
+        const porcelain = readGitDirtyState(clean)
+        expect(porcelain).toMatch(/\?\? only-untracked\.txt/)
+        expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, porcelain)).toThrow("only-untracked.txt")
+      } finally {
+        rmSync(clean, { recursive: true, force: true })
+      }
+
+      expect(() => readGitDirtyState(missing)).toThrow(/git status --porcelain failed/)
     } finally {
       rmSync(root, { recursive: true, force: true })
+      rmSync(missing, { recursive: true, force: true })
     }
+  })
+
+  it("ignores inherited GIT_DIR and GIT_WORK_TREE, so a clean dummy repo cannot hide a dirty tree or retarget the SHA", () => {
+    const app = mkdtempSync(join(tmpdir(), "stamp-app-"))
+    const dummy = mkdtempSync(join(tmpdir(), "stamp-dummy-"))
+    const previous = {
+      GIT_DIR: process.env.GIT_DIR,
+      GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+      GIT_COMMON_DIR: process.env.GIT_COMMON_DIR,
+      GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+    }
+    try {
+      const appGit = initRepo(app, "app")
+      initRepo(dummy, "dummy")
+      const appSha = appGit(["rev-parse", "HEAD"]).trim()
+      const dummySha = execFileSync("git", ["-C", dummy, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+      expect(appSha).not.toBe(dummySha)
+      writeFileSync(join(app, "file.txt"), "dirty-app\n")
+      writeFileSync(join(app, "extra.txt"), "untracked\n")
+
+      const dummyGitDir = execFileSync("git", ["-C", dummy, "rev-parse", "--absolute-git-dir"], {
+        encoding: "utf8",
+      }).trim()
+      const env = {
+        ...process.env,
+        GIT_DIR: dummyGitDir,
+        GIT_WORK_TREE: dummy,
+        GIT_COMMON_DIR: dummyGitDir,
+      }
+      process.env.GIT_DIR = dummyGitDir
+      process.env.GIT_WORK_TREE = dummy
+      process.env.GIT_COMMON_DIR = dummyGitDir
+
+      // Unsanitized git would report the dummy as clean and return dummySha.
+      const dirty = readGitDirtyState(app, env)
+      expect(dirty).toMatch(/file\.txt/)
+      expect(dirty).toMatch(/\?\? extra\.txt/)
+      expect(() => assertDeployStampAllowed({ WALLET_UX_DEPLOY: "1" }, dirty)).toThrow(/dirty git tree/)
+      expect(readSourceCommit(app, env)).toBe(appSha)
+      expect(readSourceCommit(app, env)).not.toBe(dummySha)
+
+      const plugin = walletBuildStampPlugin(app, readSourceCommit, readGitDirtyState, {
+        ...env,
+        WALLET_UX_DEPLOY: "1",
+      })
+      expect(() => plugin.configResolved()).toThrow(/dirty git tree/)
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(app, { recursive: true, force: true })
+      rmSync(dummy, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("evaluateServedStamp matrix", () => {
+  const rows = [
+    { name: "unstamped, EXPECT unset, no flag: pre-stamp rollback passes", built: null, served: null, expect: "", flag: false, ok: true },
+    { name: "unstamped, EXPECT unset, flag: flag is a no-op, still passes", built: null, served: null, expect: "", flag: true, ok: true },
+    { name: "unstamped, EXPECT set: fails, flag does not override", built: null, served: null, expect: shaA, flag: false, ok: false, message: "served build commit (none) is not the expected" },
+    { name: "unstamped, EXPECT set, flag: still fails", built: null, served: null, expect: shaA, flag: true, ok: false, message: "served build commit (none) is not the expected" },
+    { name: "stamped match, EXPECT set: new deploy passes", built: shaA, served: shaA, expect: shaA, flag: false, ok: true },
+    { name: "stamped match, uppercase EXPECT: still passes", built: shaA, served: shaA, expect: shaA.toUpperCase(), flag: false, ok: true },
+    { name: "stamped match, EXPECT unset, no flag: fails closed", built: shaA, served: shaA, expect: "", flag: false, ok: false, message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+    { name: "stamped match, EXPECT unset, flag: documented unpinned rollback", built: shaA, served: shaA, expect: "", flag: true, ok: true },
+    { name: "stamped match, wrong EXPECT, flag: still fails", built: shaA, served: shaA, expect: shaB, flag: true, ok: false, message: `served build commit ${shaA} is not the expected ${shaB}` },
+    { name: "stamped mismatch, EXPECT unset: built/served first", built: shaA, served: shaB, expect: "", flag: false, ok: false, message: `served build commit ${shaB} does not match the built ${shaA}` },
+    { name: "stamped mismatch, flag: still a mismatch", built: shaA, served: shaB, expect: "", flag: true, ok: false, message: `served build commit ${shaB} does not match the built ${shaA}` },
+    { name: "served stamp, unstamped built, EXPECT unset: fails", built: null, served: shaA, expect: "", flag: false, ok: false, message: "a stamped page requires EXPECT_COMMIT unless ALLOW_UNPINNED_ROLLBACK=1" },
+    { name: "served stamp, unstamped built, EXPECT=served: passes", built: null, served: shaA, expect: shaA, flag: false, ok: true },
+    { name: "built stamp, unstamped served: mismatch", built: shaA, served: null, expect: "", flag: false, ok: false, message: "served build commit (none) does not match" },
+    { name: "short EXPECT_COMMIT: fails closed", built: shaA, served: shaA, expect: "cdb3232", flag: false, ok: false, message: "EXPECT_COMMIT must be a 40-hex commit SHA" },
+  ]
+  it.each(rows)("$name", (row) => {
+    const decision = evaluateServedStamp({
+      builtStamp: row.built,
+      servedStamp: row.served,
+      expectCommit: row.expect,
+      allowUnpinnedRollback: row.flag,
+    })
+    expect(decision.ok, row.name).toBe(row.ok)
+    if (!row.ok) expect(decision.message, row.name).toContain(row.message)
   })
 })
