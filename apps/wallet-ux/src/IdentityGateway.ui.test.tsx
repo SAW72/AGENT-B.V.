@@ -8,6 +8,9 @@ import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { AGENT_ID_DECIMAL_TEXT, AGENT_ID_RANGE_TEXT, type IdentityRecord } from "./identity8004"
 import { IdentityGateway } from "./IdentityGateway"
 import type { SepoliaClient } from "./read"
+import { createStubController } from "./RegisterWizard"
+import { CONTINUE_IDENTITY } from "./registerCopy"
+import type { WizardController } from "./register/types"
 
 const ZERO = "0x0000000000000000000000000000000000000000" as Address
 const AGENT_WALLET = "0x1111111111111111111111111111111111111111" as Address
@@ -63,11 +66,17 @@ function record(agentId: bigint): IdentityRecord {
   }
 }
 
-function renderGateway() {
+function renderGateway(registerController?: WizardController) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <IdentityGateway client={{} as SepoliaClient} readsEnabled readsPending={false} blockedReason={null} />
+      <IdentityGateway
+        client={{} as SepoliaClient}
+        readsEnabled
+        readsPending={false}
+        blockedReason={null}
+        registerController={registerController}
+      />
     </QueryClientProvider>,
   )
 }
@@ -200,6 +209,46 @@ describe("IdentityGateway agent id", () => {
     await waitFor(() => {
       expect(screen.getByText(AGENT_ID_RANGE_TEXT)).toBeTruthy()
       expect(signButton()).toBeNull()
+    })
+  })
+
+  it("keeps lookup working with the register wizard mounted", async () => {
+    renderGateway()
+    expect(screen.getByRole("heading", { name: "ERC-8004 identity" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Register a new agent" })).toBeTruthy()
+    expect(screen.getByTestId("agent-id")).toBeTruthy()
+    typeAgentId("15")
+    await waitFor(() => {
+      expect(readAgentIdentity).toHaveBeenCalledWith(expect.anything(), 15n)
+    })
+  })
+
+  it("prefills the agent id from onRegistered and focuses the lookup", async () => {
+    const scroll = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scroll
+    renderGateway(
+      createStubController({
+        expanded: true,
+        step: 5,
+        txStatus: "confirmed",
+        finalId: "42",
+        globalId: "eip155:84532:0x8004A818BFB912233c491871b3d84c89A494BD9e:42",
+        owner: AGENT_WALLET,
+        provisionalId: "424242",
+      }),
+    )
+    await act(async () => {
+      screen.getByRole("button", { name: CONTINUE_IDENTITY }).click()
+    })
+    const input = screen.getByTestId("agent-id")
+    expect(input).toBe(document.activeElement)
+    if (!(input instanceof HTMLInputElement)) throw new Error("agent-id is not an input")
+    expect(input.value).toBe("42")
+    expect(input.value).not.toContain("eip155")
+    expect(scroll).toHaveBeenCalled()
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    await waitFor(() => {
+      expect(readAgentIdentity).toHaveBeenCalledWith(expect.anything(), 42n)
     })
   })
 })

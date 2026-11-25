@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ActionButton, type ActionButtonState } from "./actionButton"
+import { RegisterWizard } from "./RegisterWizard"
+import type { WizardController } from "./register/types"
 import { visibleConnectors } from "./connectors"
 import { ErrorNotice } from "./ErrorNotice"
 import { errorText, isZeroAddress, sameAddress, shortAddress } from "./format"
@@ -61,11 +63,13 @@ export function IdentityGateway({
   readsEnabled,
   readsPending = false,
   blockedReason,
+  registerController,
 }: {
   client: SepoliaClient
   readsEnabled: boolean
   readsPending?: boolean
   blockedReason: string | null
+  registerController?: WizardController
 }) {
   const account = useAccount()
   const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
@@ -81,6 +85,7 @@ export function IdentityGateway({
   const [button, setButton] = useState<ActionButtonState>({ status: "idle", label: "Sign the identity check" })
   const [staleHoldAt, setStaleHoldAt] = useState<number | null>(null)
   const signTicket = useRef(0)
+  const agentInputRef = useRef<HTMLInputElement>(null)
 
   // identity8004 stays strict (no trim). The field keeps what was typed.
   const agentLookup = agentInput.trim()
@@ -171,7 +176,20 @@ export function IdentityGateway({
 
   const missingAgent = identityQuery.error instanceof MissingAgentError ? identityQuery.error : null
 
+  function showAgentInLookup(id: string) {
+    signTicket.current += 1
+    setAgentInput(id)
+    setOutcome(null)
+    setSignError(null)
+    setStaleHoldAt(null)
+    setButton({ status: "idle", label: "Sign the identity check" })
+    const input = agentInputRef.current
+    input?.scrollIntoView?.({ block: "center" })
+    input?.focus()
+  }
+
   return (
+    <>
     <section className="card identity-gateway" aria-labelledby="identity-heading" data-testid="identity-gateway">
       <h2 id="identity-heading">ERC-8004 identity</h2>
       <p className="muted" data-testid="checked-in-browser">
@@ -186,6 +204,7 @@ export function IdentityGateway({
       <label>
         Agent id
         <input
+          ref={agentInputRef}
           value={agentInput}
           inputMode="numeric"
           autoComplete="off"
@@ -276,6 +295,8 @@ export function IdentityGateway({
 
       {record ? <IdentityRecordView record={record} hideParties={hideParties} /> : null}
     </section>
+    <RegisterWizard controller={registerController} onRegistered={showAgentInLookup} />
+    </>
   )
 }
 

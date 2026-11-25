@@ -735,3 +735,81 @@ button.task-link.secondary {
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
+
+.register-wizard {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.register-wizard .kv-row {
+  grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.register-wizard .kv-value,
+.register-wizard .register-uri,
+.register-wizard .register-hex {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.register-wizard input,
+.register-wizard textarea {
+  font-size: 16px;
+  box-sizing: border-box;
+}
+
+.register-wizard textarea {
+  width: 100%;
+  min-height: 44px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+}
+
+.register-wizard input[type="checkbox"] {
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.register-ack {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  margin: 12px 0;
+}
+
+.register-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.register-wizard .step-actions {
+  flex-wrap: wrap;
+}
+
+.register-wizard .pill.info {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .register-wizard .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .register-tabs button {
+    flex: 1 1 0;
+    width: auto;
+    min-height: 44px;
+  }
+}
