@@ -295,7 +295,11 @@ export function IdentityGateway({
 
       {record ? <IdentityRecordView record={record} hideParties={hideParties} /> : null}
     </section>
-    <RegisterWizard controller={registerController} onRegistered={showAgentInLookup} />
+    <RegisterWizard
+      controller={registerController}
+      live={registerController == null}
+      onRegistered={showAgentInLookup}
+    />
     </>
   )
 }

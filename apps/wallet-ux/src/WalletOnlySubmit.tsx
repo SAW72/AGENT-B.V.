@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import type { Address } from "viem"
+import type { Address, Hex } from "viem"
 import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi"
 import {
   ActionButton,
@@ -18,7 +18,7 @@ import { isWalletCancel } from "./revert"
 import { pendingSlot, pendingSubjectLabel, subjectFromCalldata, writePending } from "./pendingTx"
 import { resolveWalletChainId } from "./guard"
 import type { CallPreview } from "./preview"
-import { submitAfterPreflight } from "./preflight"
+import { submitAfterPreflight, type PreflightClient } from "./preflight"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { assertSubmitTarget, evaluateEscrowSubmit, submitControl, submitSenderNote } from "./submit"
 import { usePendingReceipt } from "./usePendingReceipt"
@@ -27,6 +27,10 @@ import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
+}
+
+export type WalletSubmitHandle = {
+  submit: () => void
 }
 
 /**
@@ -40,6 +44,13 @@ export function WalletOnlySubmit({
   guided = false,
   onConfirmed,
   statusRoot = null,
+  quiet = false,
+  livePreviewRef = null,
+  submitRef = null,
+  fromAddressRef = null,
+  preflightClient = null,
+  onSubmitted,
+  onSubmitError,
 }: {
   preview: CallPreview
   allowed: readonly Address[]
@@ -47,6 +58,14 @@ export function WalletOnlySubmit({
   guided?: boolean
   onConfirmed?: () => void
   statusRoot?: HTMLElement | null
+  /** Hide the escrow button. The register wizard calls submit() after its own checks. */
+  quiet?: boolean
+  livePreviewRef?: { current: CallPreview | null } | null
+  submitRef?: { current: WalletSubmitHandle | null } | null
+  fromAddressRef?: { current: Address | null } | null
+  preflightClient?: PreflightClient | null
+  onSubmitted?: (hash: Hex) => void
+  onSubmitError?: (error: unknown) => void
 }) {
   const account = useAccount()
   const { switchChain } = useSwitchChain()
@@ -72,8 +91,20 @@ export function WalletOnlySubmit({
   const disabled =
     (decision.ok && (control.disabled || hold || receipt.phase !== "idle" || signing)) || blocked
 
+  function failSubmit(error: unknown) {
+    onSubmitError?.(error)
+  }
+
   async function onClick() {
-    if (hold || receipt.phase !== "idle" || blocked) return
+    const active = livePreviewRef?.current ?? (livePreviewRef ? null : preview)
+    if (!active) {
+      failSubmit(new Error("The register transaction is not ready."))
+      return
+    }
+    if (hold || receipt.phase !== "idle" || blocked) {
+      if (quiet) failSubmit(new Error("Another transaction is still pending."))
+      return
+    }
     setSubmitError(null)
     receipt.dismissBanner()
     setCancelled(false)
@@ -83,41 +114,54 @@ export function WalletOnlySubmit({
     })
     if (!current.ok) {
       setSubmitError(notice(current.reason))
+      failSubmit(new Error(current.reason))
       return
     }
-    if (!tryHoldSubmit(submitSlot)) return
+    if (!tryHoldSubmit(submitSlot)) {
+      failSubmit(new Error("Another transaction is still pending."))
+      return
+    }
     let keepLock = false
     try {
-      assertSubmitTarget(preview.to, allowed)
-      if (!publicClient) {
-        setSubmitError(notice("Base Sepolia client is unavailable. The wallet was not opened."))
+      assertSubmitTarget(active.to, allowed)
+      const client = preflightClient ?? publicClient
+      if (!client) {
+        const unavailable = new Error("Base Sepolia client is unavailable. The wallet was not opened.")
+        setSubmitError(notice(unavailable.message))
+        failSubmit(unavailable)
         return
       }
       setSigning(true)
+      const from = fromAddressRef?.current ?? account.address
       const hash = await submitAfterPreflight({
         chainId: BASE_SEPOLIA_CHAIN_ID,
-        client: publicClient,
-        account: account.address,
-        to: preview.to,
-        data: preview.calldata,
-        value: preview.valueWei,
+        client,
+        account: from,
+        to: active.to,
+        data: active.calldata,
+        value: active.valueWei,
         send: () =>
           sendTransactionAsync({
-            to: preview.to,
-            data: preview.calldata,
-            value: preview.valueWei,
+            to: active.to,
+            data: active.calldata,
+            value: active.valueWei,
             chainId: BASE_SEPOLIA_CHAIN_ID,
           }),
       })
-      writePending({
-        action: sent?.action ?? preview.functionName,
-        subjectId: sent?.subjectId ?? null,
-        hash,
-      })
+      if (!quiet) {
+        const activeSent = subjectFromCalldata(active.calldata)
+        writePending({
+          action: activeSent?.action ?? active.functionName,
+          subjectId: activeSent?.subjectId ?? null,
+          hash,
+        })
+      }
+      onSubmitted?.(hash)
       releaseSubmit(submitSlot)
       keepLock = true
     } catch (cause) {
       keepLock = false
+      failSubmit(cause)
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
@@ -127,6 +171,10 @@ export function WalletOnlySubmit({
       setSigning(false)
       if (!keepLock) releaseSubmit(submitSlot)
     }
+  }
+
+  if (submitRef) {
+    submitRef.current = { submit: () => { void onClick() } }
   }
 
   const state: ActionButtonState = !decision.ok
@@ -175,6 +223,8 @@ export function WalletOnlySubmit({
       ) : null}
     </>
   )
+
+  if (quiet) return null
 
   return (
     <>

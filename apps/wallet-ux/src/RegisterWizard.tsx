@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useRegisterController } from "./useRegisterController"
 import { CheckStep } from "./register/CheckStep"
 import { ConfirmStep } from "./register/ConfirmStep"
 import { DoneStep } from "./register/DoneStep"
@@ -87,7 +88,7 @@ function localController(state: LocalState, setLocal: (update: (current: LocalSt
   }
 }
 
-export function RegisterWizard({
+function RegisterWizardBody({
   onRegistered,
   controller,
 }: {
@@ -218,4 +219,28 @@ export function RegisterWizard({
       )}
     </section>
   )
+}
+
+function LiveRegisterWizard({ onRegistered }: { onRegistered: (agentId: string) => void }) {
+  const wired = useRegisterController()
+  return (
+    <>
+      {wired.send}
+      <RegisterWizardBody onRegistered={onRegistered} controller={wired.controller} />
+    </>
+  )
+}
+
+export function RegisterWizard({
+  onRegistered,
+  controller,
+  live = false,
+}: {
+  onRegistered: (agentId: string) => void
+  controller?: WizardController
+  /** Use the wallet controller. Presentational tests omit this and pass a stub. */
+  live?: boolean
+}) {
+  if (controller == null && live) return <LiveRegisterWizard onRegistered={onRegistered} />
+  return <RegisterWizardBody onRegistered={onRegistered} controller={controller} />
 }

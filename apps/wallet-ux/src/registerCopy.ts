@@ -75,7 +75,7 @@ export const BACK = "Back"
 export const WAITING_WALLET = "Waiting for your wallet..."
 export const CONFIRM_TX_LINE = "Confirm the register transaction in your wallet. You can still reject it there."
 
-export const CHAIN_LEFT = "Your wallet left Base Sepolia. Switch back, then run the check again."
+export const CHAIN_LEFT = "Your wallet changed networks. Run the check again."
 export const SEND_FAILED = "The transaction did not go through."
 export const REVERTED = "The transaction reverted. No agent was registered."
 
@@ -97,7 +97,7 @@ export const DRY_RUN_REJECTED = "The registry would reject this registration."
 export const USER_REJECTED = "You rejected the transaction. Nothing was sent."
 export const INSUFFICIENT_FUNDS = "Not enough test ETH for gas. Get Base Sepolia ETH from a faucet, then check again."
 export const NOTHING_REGISTERED = "Nothing was registered."
-export const CANCELLED = "The transaction was cancelled in your wallet. Nothing was registered."
+export const CANCELLED = "You cancelled the transaction in your wallet. Nothing was registered."
 export const UNKNOWN = "Something went wrong with the wallet."
 
 export const ALREADY_PENDING = "Your wallet already has a request open. Open the wallet to finish or reject it."
@@ -109,7 +109,7 @@ export const SWITCH_TO_SEPOLIA = "Switch to Base Sepolia"
 export const CONFIRM_SWITCH = "Confirm the network switch in your wallet."
 export const CANT_SWITCH = "Your wallet couldn't switch networks. Change it to Base Sepolia in the wallet app, then come back."
 export const HUNG_PROMPT = "Still waiting. If you closed the wallet window, open it again or reject the request there."
-export const STILL_WAITING = "Still waiting. Check Basescan for status."
+export const STILL_WAITING = "Still waiting. Base Sepolia can be slow. Your transaction is still being tracked."
 export const PICKING_UP = "Picking up your transaction..."
 export const SPED_UP = "Your wallet sped up the transaction."
 export const REPLACED_OTHER = "Your wallet replaced this transaction with a different one. No agent was registered by it."
@@ -143,6 +143,14 @@ export function alreadyOwns(count: string | number | bigint): string {
 
 export function walletSwitched(short: string | number | bigint): string {
   return `Your wallet switched to ${textOf(short)}. Run the check again for this account.`
+}
+
+export function insufficientGas(needed: string, balance: string): string {
+  return `This wallet doesn't have enough Base Sepolia test ETH for gas. You need about ${needed}, and you have ${balance}.`
+}
+
+export function ownsAfterReplacement(count: string | number | bigint): string {
+  return `This wallet now owns ${textOf(count)} agents. One may have been registered by the replacement. Check the transaction on Basescan.`
 }
 
 export function registeredId(id: string | number | bigint): string {
@@ -211,6 +219,9 @@ export function registerErrorView(
   }
   if (kind === "DryRunReverted" || kind === "Unknown") {
     return { main: copy.main, detail: runtime }
+  }
+  if (kind === "InsufficientFunds" && runtime) {
+    return { main: runtime }
   }
   const staticDetail = typeof copy.detail === "string" ? copy.detail : undefined
   return { main: copy.main, detail: runtime ?? staticDetail }

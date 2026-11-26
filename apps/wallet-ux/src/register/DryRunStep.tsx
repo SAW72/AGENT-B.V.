@@ -119,7 +119,7 @@ export function DryRunStep({
           {REVIEW_AND_CONFIRM}
         </button>
       </StepActions>
-      {errorKind === "InsufficientFunds" ? (
+      {errorKind === "InsufficientFunds" || notice === "chain-left" || notice === "account-changed" ? (
         <button type="button" className="secondary" onClick={onRecheck}>
           {CHECK_AGAIN}
         </button>

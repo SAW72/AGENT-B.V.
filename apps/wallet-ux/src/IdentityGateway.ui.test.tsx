@@ -66,7 +66,7 @@ function record(agentId: bigint): IdentityRecord {
   }
 }
 
-function renderGateway(registerController?: WizardController) {
+function renderGateway(registerController: WizardController = createStubController()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>

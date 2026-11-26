@@ -7,8 +7,10 @@ import {
   LABEL_GLOBAL_ID,
   LABEL_OWNER,
   LABEL_TRANSACTION,
+  DROPPED,
   PENDING_TX,
   PICKING_UP,
+  REPLACED_OTHER,
   SPED_UP,
   START_OVER,
   STILL_WAITING,
@@ -124,11 +126,10 @@ export function DoneStep({
         />
       ) : null}
       {mode === "replaced" ? (
-        <Failure
-          main={registerErrorView("Replaced", null, null)?.main ?? ""}
-          detail={failureDetail}
-          onStartOver={onStartOver}
-        />
+        <Failure main={REPLACED_OTHER} detail={failureDetail} onStartOver={onStartOver} />
+      ) : null}
+      {mode === "dropped" ? (
+        <Failure main={DROPPED} detail={failureDetail} onStartOver={onStartOver} />
       ) : null}
       {mode === "cancelled" ? (
         <Failure
@@ -169,8 +170,8 @@ function doneMode(
   errorKind: RegisterErrorCode | null,
   notice: RegisterUiNotice | null,
   finalId: string | null,
-): "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled" {
-  let mode: "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled"
+): "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled" | "dropped" {
+  let mode: "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled" | "dropped"
   if (txStatus != null) mode = txStatus
   else if (errorKind === "Cancelled") mode = "cancelled"
   else if (notice === "reverted") mode = "reverted"

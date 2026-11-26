@@ -25,7 +25,7 @@ export type RegisterUiNotice = "chain-left" | "account-changed" | "send-failed" 
 
 export type WizardStep = 1 | 2 | 3 | 4 | 5
 
-export type TxStatus = "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled"
+export type TxStatus = "pending" | "confirmed" | "reverted" | "replaced" | "noEvent" | "cancelled" | "dropped"
 
 export type FileTab = "upload" | "paste"
 
