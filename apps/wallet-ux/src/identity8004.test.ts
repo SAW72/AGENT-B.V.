@@ -97,7 +97,7 @@ describe("erc8004 config", () => {
     expect(NO_ID_TEXT).toBe("No agent id yet? Register your bot below. It takes a few minutes on Base Sepolia testnet and uses free test ETH.")
     expect(CHECKED_IN_BROWSER).toBe("Checks run in your browser")
     expect(PUBLIC_RPC_HOST).toBe("sepolia.base.org")
-    expect(WALLET_NOT_SET_TEXT).toBe("wallet_not_set / can't verify")
+    expect(WALLET_NOT_SET_TEXT).toBe("This bot has no agent wallet set, so there's no wallet to check a signature against.")
     expect(basescanRegistryUrl()).toBe(explorerUrl(REGISTRY))
     expect(basescanAgentUrl(7n)).toBe(`https://sepolia.basescan.org/nft/${REGISTRY}/7`)
   })

@@ -187,4 +187,24 @@ describe("landing register-wizard copy", () => {
     expect(primary.textContent.replace(/\s+/g, " ").trim()).toBe("Register your bot")
     expect(primary.compareDocumentPosition(stage) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
+
+  it("relabels the header, bottom CTA, and footer without changing the escrow secondary or note", () => {
+    const dom = new JSDOM(landingHtml)
+    const header = dom.window.document.querySelector("header .navlinks a.btn-white")
+    expect(header?.textContent.trim()).toBe("Open the testnet app")
+    expect(header?.getAttribute("href")).toBe("/app/")
+    const bottom = dom.window.document.querySelector("section.section.cta a.btn-dark")
+    expect(bottom?.textContent.replace(/\s+/g, " ").trim()).toBe("Register a bot on testnet")
+    expect(bottom?.getAttribute("href")).toBe("/app/identity")
+    const footer = [...dom.window.document.querySelectorAll("footer .footlinks a")].find(
+      (link) => link.getAttribute("href") === "/app/",
+    )
+    expect(footer?.textContent.trim()).toBe("Testnet app")
+    const secondary = dom.window.document.querySelector("section.hero .ctas a.btn-ghost")
+    expect(secondary?.textContent.trim()).toBe("See what is live")
+    expect(secondary?.getAttribute("href")).toBe("#status")
+    expect(dom.window.document.querySelector("p.cta-note")?.textContent.trim()).toBe(
+      "Everything here is on Base Sepolia testnet, not mainnet. Use test funds only.",
+    )
+  })
 })

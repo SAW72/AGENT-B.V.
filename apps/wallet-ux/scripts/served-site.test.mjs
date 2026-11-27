@@ -53,11 +53,14 @@ function sameBytes(left, right) {
   return readFileSync(left).equals(readFileSync(right))
 }
 
-function openAppHrefs(html) {
+function landingEntry(html) {
   const dom = new JSDOM(html)
-  return [...dom.window.document.querySelectorAll("a")]
-    .filter((anchor) => /open the app/i.test(anchor.textContent ?? ""))
-    .map((anchor) => anchor.getAttribute("href"))
+  const header = dom.window.document.querySelector("header .navlinks a.btn-white")
+  const bottom = dom.window.document.querySelector("section.section.cta a.btn-dark")
+  const footer = [...dom.window.document.querySelectorAll("footer .footlinks a")].find(
+    (link) => link.getAttribute("href") === "/app/",
+  )
+  return { header, bottom, footer }
 }
 
 function metaContent(html, selector) {
@@ -224,11 +227,15 @@ describe("built site", () => {
     expect(statSync(join(siteDir, "app/index.html")).isFile()).toBe(true)
   })
 
-  it("points open-app links at /app/", async () => {
+  it("points the header and footer at /app/ and the bottom CTA at /app/identity", async () => {
     const root = await get("/")
-    const hrefs = openAppHrefs(root.text)
-    expect(hrefs.length).toBeGreaterThan(0)
-    expect(hrefs.every((href) => href === "/app/")).toBe(true)
+    const { header, bottom, footer } = landingEntry(root.text)
+    expect(header?.textContent.trim()).toBe("Open the testnet app")
+    expect(header?.getAttribute("href")).toBe("/app/")
+    expect(bottom?.textContent.replace(/\s+/g, " ").trim()).toBe("Register a bot on testnet")
+    expect(bottom?.getAttribute("href")).toBe("/app/identity")
+    expect(footer?.textContent.trim()).toBe("Testnet app")
+    expect(footer?.getAttribute("href")).toBe("/app/")
   })
 
   it("serves an app manifest whose start_url and scope are /app/", async () => {

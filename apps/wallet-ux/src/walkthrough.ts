@@ -6,8 +6,8 @@ export { FLOW_STEP_LABELS } from "./routes"
 /** Home walkthrough for someone opening the app for the first time. */
 export const CONNECT_STEP_LABEL = "Connect your wallet"
 export const SWITCH_STEP_LABEL = "Switch to Base Sepolia"
-export const FILL_ESCROW_LABEL = "Fill in the escrow"
-export const REVIEW_SEND_LABEL = "Review and send"
+export const PROFILE_STEP_LABEL = "Add your bot's profile"
+export const REGISTER_STEP_LABEL = "Register on testnet"
 
 export const CONNECT_NOTE = "Connect a wallet on Base Sepolia. You approve your own transactions in that wallet. Some refunds are submitted for you by the Agent-BV relayer, which pays the testnet gas."
 export const WRONG_NETWORK_NOTE =
@@ -41,8 +41,8 @@ export function walkthroughStates(
 export function walkthroughLabels(wallet: WalkthroughWallet): readonly [string, string, string] {
   return [
     wallet === "wrong-network" ? SWITCH_STEP_LABEL : CONNECT_STEP_LABEL,
-    FILL_ESCROW_LABEL,
-    REVIEW_SEND_LABEL,
+    PROFILE_STEP_LABEL,
+    REGISTER_STEP_LABEL,
   ]
 }
 

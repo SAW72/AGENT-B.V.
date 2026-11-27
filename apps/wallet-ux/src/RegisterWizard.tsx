@@ -12,6 +12,7 @@ import type { FileTab, ParsedRegistration, RegisterErrorCode, WizardController, 
 import { WizardStepper } from "./register/WizardStepper"
 import {
   CARD_LINE,
+  TRUST_LINE,
   CARD_TITLE,
   FAUCET_LINK_LABEL,
   FAUCET_URL,
@@ -221,6 +222,9 @@ function RegisterWizardBody({
         <>
           <p className="muted" data-testid="register-card-line">
             {CARD_LINE}
+          </p>
+          <p className="muted" data-testid="register-trust-line">
+            {TRUST_LINE}
           </p>
           <h3>{WHAT_YOU_NEED_TITLE}</h3>
           <ul data-testid="what-you-need">

@@ -8,6 +8,7 @@ import {
   ACK_CHECKBOX,
   CANCELLED,
   CARD_LINE,
+  TRUST_LINE,
   CARD_TITLE,
   CHAIN_LEFT,
   CHECK_REGISTRATION,
@@ -65,6 +66,7 @@ describe("RegisterWizard steps", () => {
     render(<RegisterWizard onRegistered={onRegistered} />)
     expect(screen.getByRole("heading", { name: CARD_TITLE })).toBeTruthy()
     expect(screen.getByTestId("register-card-line").textContent).toBe(CARD_LINE)
+    expect(screen.getByTestId("register-trust-line").textContent).toBe(TRUST_LINE)
     expect(screen.getByText(WHAT_YOU_NEED_TITLE)).toBeTruthy()
     const needs = screen.getByTestId("what-you-need")
     expect(needs.textContent).toContain(NEED_WALLET)

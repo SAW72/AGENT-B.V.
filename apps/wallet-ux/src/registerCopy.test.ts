@@ -70,7 +70,10 @@ describe("register copy", () => {
   it("pins Blockchain Look register-wizard copy", () => {
     expect(copy.CARD_TITLE).toBe("Register your bot")
     expect(copy.CARD_LINE).toBe(
-      "Registering gives your bot a public id on Base Sepolia testnet, so anyone can look it up and check that a signature really came from it. This is a test network. Nothing here costs real money.",
+      "Your bot gets a public on-chain ID that anyone can look up. Registration writes a record to the blockchain. The record's ID and history can't be erased, but you (the owner) can update your bot's profile or transfer it. This is a testnet record and may be reset. Nothing here costs real money.",
+    )
+    expect(copy.TRUST_LINE).toBe(
+      "Anyone can check who registered this bot and when. Registration does not mean we, or anyone, have reviewed, verified, or endorsed the bot.",
     )
     expect(copy.OPEN_WIZARD).toBe("Start registering")
     expect(copy.WHAT_YOU_NEED_TITLE).toBe("What you need")
@@ -95,7 +98,7 @@ describe("register copy", () => {
     expect(copy.WIZARD_STEP_LABELS).toEqual(["Profile", "Check", "Test run", "Confirm", "Done"])
     expect(copy.FILE_TITLE).toBe("Add your bot's profile")
     expect(copy.FILE_HELPER).toBe(
-      "Upload your bot's profile file, or paste its agent URI. The agent URI is a link or text block that describes your bot. Nothing is sent yet.",
+      "Upload your bot's profile file, or paste its agent URI. The agent URI is a link or text block that describes your bot. Nothing is sent yet. Don't put your name, email, or other personal info in your bot's profile. Parts of this record can never be deleted.",
     )
     expect(copy.CHECK_REGISTRATION).toBe("Check profile")
     expect(copy.PASS_LINE).toBe("Looks good. This profile is in the right format.")
@@ -114,18 +117,19 @@ describe("register copy", () => {
     )
     expect(copy.CONFIRM_TITLE).toBe("Confirm and register")
     expect(copy.ACK_CHECKBOX).toBe(
-      "I understand this sends a transaction from my wallet on Base Sepolia testnet. It uses test ETH only.",
+      "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record that parts of can never be deleted.",
     )
     expect(copy.CONFIRM_IN_WALLET).toBe("Confirm in wallet")
-    expect(copy.CONTINUE_IDENTITY).toBe("Verify your bot")
+    expect(copy.CONTINUE_IDENTITY).toBe("Sign a wallet check")
     expect(copy.CONTINUE_HELPER).toBe(
-      "Next, sign a quick check from your bot's wallet so people can see it really is your bot. This is free and sends no transaction.",
+      "Next, sign a quick check from your bot's wallet so people can confirm signatures come from that wallet. This is free and sends no transaction.",
     )
     expect(copy.registeredId("9001")).toBe(
       "Done. Your bot is registered on Base Sepolia testnet. Its agent id is 9001.",
     )
     expect(copy.CONNECT_NOTE).not.toMatch(/mainnet|real money/i)
-    expect(copy.CARD_LINE).toContain("test network")
+    expect(copy.CARD_LINE).toContain("testnet")
+    expect(copy.CARD_LINE).toContain("Nothing here costs real money.")
   })
 
 })

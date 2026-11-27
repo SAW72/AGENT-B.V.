@@ -14,7 +14,9 @@ function textOf(value: string | number | bigint | null | undefined): string {
 
 export const CARD_TITLE = "Register your bot"
 export const CARD_LINE =
-  "Registering gives your bot a public id on Base Sepolia testnet, so anyone can look it up and check that a signature really came from it. This is a test network. Nothing here costs real money."
+  "Your bot gets a public on-chain ID that anyone can look up. Registration writes a record to the blockchain. The record's ID and history can't be erased, but you (the owner) can update your bot's profile or transfer it. This is a testnet record and may be reset. Nothing here costs real money."
+export const TRUST_LINE =
+  "Anyone can check who registered this bot and when. Registration does not mean we, or anyone, have reviewed, verified, or endorsed the bot."
 export const OPEN_WIZARD = "Start registering"
 
 export const WHAT_YOU_NEED_TITLE = "What you need"
@@ -49,7 +51,7 @@ export const FILE_TITLE = "Add your bot's profile"
 export const TAB_UPLOAD = "Upload file"
 export const TAB_PASTE = "Paste"
 export const FILE_HELPER =
-  "Upload your bot's profile file, or paste its agent URI. The agent URI is a link or text block that describes your bot. Nothing is sent yet."
+  "Upload your bot's profile file, or paste its agent URI. The agent URI is a link or text block that describes your bot. Nothing is sent yet. Don't put your name, email, or other personal info in your bot's profile. Parts of this record can never be deleted."
 export const CHECK_REGISTRATION = "Check profile"
 
 
@@ -83,7 +85,7 @@ export const REVIEW_AND_CONFIRM = "Review and confirm"
 
 export const CONFIRM_TITLE = "Confirm and register"
 export const VALUES_CHANGED = "The registry changed since your check. Review the new values."
-export const ACK_CHECKBOX = "I understand this sends a transaction from my wallet on Base Sepolia testnet. It uses test ETH only."
+export const ACK_CHECKBOX = "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record that parts of can never be deleted."
 export const CONFIRM_IN_WALLET = "Confirm in wallet"
 export const BACK = "Back"
 export const WAITING_WALLET = "Waiting for your wallet..."
@@ -97,8 +99,8 @@ export const PENDING_TX = "Transaction sent. Waiting for confirmation."
 export const VIEW_ON_BASESCAN = "View on Basescan"
 export const NO_EVENT = "The transaction confirmed but the agent id could not be read. Check the transaction on Basescan."
 export const START_OVER = "Start over"
-export const CONTINUE_IDENTITY = "Verify your bot"
-export const CONTINUE_HELPER = "Next, sign a quick check from your bot's wallet so people can see it really is your bot. This is free and sends no transaction."
+export const CONTINUE_IDENTITY = "Sign a wallet check"
+export const CONTINUE_HELPER = "Next, sign a quick check from your bot's wallet so people can confirm signatures come from that wallet. This is free and sends no transaction."
 export const CHECK_AGAIN = "Check again"
 
 export const INVALID_JSON = "This isn't valid JSON."

@@ -44,15 +44,15 @@ import { walletReadiness } from "./walkthrough"
 const URI_PREVIEW = 96
 
 function reasonText(reason: VerifyResult["reason"]): string {
-  if (reason === "verified") return "Verified."
+  if (reason === "verified") return "Signature matches the agent wallet."
   if (reason === "wallet_not_set") return WALLET_NOT_SET_TEXT
-  if (reason === "impl_changed") return "The identity registry implementation changed. This page will not mark it verified."
-  if (reason === "registry_domain_changed") return "The identity registry domain changed. This page will not mark it verified."
+  if (reason === "impl_changed") return "The identity registry implementation changed. This page will not show a match."
+  if (reason === "registry_domain_changed") return "The identity registry domain changed. This page will not show a match."
   if (reason === "expired") return "This check expired. Sign it again."
   if (reason === "agent_mismatch") return "The signed agent id does not match this record."
   if (reason === "wallet_mismatch") return "The signed agent wallet does not match this record."
-  if (reason === "bad_signature") return "Not verified. The signature does not match the agent wallet."
-  return "Not verified. The owner or agent wallet changed. Sign again."
+  if (reason === "bad_signature") return "No match. The signature does not match the agent wallet."
+  return "No match. The owner or agent wallet changed. Sign again."
 }
 
 function readDetail(error: unknown): string {
@@ -290,8 +290,7 @@ export function IdentityGateway({
             <strong>{NO_ID_TEXT}</strong>
           </p>
           <p className="muted">
-            A bot with no agent id stays refused. The bot registers on the existing registry. The browser check is a
-            badge. Server-side admission comes later.
+            A bot with no agent id stays refused. The bot registers on the existing registry. The browser check only shows whether a signature matches the agent wallet.
           </p>
           <pre className="calldata" data-testid="identity-next">
             {JSON.stringify(onboarding, null, 2)}

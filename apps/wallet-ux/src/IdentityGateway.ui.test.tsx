@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { Address } from "viem"
@@ -225,6 +228,25 @@ describe("IdentityGateway agent id", () => {
     const onboarding = screen.getByTestId("identity-onboarding")
     expect(jump.compareDocumentPosition(onboarding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(jump.compareDocumentPosition(wizard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it("pins Look signature-match wording in the identity card", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "IdentityGateway.tsx"), "utf8")
+    expect(source).toContain('return "Signature matches the agent wallet."')
+    expect(source).toContain("This page will not show a match.")
+    expect(source).toContain("No match. The signature does not match the agent wallet.")
+    expect(source).toContain("No match. The owner or agent wallet changed. Sign again.")
+    expect(source).not.toContain("Verified.")
+    expect(source).not.toContain("This page will not mark it verified.")
+    expect(source).not.toContain("Not verified.")
+    expect(source).toContain("The browser check only shows whether a signature matches the agent wallet.")
+    expect(source).not.toContain("The browser check is a badge.")
+    expect(source).not.toContain("Server-side admission comes later.")
+    renderGateway()
+    const muted = screen.getByTestId("identity-onboarding").querySelector("p.muted")
+    expect(muted?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "A bot with no agent id stays refused. The bot registers on the existing registry. The browser check only shows whether a signature matches the agent wallet.",
+    )
   })
 
   it("keeps lookup working with the register wizard mounted", async () => {

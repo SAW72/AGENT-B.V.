@@ -21,7 +21,7 @@ import erc8004Config from "../../../config/erc8004-base-sepolia.json" with { typ
 
 export const CHECKED_IN_BROWSER = "Checks run in your browser"
 export const PUBLIC_RPC_HOST = "sepolia.base.org"
-export const WALLET_NOT_SET_TEXT = "wallet_not_set / can't verify"
+export const WALLET_NOT_SET_TEXT = "This bot has no agent wallet set, so there's no wallet to check a signature against."
 export const NO_ID_TEXT = "No agent id yet? Register your bot below. It takes a few minutes on Base Sepolia testnet and uses free test ETH."
 export const AGENT_ID_DECIMAL_TEXT = "Enter the agent id as a decimal integer."
 export const AGENT_ID_RANGE_TEXT = "That agent id is outside the uint256 range."
