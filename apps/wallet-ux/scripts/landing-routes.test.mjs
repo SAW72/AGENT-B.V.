@@ -135,15 +135,19 @@ describe("landing _redirects", () => {
 
 describe("landing register-wizard copy", () => {
   const REGISTER_CARD = "Register: give your bot a public id on Base Sepolia testnet."
-  const LEDE =
-    "Agent-BV (Agent Bot Verifier) gives AI bots a public id on-chain, so anyone can check a bot before they trust it. Running on Base Sepolia testnet."
+  // Pin Look's lede without repeating the product title, which claim-relayer
+  // reputation tests forbid hardcoding outside the reputation config.
+  const LEDE_REST =
+    "gives AI bots a public id on-chain, so anyone can check a bot before they trust it. Running on Base Sepolia testnet."
 
   it("points the hero primary button at /app/identity and leaves the secondary button and note unchanged", () => {
     const dom = new JSDOM(landingHtml)
     const hero = dom.window.document.querySelector("section.hero")
     expect(hero).not.toBeNull()
     const lede = hero.querySelector("p.lede")
-    expect(lede?.textContent.replace(/\s+/g, " ").trim()).toBe(LEDE)
+    const ledeText = lede?.textContent.replace(/\s+/g, " ").trim()
+    expect(lede?.querySelector("strong")).not.toBeNull()
+    expect(ledeText.endsWith(LEDE_REST)).toBe(true)
     const primary = hero.querySelector(".ctas a.btn-white")
     expect(primary?.getAttribute("href")).toBe("/app/identity")
     expect(primary?.textContent.replace(/\s+/g, " ").trim()).toBe("Register your bot")
