@@ -311,8 +311,7 @@ def test_unknown_bot_stays_refused_and_returns_register_next():
     }
     assert body["next"]["verify_url"] == "https://agent-bv.pages.dev/app/identity"
     assert body["next"]["retry"] == (
-        "The bot registers on the identity registry. The browser check is a badge. "
-        "Server-side admission comes later."
+        "The bot registers on the identity registry. The browser check only shows whether a signature matches the agent wallet."
     )
     assert "call /v1/access/check again" not in body["next"]["retry"]
     assert "call the access check again" not in body["next"]["retry"]
