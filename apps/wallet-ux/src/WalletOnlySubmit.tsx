@@ -18,7 +18,7 @@ import { isWalletCancel } from "./revert"
 import { pendingSlot, pendingSubjectLabel, subjectFromCalldata, writePending } from "./pendingTx"
 import { resolveWalletChainId } from "./guard"
 import type { CallPreview } from "./preview"
-import { submitAfterPreflight, type PreflightClient } from "./preflight"
+import { assertLiveChain84532, submitAfterPreflight, type PreflightClient } from "./preflight"
 import { releaseSubmit, tryHoldSubmit, useSubmitBlocked } from "./submitLock"
 import { assertSubmitTarget, evaluateEscrowSubmit, submitControl, submitSenderNote } from "./submit"
 import { usePendingReceipt } from "./usePendingReceipt"
@@ -27,6 +27,31 @@ import { TX_REVERTED_TEXT, unconfirmedNote } from "./walletCopy"
 
 function notice(main: string): ErrorPresentation {
   return { main, detail: null }
+}
+
+
+type WalletRequest = (args: { method: "eth_chainId" }) => Promise<unknown>
+
+async function liveChainRequest(
+  connector: { getProvider?: () => Promise<unknown> } | undefined,
+): Promise<WalletRequest | null> {
+  try {
+    const provider = (await connector?.getProvider?.()) as { request?: (args: { method: string }) => Promise<unknown> } | undefined
+    if (typeof provider?.request === "function") {
+      const request = provider.request.bind(provider)
+      return (args) => request(args)
+    }
+  } catch {
+    // Fall through to the injected provider when the connector is not ready.
+  }
+  const eth = typeof window !== "undefined"
+    ? (window as Window & { ethereum?: { request?: (args: { method: string }) => Promise<unknown> } }).ethereum
+    : undefined
+  if (typeof eth?.request === "function") {
+    const request = eth.request.bind(eth)
+    return (args) => request(args)
+  }
+  return null
 }
 
 export type WalletSubmitHandle = {
@@ -140,13 +165,16 @@ export function WalletOnlySubmit({
         to: active.to,
         data: active.calldata,
         value: active.valueWei,
-        send: () =>
-          sendTransactionAsync({
+        send: async () => {
+          const request = await liveChainRequest(account.connector)
+          if (request) await assertLiveChain84532(request)
+          return sendTransactionAsync({
             to: active.to,
             data: active.calldata,
             value: active.valueWei,
             chainId: BASE_SEPOLIA_CHAIN_ID,
-          }),
+          })
+        },
       })
       if (!quiet) {
         const activeSent = subjectFromCalldata(active.calldata)

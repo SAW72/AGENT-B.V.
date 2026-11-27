@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { encodeAbiParameters, encodeEventTopics, formatEther, getAddress, WaitForTransactionReceiptTimeoutError, type Address, type Hex } from "viem"
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, formatEther, getAddress, WaitForTransactionReceiptTimeoutError, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { identityRegistry8004Abi } from "./abi"
 import { WALLET_HINT_MS, WALLET_HINT_TEXT } from "./actionButton"
@@ -33,6 +33,7 @@ import {
   SWITCH_TO_SEPOLIA,
   TAB_PASTE,
   WAITING_WALLET,
+  WRONG_CHAIN,
   basescanTxUrl,
   insufficientGas,
   ownsAfterReplacement,
@@ -641,5 +642,59 @@ describe("register wizard wallet states", () => {
     await act(async () => {
       release(HASH_A)
     })
+  })
+
+  it("the wallet send and the preflight carry the pasted URI, value 0 and chainId 84532", async () => {
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+    const sent = (wagmiHarness.sendTransactionAsync.mock.calls as unknown as [{ to: Address; data: Hex; value: bigint; chainId: number }][])[0]?.[0]
+    expect(sent).toBeTruthy()
+    if (!sent) throw new Error("missing send")
+    const expectedUri = `data:application/json;base64,${Buffer.from(REGISTRATION).toString("base64")}`
+    const decoded = decodeFunctionData({ abi: identityRegistry8004Abi, data: sent.data })
+    expect(decoded.functionName).toBe("register")
+    expect(decoded.args).toEqual([expectedUri])
+    expect(sent.to).toBe(registryAddress())
+    expect(sent.to).toBe("0x8004A818BFB912233c491871b3d84c89A494BD9e")
+    expect(sent.value).toBe(0n)
+    expect(sent.chainId).toBe(84532)
+    const pre = ((world.reader as unknown as { call: { mock: { calls: [{ to: Address; data: Hex; value: bigint }][] } } }).call.mock.calls)[0]?.[0]
+    expect(pre).toBeTruthy()
+    if (!pre) throw new Error("missing preflight")
+    expect(pre.data).toBe(sent.data)
+    expect(pre.to).toBe(registryAddress())
+    expect(pre.value).toBe(0n)
+  })
+
+  it("aborts the wallet prompt when the chain changes before the send is confirmed", async () => {
+    let release: (hash: Hex) => void = () => undefined
+    wagmiHarness.sendTransactionAsync.mockImplementation(() => new Promise<Hex>((resolve) => { release = resolve }))
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(screen.queryByTestId("step-confirm")).toBeNull()
+    await act(async () => { release(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(screen.queryByText(PENDING_TX)).toBeNull()
+    expect(screen.getByText(CHAIN_LEFT)).toBeTruthy()
+  })
+
+  it("refuses the send when eth_chainId is not 84532 after preflight", async () => {
+    const original = world.reader.call
+    ;(world.reader as { call: typeof original }).call = vi.fn(async (args) => {
+      world.chainId = BASE_MAINNET_HEX
+      return original ? original(args) : { data: "0x" }
+    })
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    expect(await screen.findByText(WRONG_CHAIN)).toBeTruthy()
+    expect(wagmiHarness.sendTransactionAsync).not.toHaveBeenCalled()
   })
 })

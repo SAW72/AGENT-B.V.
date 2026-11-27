@@ -60,3 +60,22 @@ export async function submitRelayerAfterPreflight<T>(input: {
     send: input.post,
   })
 }
+
+export function parseRpcChainId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "string" || value.trim() === "") return null
+  const parsed = value.trim().startsWith("0x") || value.trim().startsWith("0X") ? Number.parseInt(value, 16) : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/** Fail closed if a live eth_chainId read is not Base Sepolia. */
+export async function assertLiveChain84532(
+  request: (args: { method: "eth_chainId" }) => Promise<unknown>,
+): Promise<void> {
+  const id = parseRpcChainId(await request({ method: "eth_chainId" }))
+  if (id !== BASE_SEPOLIA_CHAIN_ID) {
+    throw Object.assign(new Error("This check only runs on the Base Sepolia network. Nothing was sent."), {
+      name: "ChainMismatchError",
+    })
+  }
+}

@@ -332,6 +332,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
   const stateRef = useRef(fields)
   const mountedRef = useRef(true)
   const phaseRef = useRef<Phase>("form")
+  const promptAbortedRef = useRef(false)
   const booted = useRef(false)
   const fromRef = useRef<Address | null>(null)
   const senderRef = useRef<Address | null>(null)
@@ -610,12 +611,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     })
   }
 
-  function onChainChanged(payload: unknown) {
-    const id = parseChainId(payload)
-    chainRef.current = id
-    if (phaseRef.current === "sent" || phaseRef.current === "prompt") return
-    if (stateRef.current.step < 3) return
-    dryGen.current += 1
+  function patchChainLeft(id: number | null) {
     confirmGen.current += 1
     sendLock.current = false
     clearPromptTimer()
@@ -632,6 +628,20 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
       dryRunPending: false,
       ...quoteCleared(),
     })
+  }
+
+  function onChainChanged(payload: unknown) {
+    const id = parseChainId(payload)
+    chainRef.current = id
+    if (phaseRef.current === "sent") return
+    if (phaseRef.current === "prompt") {
+      promptAbortedRef.current = true
+      phaseRef.current = "form"
+      patchChainLeft(id)
+      return
+    }
+    if (stateRef.current.step < 3) return
+    patchChainLeft(id)
   }
 
   onAccountsRef.current = onAccountsChanged
@@ -1025,6 +1035,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
         })
         return
       }
+      promptAbortedRef.current = false
       phaseRef.current = "prompt"
       patch({
         walletPending: true,
@@ -1051,7 +1062,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
   }
 
   function onSubmitted(hash: Hex) {
-    if (phaseRef.current === "sent") return
+    if (promptAbortedRef.current || phaseRef.current !== "prompt") return
     clearPromptTimer()
     phaseRef.current = "sent"
     sendLock.current = true
@@ -1090,6 +1101,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
 
   function onSubmitError(error: unknown) {
     if (phaseRef.current === "sent") return
+    if (promptAbortedRef.current) return
     clearPromptTimer()
     phaseRef.current = "form"
     sendLock.current = false
