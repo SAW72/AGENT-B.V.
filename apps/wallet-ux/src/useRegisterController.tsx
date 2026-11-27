@@ -313,12 +313,14 @@ function pause(ms: number) {
   })
 }
 
-export function useRegisterController(options?: { reader?: RegisterReader }): {
+export function useRegisterController(options?: { reader?: RegisterReader; onRegistered?: (agentId: string) => void }): {
   controller: WizardController
   send: ReactNode
 } {
   const readerRef = useRef<RegisterReader | null>(options?.reader ?? null)
   if (options?.reader) readerRef.current = options.reader
+  const onRegisteredRef = useRef(options?.onRegistered)
+  onRegisteredRef.current = options?.onRegistered
   if (!readerRef.current) {
     readerRef.current = createSepoliaClient(rpcUrlFromEnv(import.meta.env.VITE_BASE_SEPOLIA_RPC_URL)) as unknown as RegisterReader
   }
@@ -714,11 +716,12 @@ export function useRegisterController(options?: { reader?: RegisterReader }): {
           })
           if (generation !== generationRef.current || !mountedRef.current) return
           const owner = result.owner
+          const confirmedId = result.agentId.toString(10)
           clearStored()
           patch({
             txStatus: "confirmed",
             txHash: result.hash,
-            finalId: result.agentId.toString(10),
+            finalId: confirmedId,
             globalId: formatAgentId(BASE_SEPOLIA_CHAIN_ID, registryAddress(), result.agentId),
             owner,
             showOwnerSwitch: ownerMismatch(connectedRef.current, owner),
@@ -730,6 +733,7 @@ export function useRegisterController(options?: { reader?: RegisterReader }): {
             notice: null,
             walletDisconnected: connectedRef.current == null && stateRef.current.walletDisconnected,
           })
+          onRegisteredRef.current?.(confirmedId)
           return
         } catch (error) {
           if (generation !== generationRef.current || !mountedRef.current) return
@@ -1219,7 +1223,10 @@ export function useRegisterController(options?: { reader?: RegisterReader }): {
     onStartOver: () => {
       void onStartOver()
     },
-    onContinueToIdentity: () => undefined,
+    onContinueToIdentity: () => {
+      const id = stateRef.current.finalId
+      if (id) onRegisteredRef.current?.(id)
+    },
     onExpand: () => patch({ expanded: true }),
     onAcknowledge: (checked) => patch({ acknowledged: checked }),
     onSelectTab: (tab) => patch({ fileTab: tab }),

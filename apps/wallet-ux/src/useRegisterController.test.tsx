@@ -210,7 +210,7 @@ function successReceipt(hash: Hex, owner: Address) {
 }
 
 function Harness({ world, onRegistered }: { world: World; onRegistered: (id: string) => void }) {
-  const wired = useRegisterController({ reader: world.reader })
+  const wired = useRegisterController({ reader: world.reader, onRegistered })
   return (
     <>
       {wired.send}
@@ -474,8 +474,12 @@ describe("register wizard wallet states", () => {
     })
     expect((await screen.findByTestId("final-agent-id")).textContent).toBe("9001")
     expect(screen.getByTestId("final-agent-id").textContent).not.toBe(world.provisional.toString())
-    fireEvent.click(screen.getByRole("button", { name: CONTINUE_IDENTITY }))
     expect(onRegistered).toHaveBeenCalledWith("9001")
+    expect(onRegistered).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole("button", { name: CONTINUE_IDENTITY }))
+    // confirm prefill, then hook onContinueToIdentity, then RegisterWizard onRegistered
+    expect(onRegistered).toHaveBeenCalledTimes(3)
+    expect(onRegistered.mock.calls.every((call) => call[0] === "9001")).toBe(true)
   })
 
   it("reports a replaced transaction and warns when the wallet owns more agents", async () => {

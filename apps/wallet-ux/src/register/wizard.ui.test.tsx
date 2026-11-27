@@ -1,16 +1,25 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { WALLET_HINT_TEXT } from "../actionButton"
 import { RegisterWizard, createStubController } from "../RegisterWizard"
 import {
   ACK_CHECKBOX,
   CANCELLED,
+  CARD_LINE,
+  CARD_TITLE,
   CHAIN_LEFT,
+  CHECK_REGISTRATION,
+  FAUCET_LINK_LABEL,
+  FAUCET_URL,
   FILE_HELPER,
+  NEED_PROFILE,
+  NEED_TEST_ETH,
+  NEED_WALLET,
   NETWORK_PILL,
   NO_EVENT,
+  OPEN_WIZARD,
   PASS_LINE,
   PROVISIONAL_LABEL,
   REGISTRY_ADDRESS,
@@ -18,6 +27,7 @@ import {
   REVERTED,
   USER_REJECTED,
   VALUES_CHANGED,
+  WHAT_YOU_NEED_TITLE,
   registeredId,
   walletSwitched,
   wrongType,
@@ -53,31 +63,40 @@ describe("RegisterWizard steps", () => {
   it("starts collapsed and opens the file step without a wallet call", () => {
     const onRegistered = vi.fn()
     render(<RegisterWizard onRegistered={onRegistered} />)
-    expect(screen.getByRole("heading", { name: "Register a new agent" })).toBeTruthy()
-    expect(screen.getByTestId("register-card-line")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Register an agent" }))
+    expect(screen.getByRole("heading", { name: CARD_TITLE })).toBeTruthy()
+    expect(screen.getByTestId("register-card-line").textContent).toBe(CARD_LINE)
+    expect(screen.getByText(WHAT_YOU_NEED_TITLE)).toBeTruthy()
+    const needs = screen.getByTestId("what-you-need")
+    expect(needs.textContent).toContain(NEED_WALLET)
+    expect(needs.textContent).toContain(NEED_TEST_ETH)
+    expect(needs.textContent).toContain(NEED_PROFILE)
+    const faucet = within(needs).getByRole("link", { name: FAUCET_LINK_LABEL })
+    expect(faucet.getAttribute("href")).toBe(FAUCET_URL)
+    expect(faucet.getAttribute("rel")).toBe("noopener noreferrer")
+    expect(faucet.getAttribute("target")).toBe("_blank")
+    fireEvent.click(screen.getByRole("button", { name: OPEN_WIZARD }))
     expect(screen.getByTestId("step-file")).toBeTruthy()
     expect(screen.getByText(NETWORK_PILL)).toBeTruthy()
-    expect(screen.getByText("1 File")).toBeTruthy()
+    expect(screen.getByText("1 Profile")).toBeTruthy()
     expect(screen.getByText(FILE_HELPER)).toBeTruthy()
     expect(screen.getByTestId("register-file").getAttribute("accept")).toBe(".json")
     fireEvent.click(screen.getByRole("tab", { name: "Paste" }))
     fireEvent.change(screen.getByTestId("register-paste"), { target: { value: "{" } })
-    fireEvent.click(screen.getByRole("button", { name: "Check registration" }))
+    fireEvent.click(screen.getByRole("button", { name: CHECK_REGISTRATION }))
     expect(screen.getByText("This isn't valid JSON.")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Back" }))
     fireEvent.click(screen.getByRole("tab", { name: "Paste" }))
     fireEvent.change(screen.getByTestId("register-paste"), {
       target: { value: JSON.stringify({ type: "registration-v1", name: "A" }) },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Check registration" }))
+    fireEvent.click(screen.getByRole("button", { name: CHECK_REGISTRATION }))
     expect(screen.getByText(wrongType("registration-v1"))).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Back" }))
     fireEvent.click(screen.getByRole("tab", { name: "Paste" }))
     fireEvent.change(screen.getByTestId("register-paste"), {
       target: { value: JSON.stringify({ type: parsed.type, name: "Sample agent" }) },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Check registration" }))
+    fireEvent.click(screen.getByRole("button", { name: CHECK_REGISTRATION }))
     expect(screen.getByText(PASS_LINE)).toBeTruthy()
     expect(screen.getByTestId("size-row").textContent ?? "").not.toMatch(/limit \d+/)
     expect(screen.getByRole("button", { name: "Connect wallet" })).toBeTruthy()
@@ -317,6 +336,6 @@ describe("RegisterWizard steps", () => {
   it("shows the shared install hint when no wallet is available", () => {
     renderWizard({ step: 2, parsed, connectNotice: "no-wallet", walletConnected: false })
     expect(screen.getByText(INSTALL_WALLET_HINT)).toBeTruthy()
-    expect(INSTALL_WALLET_HINT).toBe("Install a browser wallet if no injected wallet is available.")
+    expect(INSTALL_WALLET_HINT).toBe("No browser wallet found. Install one, then reload this page.")
   })
 })

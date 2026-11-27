@@ -4,10 +4,11 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { FirstRun } from "./firstRun"
+import { IDENTITY_GATEWAY_PATH } from "./identity8004"
+import { CONNECT_NOTE } from "./registerCopy"
 import { Stepper } from "./steps"
 import {
   BASE_SEPOLIA_FAUCET_DOCS_URL,
-  CONNECT_NOTE,
   TEST_ETH_NOTE,
   WRONG_NETWORK_NOTE,
   walkthroughLabels,
@@ -116,6 +117,7 @@ describe("walkthrough states", () => {
     expect(screen.getAllByRole("button")).toHaveLength(1)
     expect(screen.queryByTestId("journey-switch")).toBeNull()
     expect(screen.queryByTestId("journey-fund")).toBeNull()
+    expect(screen.queryByTestId("journey-register")).toBeNull()
     expect(screen.queryByTestId("wrong-network-note")).toBeNull()
     expect(screen.queryByTestId("test-eth-note")).toBeNull()
     fireEvent.click(screen.getByTestId("journey-connect"))
@@ -136,6 +138,7 @@ describe("walkthrough states", () => {
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     expect(screen.queryByTestId("journey-fund")).toBeNull()
+    expect(screen.queryByTestId("journey-register")).toBeNull()
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     fireEvent.click(screen.getByTestId("journey-switch"))
     expect(switchChain).toHaveBeenCalledWith({ chainId: BASE_SEPOLIA_CHAIN_ID })
@@ -153,7 +156,7 @@ describe("walkthrough states", () => {
     expect(screen.getByTestId("journey-switch")).toBeTruthy()
   })
 
-  it("offers fund as the only primary action once the wallet is on Base Sepolia", () => {
+  it("offers register as the primary action once the wallet is on Base Sepolia, with escrow secondary", () => {
     world.connected = true
     render(<FirstRun />)
     const card = screen.getByTestId("first-run")
@@ -172,11 +175,18 @@ describe("walkthrough states", () => {
     expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer")
     expect(links[0]?.getAttribute("target")).toBe("_blank")
     expect(links[0]?.textContent).toBe("Base Sepolia faucet")
+    const register = screen.getByTestId("journey-register")
+    expect(register.getAttribute("href")).toBe(IDENTITY_GATEWAY_PATH)
+    expect(register.getAttribute("href")).toBe("/app/identity")
+    expect(register.textContent).toBe("Register your bot")
+    expect(register.classList.contains("secondary")).toBe(false)
     const fund = screen.getByTestId("journey-fund")
     expect(fund.getAttribute("href")).toBe("/app/fund")
+    expect(fund.textContent).toBe("Or try a test escrow payment")
+    expect(fund.classList.contains("secondary")).toBe(true)
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     expect(screen.queryByTestId("journey-switch")).toBeNull()
-    fireEvent.click(fund)
-    expect(window.location.pathname).toBe("/app/fund")
+    fireEvent.click(register)
+    expect(window.location.pathname).toBe("/app/identity")
   })
 })

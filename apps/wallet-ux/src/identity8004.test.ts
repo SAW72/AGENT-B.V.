@@ -94,7 +94,7 @@ describe("erc8004 config", () => {
     })
     expect(onboardingNext().retry.includes("call /v1/access/check again")).toBe(false)
     expect(onboardingNext().retry.includes("call the access check again")).toBe(false)
-    expect(NO_ID_TEXT).toBe("Register here, get verified, come back.")
+    expect(NO_ID_TEXT).toBe("No agent id yet? Register your bot below. It takes a few minutes on Base Sepolia testnet and uses free test ETH.")
     expect(CHECKED_IN_BROWSER).toBe("Checks run in your browser")
     expect(PUBLIC_RPC_HOST).toBe("sepolia.base.org")
     expect(WALLET_NOT_SET_TEXT).toBe("wallet_not_set / can't verify")

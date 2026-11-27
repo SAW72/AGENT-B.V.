@@ -132,3 +132,39 @@ describe("landing _redirects", () => {
     expect(rules.some((rule) => rule.from.startsWith("/assets"))).toBe(false)
   })
 })
+
+describe("landing register-wizard copy", () => {
+  const REGISTER_CARD = "Register: give your bot a public id on Base Sepolia testnet."
+  const LEDE =
+    "Agent-BV (Agent Bot Verifier) gives AI bots a public id on-chain, so anyone can check a bot before they trust it. Running on Base Sepolia testnet."
+
+  it("points the hero primary button at /app/identity and leaves the secondary button and note unchanged", () => {
+    const dom = new JSDOM(landingHtml)
+    const hero = dom.window.document.querySelector("section.hero")
+    expect(hero).not.toBeNull()
+    const lede = hero.querySelector("p.lede")
+    expect(lede?.textContent.replace(/\s+/g, " ").trim()).toBe(LEDE)
+    const primary = hero.querySelector(".ctas a.btn-white")
+    expect(primary?.getAttribute("href")).toBe("/app/identity")
+    expect(primary?.textContent.replace(/\s+/g, " ").trim()).toBe("Register your bot")
+    const secondary = hero.querySelector(".ctas a.btn-ghost")
+    expect(secondary?.getAttribute("href")).toBe("#status")
+    expect(secondary?.textContent.trim()).toBe("See what is live")
+    expect(hero.querySelector("p.cta-note")?.textContent.trim()).toBe(
+      "Everything here is on Base Sepolia testnet, not mainnet. Use test funds only.",
+    )
+  })
+
+  it("adds the register how-it-works card first, with escrow after, and no Live now", () => {
+    const dom = new JSDOM(landingHtml)
+    const cards = [...dom.window.document.querySelectorAll("section#how ol.cards > li.card")]
+    expect(dom.window.document.querySelector("section#how ol.cards")?.classList.contains("c5")).toBe(true)
+    expect(cards).toHaveLength(5)
+    expect(cards[0]?.querySelector("h3")?.textContent).toBe("Register")
+    expect(cards[0]?.querySelector("p")?.textContent.trim()).toBe(REGISTER_CARD)
+    expect(cards[0]?.textContent).not.toContain("Live now")
+    expect(cards[3]?.querySelector("h3")?.textContent).toBe("Escrow")
+    expect(landingHtml).not.toContain("Live now")
+    expect(landingHtml).not.toContain("\u2014")
+  })
+})

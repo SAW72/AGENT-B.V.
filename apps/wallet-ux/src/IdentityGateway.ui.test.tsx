@@ -215,7 +215,7 @@ describe("IdentityGateway agent id", () => {
   it("keeps lookup working with the register wizard mounted", async () => {
     renderGateway()
     expect(screen.getByRole("heading", { name: "ERC-8004 identity" })).toBeTruthy()
-    expect(screen.getByRole("heading", { name: "Register a new agent" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Register your bot" })).toBeTruthy()
     expect(screen.getByTestId("agent-id")).toBeTruthy()
     typeAgentId("15")
     await waitFor(() => {

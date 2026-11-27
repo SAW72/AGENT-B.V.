@@ -67,14 +67,14 @@
     <p class="desc-lg">(Agent Bot Verifier)</p>
     <div class="rule" aria-hidden="true"></div>
     <p class="tagline">Check the bot before you sign.</p>
-    <p class="lede"><strong>Agent-BV (Agent Bot Verifier)</strong> is an accountability layer for AI agents that hold funds and act on-chain: escrowed payments, a dispute panel and an on-chain denylist, deployed on Base Sepolia testnet.</p>
+    <p class="lede"><strong>Agent-BV (Agent Bot Verifier)</strong> gives AI bots a public id on-chain, so anyone can check a bot before they trust it. Running on Base Sepolia testnet.</p>
     <ul class="chips" aria-label="Project status">
       <li class="chip">Base Sepolia testnet</li>
       <li class="chip">No users yet</li>
       <li class="chip">Not audited</li>
     </ul>
     <div class="ctas">
-      <a class="btn btn-white" href="/app/">Open the app
+      <a class="btn btn-white" href="/app/identity">Register your bot
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></a>
       <a class="btn btn-ghost" href="#status">See what is live</a>
     </div>
@@ -87,26 +87,31 @@
     <div class="sec-head">
       <div class="eyebrow">How it works</div>
       <h2 id="how-title">Test the bot, record it, <span class="soft">and back its payments with recourse.</span></h2>
-      <p>Four steps. Two run on Base Sepolia today. Two are still being built, and they are labeled that way.</p>
+      <p>Five steps. Two run on Base Sepolia today. Two are still being built, and they are labeled that way.</p>
     </div>
-    <ol class="cards c4">
+    <ol class="cards c5">
       <li class="card">
-        <div class="top"><div class="hex" aria-hidden="true">1</div><span class="chip road">In development</span></div>
+        <div class="top"><div class="hex" aria-hidden="true">1</div></div>
+        <h3>Register</h3>
+        <p>Register: give your bot a public id on Base Sepolia testnet.</p>
+      </li>
+      <li class="card">
+        <div class="top"><div class="hex" aria-hidden="true">2</div><span class="chip road">In development</span></div>
         <h3>Verify</h3>
         <p>Bots will run against a library of adversarial scenarios and be scored with a fixed rubric.</p>
       </li>
       <li class="card">
-        <div class="top"><div class="hex" aria-hidden="true">2</div><span class="chip road">Roadmap</span></div>
+        <div class="top"><div class="hex" aria-hidden="true">3</div><span class="chip road">Roadmap</span></div>
         <h3>Attest</h3>
         <p>Results are to be recorded on Base, so anyone can check a bot's standing before they trust it. Not live yet.</p>
       </li>
       <li class="card">
-        <div class="top"><div class="hex on" aria-hidden="true">3</div><span class="chip live">Base Sepolia</span></div>
+        <div class="top"><div class="hex on" aria-hidden="true">4</div><span class="chip live">Base Sepolia</span></div>
         <h3>Escrow</h3>
         <p>Payments to an agent are held by the BotAttestationEscrow contract, not by Steward of the King LLC, and are released to the agent or refunded to the payer under the contract's rules.</p>
       </li>
       <li class="card">
-        <div class="top"><div class="hex on" aria-hidden="true">4</div><span class="chip live">Base Sepolia</span></div>
+        <div class="top"><div class="hex on" aria-hidden="true">5</div><span class="chip live">Base Sepolia</span></div>
         <h3>Resolve</h3>
         <p>A DisputePanel with three seated arbitrators is designed to settle disputes. Bots can be added to an on-chain denylist.</p>
       </li>

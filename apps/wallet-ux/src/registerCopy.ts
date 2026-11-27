@@ -12,17 +12,30 @@ function textOf(value: string | number | bigint | null | undefined): string {
   return typeof value === "bigint" ? value.toString() : String(value)
 }
 
-export const CARD_TITLE = "Register a new agent"
+export const CARD_TITLE = "Register your bot"
 export const CARD_LINE =
-  "Add a registration file, then send it from your wallet on Base Sepolia. Nothing is sent until you confirm."
-export const OPEN_WIZARD = "Register an agent"
+  "Registering gives your bot a public id on Base Sepolia testnet, so anyone can look it up and check that a signature really came from it. This is a test network. Nothing here costs real money."
+export const OPEN_WIZARD = "Start registering"
+
+export const WHAT_YOU_NEED_TITLE = "What you need"
+export const NEED_WALLET =
+  "A browser wallet, such as a wallet extension in Chrome or Brave. Your wallet signs and sends the registration. This site never holds your keys."
+export const NEED_TEST_ETH =
+  "A little free Base Sepolia test ETH to pay the network fee. Get it from a Base Sepolia faucet. Test ETH has no cash value."
+export const NEED_PROFILE =
+  "Your bot's profile: a small file that says who your bot is. You can upload it or paste it as an agent URI."
+export const FAUCET_LINK_LABEL = "Get free test ETH"
+/** Official Base docs listing Base Sepolia faucets. Verified HTTP 200 on 2026-11-27. */
+export const FAUCET_URL = "https://docs.base.org/get-started/get-funds"
+export const CONNECT_NOTE = "Connect a browser wallet to register your bot on Base Sepolia testnet."
+
 
 export const NETWORK_PILL = "Base Sepolia testnet (84532). Test ETH only."
 export const NETWORK_VALUE = "Base Sepolia, 84532"
 
-export const STEP_FILE = "File"
+export const STEP_FILE = "Profile"
 export const STEP_CHECK = "Check"
-export const STEP_DRY_RUN = "Dry run"
+export const STEP_DRY_RUN = "Test run"
 export const STEP_CONFIRM = "Confirm"
 export const STEP_DONE = "Done"
 
@@ -32,12 +45,13 @@ export function stepCount(step: number): string {
   return `Step ${textOf(step)} of 5`
 }
 
-export const FILE_TITLE = "Add your agent's registration"
+export const FILE_TITLE = "Add your bot's profile"
 export const TAB_UPLOAD = "Upload file"
 export const TAB_PASTE = "Paste"
 export const FILE_HELPER =
-  "Use a registration-v1 JSON file, or paste an agent URI. Nothing is sent until you confirm in your wallet."
-export const CHECK_REGISTRATION = "Check registration"
+  "Upload your bot's profile file, or paste its agent URI. The agent URI is a link or text block that describes your bot. Nothing is sent yet."
+export const CHECK_REGISTRATION = "Check profile"
+
 
 export const LABEL_TYPE = "Type"
 export const LABEL_NAME = "Name"
@@ -45,7 +59,7 @@ export const LABEL_SIZE = "Size"
 export const LABEL_AGENT_URI = "Agent URI"
 export const LABEL_FROM = "From"
 export const LABEL_PROVISIONAL_ID = "Provisional agent id"
-export const LABEL_GAS = "Estimated gas"
+export const LABEL_GAS = "Network fee (test ETH)"
 export const LABEL_NETWORK = "Network"
 export const LABEL_REGISTRY = "Registry"
 export const LABEL_AGENT_ID = "Agent id"
@@ -57,23 +71,23 @@ export const URI_EMPTY = "(empty)"
 export const EXPAND = "Expand"
 export const COLLAPSE = "Collapse"
 
-export const PASS_LINE = "Looks good. This file is a valid registration-v1."
+export const PASS_LINE = "Looks good. This profile is in the right format."
 export const CONTINUE = "Continue"
 export const CONNECT_WALLET = "Connect wallet"
 export const CONNECTING = "Connecting…"
 
-export const DRY_RUN_RUNNING = "Checking with the registry. Nothing is sent."
-export const PROVISIONAL_LABEL = "Provisional. The final id is set only when the transaction confirms."
+export const DRY_RUN_RUNNING = "Doing a practice run with the registry. Nothing is sent and no test ETH is spent."
+export const PROVISIONAL_LABEL = "Expected id. Your final id is set when the transaction goes through."
 export const WRONG_CHAIN = "Switch to Base Sepolia to continue."
 export const REVIEW_AND_CONFIRM = "Review and confirm"
 
-export const CONFIRM_TITLE = "Confirm registration"
+export const CONFIRM_TITLE = "Confirm and register"
 export const VALUES_CHANGED = "The registry changed since your check. Review the new values."
-export const ACK_CHECKBOX = "I understand this sends a transaction on Base Sepolia testnet from my wallet."
+export const ACK_CHECKBOX = "I understand this sends a transaction from my wallet on Base Sepolia testnet. It uses test ETH only."
 export const CONFIRM_IN_WALLET = "Confirm in wallet"
 export const BACK = "Back"
 export const WAITING_WALLET = "Waiting for your wallet..."
-export const CONFIRM_TX_LINE = "Confirm the register transaction in your wallet. You can still reject it there."
+export const CONFIRM_TX_LINE = "Your wallet will open. Check the details and approve. You can still say no there."
 
 export const CHAIN_LEFT = "Your wallet changed networks. Run the check again."
 export const SEND_FAILED = "The transaction did not go through."
@@ -83,19 +97,19 @@ export const PENDING_TX = "Transaction sent. Waiting for confirmation."
 export const VIEW_ON_BASESCAN = "View on Basescan"
 export const NO_EVENT = "The transaction confirmed but the agent id could not be read. Check the transaction on Basescan."
 export const START_OVER = "Start over"
-export const CONTINUE_IDENTITY = "Continue to identity check"
-export const CONTINUE_HELPER = "Next, sign the identity check from the agent wallet."
+export const CONTINUE_IDENTITY = "Verify your bot"
+export const CONTINUE_HELPER = "Next, sign a quick check from your bot's wallet so people can see it really is your bot. This is free and sends no transaction."
 export const CHECK_AGAIN = "Check again"
 
 export const INVALID_JSON = "This isn't valid JSON."
 export const INVALID_JSON_DETAIL = "Check the file for a missing comma or bracket."
-export const WRONG_TYPE = "This isn't a registration-v1 file."
+export const WRONG_TYPE = "This file isn't a bot profile we can read."
 export const TOO_LARGE = "This registration is too large."
 export const BAD_URI = "This agent URI can't be read."
-export const BAD_URI_DETAIL = "Paste a data:application/json;base64 URI or a registration-v1 file."
+export const BAD_URI_DETAIL = "Paste the agent URI that starts with data:application/json;base64, or upload the profile file."
 export const DRY_RUN_REJECTED = "The registry would reject this registration."
 export const USER_REJECTED = "You rejected the transaction. Nothing was sent."
-export const INSUFFICIENT_FUNDS = "Not enough test ETH for gas. Get Base Sepolia ETH from a faucet, then check again."
+export const INSUFFICIENT_FUNDS = "Your wallet needs a little more free test ETH for the network fee. Get some from a Base Sepolia faucet, then check again."
 export const NOTHING_REGISTERED = "Nothing was registered."
 export const CANCELLED = "You cancelled the transaction in your wallet. Nothing was registered."
 export const UNKNOWN = "Something went wrong with the wallet."
@@ -154,7 +168,7 @@ export function ownsAfterReplacement(count: string | number | bigint): string {
 }
 
 export function registeredId(id: string | number | bigint): string {
-  return `Registered. Your agent id is ${textOf(id)}.`
+  return `Done. Your bot is registered on Base Sepolia testnet. Its agent id is ${textOf(id)}.`
 }
 
 export function switchToOwner(short: string | number | bigint): string {

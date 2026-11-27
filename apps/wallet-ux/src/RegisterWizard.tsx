@@ -10,7 +10,17 @@ import { previewRegistration } from "./register/previewFile"
 import { createStubController, STUB_CONTROLLER } from "./register/stub"
 import type { FileTab, ParsedRegistration, RegisterErrorCode, WizardController, WizardStep } from "./register/types"
 import { WizardStepper } from "./register/WizardStepper"
-import { CARD_LINE, CARD_TITLE, OPEN_WIZARD } from "./registerCopy"
+import {
+  CARD_LINE,
+  CARD_TITLE,
+  FAUCET_LINK_LABEL,
+  FAUCET_URL,
+  NEED_PROFILE,
+  NEED_TEST_ETH,
+  NEED_WALLET,
+  OPEN_WIZARD,
+  WHAT_YOU_NEED_TITLE,
+} from "./registerCopy"
 
 export type { WizardController } from "./register/types"
 export { createStubController, STUB_CONTROLLER }
@@ -212,6 +222,17 @@ function RegisterWizardBody({
           <p className="muted" data-testid="register-card-line">
             {CARD_LINE}
           </p>
+          <h3>{WHAT_YOU_NEED_TITLE}</h3>
+          <ul data-testid="what-you-need">
+            <li>{NEED_WALLET}</li>
+            <li>
+              {NEED_TEST_ETH}{" "}
+              <a href={FAUCET_URL} rel="noopener noreferrer" target="_blank">
+                {FAUCET_LINK_LABEL}
+              </a>
+            </li>
+            <li>{NEED_PROFILE}</li>
+          </ul>
           <button type="button" onClick={open}>
             {OPEN_WIZARD}
           </button>
@@ -222,7 +243,7 @@ function RegisterWizardBody({
 }
 
 function LiveRegisterWizard({ onRegistered }: { onRegistered: (agentId: string) => void }) {
-  const wired = useRegisterController()
+  const wired = useRegisterController({ onRegistered })
   return (
     <>
       {wired.send}
