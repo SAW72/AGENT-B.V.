@@ -90,7 +90,7 @@ describe("erc8004 config", () => {
         function: "register(string)",
       },
       verify_url: "https://agent-bv.pages.dev/app/identity",
-      retry: "The bot registers on the identity registry. The browser check is a badge. Server-side admission comes later.",
+      retry: "The bot registers on the identity registry. The browser check only shows whether a signature matches the agent wallet.",
     })
     expect(onboardingNext().retry.includes("call /v1/access/check again")).toBe(false)
     expect(onboardingNext().retry.includes("call the access check again")).toBe(false)

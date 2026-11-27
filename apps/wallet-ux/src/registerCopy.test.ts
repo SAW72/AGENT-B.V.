@@ -117,7 +117,7 @@ describe("register copy", () => {
     )
     expect(copy.CONFIRM_TITLE).toBe("Confirm and register")
     expect(copy.ACK_CHECKBOX).toBe(
-      "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record that parts of can never be deleted.",
+      "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record, parts of which can never be deleted.",
     )
     expect(copy.CONFIRM_IN_WALLET).toBe("Confirm in wallet")
     expect(copy.CONTINUE_IDENTITY).toBe("Sign a wallet check")

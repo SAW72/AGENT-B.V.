@@ -200,6 +200,10 @@ describe("landing register-wizard copy", () => {
       (link) => link.getAttribute("href") === "/app/",
     )
     expect(footer?.textContent.trim()).toBe("Testnet app")
+    expect(dom.window.document.querySelector("section.section.cta p.sub")?.textContent.trim()).toBe(
+      "Base Sepolia testnet, test funds only.",
+    )
+    expect(dom.window.document.querySelector("section.section.cta p.sub")?.textContent).not.toContain("Open the app")
     const secondary = dom.window.document.querySelector("section.hero .ctas a.btn-ghost")
     expect(secondary?.textContent.trim()).toBe("See what is live")
     expect(secondary?.getAttribute("href")).toBe("#status")

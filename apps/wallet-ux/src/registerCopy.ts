@@ -85,7 +85,7 @@ export const REVIEW_AND_CONFIRM = "Review and confirm"
 
 export const CONFIRM_TITLE = "Confirm and register"
 export const VALUES_CHANGED = "The registry changed since your check. Review the new values."
-export const ACK_CHECKBOX = "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record that parts of can never be deleted."
+export const ACK_CHECKBOX = "I understand this sends a transaction from my wallet on Base Sepolia testnet, uses test ETH only, and writes a public record, parts of which can never be deleted."
 export const CONFIRM_IN_WALLET = "Confirm in wallet"
 export const BACK = "Back"
 export const WAITING_WALLET = "Waiting for your wallet..."
