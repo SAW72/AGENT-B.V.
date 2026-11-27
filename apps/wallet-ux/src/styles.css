@@ -739,6 +739,7 @@ button.task-link.secondary {
 .register-wizard {
   min-width: 0;
   max-width: 100%;
+  scroll-margin-top: 16px;
 }
 
 .register-wizard .kv-row {

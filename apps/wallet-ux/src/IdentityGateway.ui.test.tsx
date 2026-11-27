@@ -9,7 +9,7 @@ import { AGENT_ID_DECIMAL_TEXT, AGENT_ID_RANGE_TEXT, type IdentityRecord } from 
 import { IdentityGateway } from "./IdentityGateway"
 import type { SepoliaClient } from "./read"
 import { createStubController } from "./RegisterWizard"
-import { CONTINUE_IDENTITY } from "./registerCopy"
+import { CONTINUE_IDENTITY, OPEN_WIZARD } from "./registerCopy"
 import type { WizardController } from "./register/types"
 
 const ZERO = "0x0000000000000000000000000000000000000000" as Address
@@ -210,6 +210,21 @@ describe("IdentityGateway agent id", () => {
       expect(screen.getByText(AGENT_ID_RANGE_TEXT)).toBeTruthy()
       expect(signButton()).toBeNull()
     })
+  })
+
+  it("exposes a jump link at the top of the identity card that targets the register wizard", () => {
+    renderGateway()
+    const jump = screen.getByTestId("register-jump")
+    expect(jump.getAttribute("href")).toBe("#register-wizard")
+    expect(jump.textContent).toBe(OPEN_WIZARD)
+    expect(jump.tagName).toBe("A")
+    const wizard = screen.getByTestId("register-wizard")
+    expect(wizard.getAttribute("id")).toBe("register-wizard")
+    const card = screen.getByTestId("identity-gateway")
+    expect(card.contains(jump)).toBe(true)
+    const onboarding = screen.getByTestId("identity-onboarding")
+    expect(jump.compareDocumentPosition(onboarding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(jump.compareDocumentPosition(wizard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it("keeps lookup working with the register wizard mounted", async () => {

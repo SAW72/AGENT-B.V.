@@ -125,7 +125,7 @@ function RegisterWizardBody({
   }
 
   return (
-    <section className="card register-wizard" aria-labelledby="register-heading" data-testid="register-wizard">
+    <section id="register-wizard" className="card register-wizard" aria-labelledby="register-heading" data-testid="register-wizard">
       <h2 id="register-heading">{CARD_TITLE}</h2>
       {expanded ? (
         <>

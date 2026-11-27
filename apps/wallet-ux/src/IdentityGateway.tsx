@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ActionButton, type ActionButtonState } from "./actionButton"
 import { RegisterWizard } from "./RegisterWizard"
+import { OPEN_WIZARD } from "./registerCopy"
 import type { WizardController } from "./register/types"
 import { visibleConnectors } from "./connectors"
 import { ErrorNotice } from "./ErrorNotice"
@@ -192,6 +193,11 @@ export function IdentityGateway({
     <>
     <section className="card identity-gateway" aria-labelledby="identity-heading" data-testid="identity-gateway">
       <h2 id="identity-heading">ERC-8004 identity</h2>
+      <p>
+        <a href="#register-wizard" data-testid="register-jump">
+          {OPEN_WIZARD}
+        </a>
+      </p>
       <p className="muted" data-testid="checked-in-browser">
         {CHECKED_IN_BROWSER}. Base Sepolia only. Reads use {PUBLIC_RPC_HOST}. The signature is not a transaction.
       </p>
