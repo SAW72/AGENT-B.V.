@@ -1037,7 +1037,11 @@ describe("phase 2 guided flows", () => {
   it("renders task picker controls as secondary while the first-run card shows", () => {
     render(<HomeScreen voteReason={null} />)
     expect(screen.getByTestId("first-run")).toBeTruthy()
-    expect(screen.getByTestId("journey-fund").classList.contains("secondary")).toBe(false)
+    expect(screen.getByTestId("journey-register").classList.contains("secondary")).toBe(false)
+    expect(screen.getByTestId("journey-register").getAttribute("href")).toBe("/app/identity")
+    expect(screen.getByTestId("journey-register").textContent).toBe("Register your bot")
+    expect(screen.getByTestId("journey-fund").classList.contains("secondary")).toBe(true)
+    expect(screen.getByTestId("journey-fund").textContent).toBe("Or try a test escrow payment")
     for (const flow of FLOWS) {
       const control = screen.getByTestId(`task-${flow}`).querySelector("a, button")
       expect(control?.classList.contains("task-link")).toBe(true)

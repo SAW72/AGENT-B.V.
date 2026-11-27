@@ -32,6 +32,7 @@ import { createSepoliaClient, panelNotSeated, readGateStatus, rpcHost, type Gate
 import { relayerConfigFromEnv } from "./relayer"
 import { ReputationView } from "./reputation/ReputationView"
 import { useConnectorChainId } from "./useWalletChain"
+import { INSTALL_WALLET_HINT } from "./walletHint"
 import { walletReadiness } from "./walkthrough"
 import { AddressRow, NoteList, TextRow } from "./ui"
 import { rpcUrl } from "./wagmi"
@@ -242,7 +243,7 @@ function GuidedFlow({
   )
 }
 
-export const INSTALL_WALLET_HINT = "Install a browser wallet if no injected wallet is available."
+export { INSTALL_WALLET_HINT }
 
 export function App() {
   const account = useAccount()

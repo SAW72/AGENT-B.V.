@@ -90,14 +90,14 @@ describe("erc8004 config", () => {
         function: "register(string)",
       },
       verify_url: "https://agent-bv.pages.dev/app/identity",
-      retry: "The bot registers on the identity registry. The browser check is a badge. Server-side admission comes later.",
+      retry: "The bot registers on the identity registry. The browser check only shows whether a signature matches the agent wallet.",
     })
     expect(onboardingNext().retry.includes("call /v1/access/check again")).toBe(false)
     expect(onboardingNext().retry.includes("call the access check again")).toBe(false)
-    expect(NO_ID_TEXT).toBe("Register here, get verified, come back.")
+    expect(NO_ID_TEXT).toBe("No agent id yet? Register your bot below. It takes a few minutes on Base Sepolia testnet and uses free test ETH.")
     expect(CHECKED_IN_BROWSER).toBe("Checks run in your browser")
     expect(PUBLIC_RPC_HOST).toBe("sepolia.base.org")
-    expect(WALLET_NOT_SET_TEXT).toBe("wallet_not_set / can't verify")
+    expect(WALLET_NOT_SET_TEXT).toBe("This bot has no agent wallet set, so there's no wallet to check a signature against.")
     expect(basescanRegistryUrl()).toBe(explorerUrl(REGISTRY))
     expect(basescanAgentUrl(7n)).toBe(`https://sepolia.basescan.org/nft/${REGISTRY}/7`)
   })

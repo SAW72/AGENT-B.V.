@@ -3,12 +3,13 @@ import { WRONG_NETWORK_LABEL } from "./actionButton"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { visibleConnectors } from "./connectors"
 import { resolveWalletChainId } from "./guard"
-import { flowHref, flowTitle, navigate } from "./routes"
+import { IDENTITY_GATEWAY_PATH } from "./identity8004"
+import { CONNECT_NOTE } from "./registerCopy"
+import { flowHref, navigate } from "./routes"
 import { Stepper } from "./steps"
 import { useConnectorChainId } from "./useWalletChain"
 import {
   BASE_SEPOLIA_FAUCET_DOCS_URL,
-  CONNECT_NOTE,
   TEST_ETH_LINK_LABEL,
   TEST_ETH_NOTE,
   WRONG_NETWORK_NOTE,
@@ -117,17 +118,30 @@ export function FirstRun() {
       {wallet === "wrong-network" ? <SwitchToSepoliaButton /> : null}
       {wallet === "disconnected" ? <ConnectWalletButton /> : null}
       {wallet === "ready" ? (
-        <a
-          className="task-link"
-          data-testid="journey-fund"
-          href={flowHref("fund", 1)}
-          onClick={(event) => {
-            event.preventDefault()
-            navigate(flowHref("fund", 1))
-          }}
-        >
-          {flowTitle("fund")}
-        </a>
+        <>
+          <a
+            className="task-link"
+            data-testid="journey-register"
+            href={IDENTITY_GATEWAY_PATH}
+            onClick={(event) => {
+              event.preventDefault()
+              navigate(IDENTITY_GATEWAY_PATH)
+            }}
+          >
+            Register your bot
+          </a>
+          <a
+            className="task-link secondary"
+            data-testid="journey-fund"
+            href={flowHref("fund", 1)}
+            onClick={(event) => {
+              event.preventDefault()
+              navigate(flowHref("fund", 1))
+            }}
+          >
+            Or try a test escrow payment
+          </a>
+        </>
       ) : null}
     </section>
   )

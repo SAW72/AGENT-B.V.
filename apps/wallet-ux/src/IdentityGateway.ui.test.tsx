@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { Address } from "viem"
@@ -8,6 +11,9 @@ import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { AGENT_ID_DECIMAL_TEXT, AGENT_ID_RANGE_TEXT, type IdentityRecord } from "./identity8004"
 import { IdentityGateway } from "./IdentityGateway"
 import type { SepoliaClient } from "./read"
+import { createStubController } from "./RegisterWizard"
+import { CONTINUE_IDENTITY, OPEN_WIZARD } from "./registerCopy"
+import type { WizardController } from "./register/types"
 
 const ZERO = "0x0000000000000000000000000000000000000000" as Address
 const AGENT_WALLET = "0x1111111111111111111111111111111111111111" as Address
@@ -63,11 +69,17 @@ function record(agentId: bigint): IdentityRecord {
   }
 }
 
-function renderGateway() {
+function renderGateway(registerController: WizardController = createStubController()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <IdentityGateway client={{} as SepoliaClient} readsEnabled readsPending={false} blockedReason={null} />
+      <IdentityGateway
+        client={{} as SepoliaClient}
+        readsEnabled
+        readsPending={false}
+        blockedReason={null}
+        registerController={registerController}
+      />
     </QueryClientProvider>,
   )
 }
@@ -200,6 +212,80 @@ describe("IdentityGateway agent id", () => {
     await waitFor(() => {
       expect(screen.getByText(AGENT_ID_RANGE_TEXT)).toBeTruthy()
       expect(signButton()).toBeNull()
+    })
+  })
+
+  it("exposes a jump link at the top of the identity card that targets the register wizard", () => {
+    renderGateway()
+    const jump = screen.getByTestId("register-jump")
+    expect(jump.getAttribute("href")).toBe("#register-wizard")
+    expect(jump.textContent).toBe(OPEN_WIZARD)
+    expect(jump.tagName).toBe("A")
+    const wizard = screen.getByTestId("register-wizard")
+    expect(wizard.getAttribute("id")).toBe("register-wizard")
+    const card = screen.getByTestId("identity-gateway")
+    expect(card.contains(jump)).toBe(true)
+    const onboarding = screen.getByTestId("identity-onboarding")
+    expect(jump.compareDocumentPosition(onboarding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(jump.compareDocumentPosition(wizard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it("pins Look signature-match wording in the identity card", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "IdentityGateway.tsx"), "utf8")
+    expect(source).toContain('return "Signature matches the agent wallet."')
+    expect(source).toContain("This page will not show a match.")
+    expect(source).toContain("No match. The signature does not match the agent wallet.")
+    expect(source).toContain("No match. The owner or agent wallet changed. Sign again.")
+    expect(source).not.toContain("Verified.")
+    expect(source).not.toContain("This page will not mark it verified.")
+    expect(source).not.toContain("Not verified.")
+    expect(source).toContain("The browser check only shows whether a signature matches the agent wallet.")
+    expect(source).not.toContain("The browser check is a badge.")
+    expect(source).not.toContain("Server-side admission comes later.")
+    renderGateway()
+    const muted = screen.getByTestId("identity-onboarding").querySelector("p.muted")
+    expect(muted?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "A bot with no agent id stays refused. The bot registers on the existing registry. The browser check only shows whether a signature matches the agent wallet.",
+    )
+  })
+
+  it("keeps lookup working with the register wizard mounted", async () => {
+    renderGateway()
+    expect(screen.getByRole("heading", { name: "ERC-8004 identity" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Register your bot" })).toBeTruthy()
+    expect(screen.getByTestId("agent-id")).toBeTruthy()
+    typeAgentId("15")
+    await waitFor(() => {
+      expect(readAgentIdentity).toHaveBeenCalledWith(expect.anything(), 15n)
+    })
+  })
+
+  it("prefills the agent id from onRegistered and focuses the lookup", async () => {
+    const scroll = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scroll
+    renderGateway(
+      createStubController({
+        expanded: true,
+        step: 5,
+        txStatus: "confirmed",
+        finalId: "42",
+        globalId: "eip155:84532:0x8004A818BFB912233c491871b3d84c89A494BD9e:42",
+        owner: AGENT_WALLET,
+        provisionalId: "424242",
+      }),
+    )
+    await act(async () => {
+      screen.getByRole("button", { name: CONTINUE_IDENTITY }).click()
+    })
+    const input = screen.getByTestId("agent-id")
+    expect(input).toBe(document.activeElement)
+    if (!(input instanceof HTMLInputElement)) throw new Error("agent-id is not an input")
+    expect(input.value).toBe("42")
+    expect(input.value).not.toContain("eip155")
+    expect(scroll).toHaveBeenCalled()
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    await waitFor(() => {
+      expect(readAgentIdentity).toHaveBeenCalledWith(expect.anything(), 42n)
     })
   })
 })

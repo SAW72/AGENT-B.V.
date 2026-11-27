@@ -132,3 +132,83 @@ describe("landing _redirects", () => {
     expect(rules.some((rule) => rule.from.startsWith("/assets"))).toBe(false)
   })
 })
+
+describe("landing register-wizard copy", () => {
+  const REGISTER_CARD = "Register: give your bot a public id on Base Sepolia testnet."
+  // Pin Look's lede without repeating the product title, which claim-relayer
+  // reputation tests forbid hardcoding outside the reputation config.
+  const LEDE_REST =
+    "gives AI bots a public id on-chain, so anyone can check a bot before they trust it. Running on Base Sepolia testnet."
+
+  it("points the hero primary button at /app/identity and leaves the secondary button and note unchanged", () => {
+    const dom = new JSDOM(landingHtml)
+    const hero = dom.window.document.querySelector("section.hero")
+    expect(hero).not.toBeNull()
+    const lede = hero.querySelector("p.lede")
+    const ledeText = lede?.textContent.replace(/\s+/g, " ").trim()
+    expect(lede?.querySelector("strong")).not.toBeNull()
+    expect(ledeText.endsWith(LEDE_REST)).toBe(true)
+    const primary = hero.querySelector(".ctas a.btn-white")
+    expect(primary?.getAttribute("href")).toBe("/app/identity")
+    expect(primary?.textContent.replace(/\s+/g, " ").trim()).toBe("Register your bot")
+    const secondary = hero.querySelector(".ctas a.btn-ghost")
+    expect(secondary?.getAttribute("href")).toBe("#status")
+    expect(secondary?.textContent.trim()).toBe("See what is live")
+    expect(hero.querySelector("p.cta-note")?.textContent.trim()).toBe(
+      "Everything here is on Base Sepolia testnet, not mainnet. Use test funds only.",
+    )
+  })
+
+  it("adds the register how-it-works card first, with escrow after, and no Live now", () => {
+    const dom = new JSDOM(landingHtml)
+    const cards = [...dom.window.document.querySelectorAll("section#how ol.cards > li.card")]
+    expect(dom.window.document.querySelector("section#how ol.cards")?.classList.contains("c5")).toBe(true)
+    expect(cards).toHaveLength(5)
+    expect(cards[0]?.querySelector("h3")?.textContent).toBe("Register")
+    expect(cards[0]?.querySelector("p")?.textContent.trim()).toBe(REGISTER_CARD)
+    expect(cards[0]?.textContent).not.toContain("Live now")
+    expect(cards[3]?.querySelector("h3")?.textContent).toBe("Escrow")
+    expect(landingHtml).not.toContain("Live now")
+    expect(landingHtml).not.toContain("\u2014")
+  })
+
+  it("keeps the primary register button in the hero copy, before the mascot in source order", () => {
+    const dom = new JSDOM(landingHtml)
+    const hero = dom.window.document.querySelector("section.hero")
+    const copy = hero.querySelector(".hero-copy")
+    const stage = hero.querySelector(".stage")
+    const primary = hero.querySelector(".ctas a.btn-white")
+    expect(copy).not.toBeNull()
+    expect(stage).not.toBeNull()
+    expect(primary).not.toBeNull()
+    expect(copy.contains(primary)).toBe(true)
+    expect(copy.contains(stage)).toBe(false)
+    expect(primary.getAttribute("href")).toBe("/app/identity")
+    expect(primary.textContent.replace(/\s+/g, " ").trim()).toBe("Register your bot")
+    expect(primary.compareDocumentPosition(stage) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it("relabels the header, bottom CTA, and footer without changing the escrow secondary or note", () => {
+    const dom = new JSDOM(landingHtml)
+    const header = dom.window.document.querySelector("header .navlinks a.btn-white")
+    expect(header?.textContent.trim()).toBe("Open the testnet app")
+    expect(header?.getAttribute("href")).toBe("/app/")
+    const bottom = dom.window.document.querySelector("section.section.cta a.btn-dark")
+    expect(bottom?.textContent.replace(/\s+/g, " ").trim()).toBe("Register a bot on testnet")
+    expect(bottom?.getAttribute("href")).toBe("/app/identity")
+    const footer = [...dom.window.document.querySelectorAll("footer .footlinks a")].find(
+      (link) => link.getAttribute("href") === "/app/",
+    )
+    expect(footer?.textContent.trim()).toBe("Testnet app")
+    expect(dom.window.document.querySelector("section.section.cta p.sub")?.textContent.trim()).toBe(
+      "Base Sepolia testnet, test funds only.",
+    )
+    expect(dom.window.document.querySelector("section.section.cta p.sub")?.textContent).not.toContain("Open the app")
+    const secondary = dom.window.document.querySelector("section.hero .ctas a.btn-ghost")
+    expect(secondary?.textContent.trim()).toBe("See what is live")
+    expect(secondary?.getAttribute("href")).toBe("#status")
+    expect(dom.window.document.querySelector("p.cta-note")?.textContent.trim()).toBe(
+      "Everything here is on Base Sepolia testnet, not mainnet. Use test funds only.",
+    )
+  })
+})

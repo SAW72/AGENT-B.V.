@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useAccount, useConnect, useDisconnect } from "wagmi"
 import { ActionButton, type ActionButtonState } from "./actionButton"
+import { RegisterWizard } from "./RegisterWizard"
+import { OPEN_WIZARD } from "./registerCopy"
+import type { WizardController } from "./register/types"
 import { visibleConnectors } from "./connectors"
 import { ErrorNotice } from "./ErrorNotice"
 import { errorText, isZeroAddress, sameAddress, shortAddress } from "./format"
@@ -41,15 +44,15 @@ import { walletReadiness } from "./walkthrough"
 const URI_PREVIEW = 96
 
 function reasonText(reason: VerifyResult["reason"]): string {
-  if (reason === "verified") return "Verified."
+  if (reason === "verified") return "Signature matches the agent wallet."
   if (reason === "wallet_not_set") return WALLET_NOT_SET_TEXT
-  if (reason === "impl_changed") return "The identity registry implementation changed. This page will not mark it verified."
-  if (reason === "registry_domain_changed") return "The identity registry domain changed. This page will not mark it verified."
+  if (reason === "impl_changed") return "The identity registry implementation changed. This page will not show a match."
+  if (reason === "registry_domain_changed") return "The identity registry domain changed. This page will not show a match."
   if (reason === "expired") return "This check expired. Sign it again."
   if (reason === "agent_mismatch") return "The signed agent id does not match this record."
   if (reason === "wallet_mismatch") return "The signed agent wallet does not match this record."
-  if (reason === "bad_signature") return "Not verified. The signature does not match the agent wallet."
-  return "Not verified. The owner or agent wallet changed. Sign again."
+  if (reason === "bad_signature") return "No match. The signature does not match the agent wallet."
+  return "No match. The owner or agent wallet changed. Sign again."
 }
 
 function readDetail(error: unknown): string {
@@ -61,11 +64,13 @@ export function IdentityGateway({
   readsEnabled,
   readsPending = false,
   blockedReason,
+  registerController,
 }: {
   client: SepoliaClient
   readsEnabled: boolean
   readsPending?: boolean
   blockedReason: string | null
+  registerController?: WizardController
 }) {
   const account = useAccount()
   const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
@@ -81,6 +86,7 @@ export function IdentityGateway({
   const [button, setButton] = useState<ActionButtonState>({ status: "idle", label: "Sign the identity check" })
   const [staleHoldAt, setStaleHoldAt] = useState<number | null>(null)
   const signTicket = useRef(0)
+  const agentInputRef = useRef<HTMLInputElement>(null)
 
   // identity8004 stays strict (no trim). The field keeps what was typed.
   const agentLookup = agentInput.trim()
@@ -171,9 +177,27 @@ export function IdentityGateway({
 
   const missingAgent = identityQuery.error instanceof MissingAgentError ? identityQuery.error : null
 
+  function showAgentInLookup(id: string) {
+    signTicket.current += 1
+    setAgentInput(id)
+    setOutcome(null)
+    setSignError(null)
+    setStaleHoldAt(null)
+    setButton({ status: "idle", label: "Sign the identity check" })
+    const input = agentInputRef.current
+    input?.scrollIntoView?.({ block: "center" })
+    input?.focus()
+  }
+
   return (
+    <>
     <section className="card identity-gateway" aria-labelledby="identity-heading" data-testid="identity-gateway">
       <h2 id="identity-heading">ERC-8004 identity</h2>
+      <p>
+        <a href="#register-wizard" data-testid="register-jump">
+          {OPEN_WIZARD}
+        </a>
+      </p>
       <p className="muted" data-testid="checked-in-browser">
         {CHECKED_IN_BROWSER}. Base Sepolia only. Reads use {PUBLIC_RPC_HOST}. The signature is not a transaction.
       </p>
@@ -186,6 +210,7 @@ export function IdentityGateway({
       <label>
         Agent id
         <input
+          ref={agentInputRef}
           value={agentInput}
           inputMode="numeric"
           autoComplete="off"
@@ -265,8 +290,7 @@ export function IdentityGateway({
             <strong>{NO_ID_TEXT}</strong>
           </p>
           <p className="muted">
-            A bot with no agent id stays refused. The bot registers on the existing registry. The browser check is a
-            badge. Server-side admission comes later.
+            A bot with no agent id stays refused. The bot registers on the existing registry. The browser check only shows whether a signature matches the agent wallet.
           </p>
           <pre className="calldata" data-testid="identity-next">
             {JSON.stringify(onboarding, null, 2)}
@@ -276,6 +300,12 @@ export function IdentityGateway({
 
       {record ? <IdentityRecordView record={record} hideParties={hideParties} /> : null}
     </section>
+    <RegisterWizard
+      controller={registerController}
+      live={registerController == null}
+      onRegistered={showAgentInLookup}
+    />
+    </>
   )
 }
 

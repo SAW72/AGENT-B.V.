@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe("wallet-neutral connect-error hint", () => {
   it("keeps the exact wording, names no wallet brand, and shows the hint in the App UI", () => {
-    expect(INSTALL_WALLET_HINT).toBe("Install a browser wallet if no injected wallet is available.")
+    expect(INSTALL_WALLET_HINT).toBe("No browser wallet found. Install one, then reload this page.")
     expect(INSTALL_WALLET_HINT).not.toMatch(/metamask|rabby|coinbase|phantom|brave/i)
 
     navigate(walletHome())

@@ -4,10 +4,16 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BASE_SEPOLIA_CHAIN_ID } from "./addresses"
 import { FirstRun } from "./firstRun"
+import { IDENTITY_GATEWAY_PATH } from "./identity8004"
+import { CONNECT_NOTE, FILE_TITLE } from "./registerCopy"
+import { FLOW_STEP_LABELS, FLOWS } from "./routes"
 import { Stepper } from "./steps"
 import {
   BASE_SEPOLIA_FAUCET_DOCS_URL,
-  CONNECT_NOTE,
+  CONNECT_STEP_LABEL,
+  PROFILE_STEP_LABEL,
+  REGISTER_STEP_LABEL,
+  SWITCH_STEP_LABEL,
   TEST_ETH_NOTE,
   WRONG_NETWORK_NOTE,
   walkthroughLabels,
@@ -85,12 +91,31 @@ describe("walkthrough states", () => {
     expect(walkthroughStates("ready", "home")).toEqual(["done", "current", "upcoming"])
     expect(walkthroughStates("ready", "review")).toEqual(["done", "done", "current"])
     expect(walkthroughStep(walkthroughStates("ready", "review"))).toBe(3)
-    expect(walkthroughLabels("disconnected")).toEqual(["Connect your wallet", "Fill in the escrow", "Review and send"])
-    expect(walkthroughLabels("ready")).toEqual(["Connect your wallet", "Fill in the escrow", "Review and send"])
-    expect(walkthroughLabels("wrong-network")).toEqual(["Switch to Base Sepolia", "Fill in the escrow", "Review and send"])
+    expect(walkthroughLabels("disconnected")).toEqual(["Connect your wallet", "Add your bot's profile", "Register on testnet"])
+    expect(walkthroughLabels("ready")).toEqual(["Connect your wallet", "Add your bot's profile", "Register on testnet"])
+    expect(walkthroughLabels("wrong-network")).toEqual(["Switch to Base Sepolia", "Add your bot's profile", "Register on testnet"])
     for (const chain of [1, null, "conflict" as const]) {
       expect(walletReadiness(true, chain)).toBe("wrong-network")
     }
+  })
+
+
+  it("pins first-run stepper copy and leaves Review and send on the fund flows in routes.ts", () => {
+    expect(CONNECT_STEP_LABEL).toBe("Connect your wallet")
+    expect(SWITCH_STEP_LABEL).toBe("Switch to Base Sepolia")
+    expect(PROFILE_STEP_LABEL).toBe("Add your bot's profile")
+    expect(PROFILE_STEP_LABEL).toBe(FILE_TITLE)
+    expect(REGISTER_STEP_LABEL).toBe("Register on testnet")
+    expect(FLOWS).toEqual(["fund", "release", "refund", "dispute", "vote", "withdraw"])
+    for (const id of FLOWS) {
+      expect(FLOW_STEP_LABELS[id].at(-1)).toBe("Review and send")
+    }
+    expect(FLOW_STEP_LABELS.fund).toEqual(["Who is paid", "Which bots", "Amount and time", "Review and send"])
+    expect(FLOW_STEP_LABELS.release).toEqual(["The payment", "Review and send"])
+    expect(FLOW_STEP_LABELS.refund).toEqual(["The payment", "Review and send"])
+    expect(FLOW_STEP_LABELS.dispute).toEqual(["The case", "Review and send"])
+    expect(FLOW_STEP_LABELS.vote).toEqual(["Your vote", "Review and send"])
+    expect(FLOW_STEP_LABELS.withdraw).toEqual(["Your balance", "Review and send"])
   })
 
   it("keeps an unlabelled stepper on numbered state words", () => {
@@ -108,14 +133,15 @@ describe("walkthrough states", () => {
     expect(statesOf(card)).toEqual(["current", "upcoming", "upcoming"])
     expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
       "Now · Connect your wallet",
-      "Later · Fill in the escrow",
-      "Later · Review and send",
+      "Later · Add your bot's profile",
+      "Later · Register on testnet",
     ])
     expect(screen.getByTestId("connect-note").textContent).toBe(CONNECT_NOTE)
     expect(screen.getByTestId("journey-connect").textContent).toBe("Connect wallet")
     expect(screen.getAllByRole("button")).toHaveLength(1)
     expect(screen.queryByTestId("journey-switch")).toBeNull()
     expect(screen.queryByTestId("journey-fund")).toBeNull()
+    expect(screen.queryByTestId("journey-register")).toBeNull()
     expect(screen.queryByTestId("wrong-network-note")).toBeNull()
     expect(screen.queryByTestId("test-eth-note")).toBeNull()
     fireEvent.click(screen.getByTestId("journey-connect"))
@@ -130,12 +156,13 @@ describe("walkthrough states", () => {
     expect(statesOf(card)).toEqual(["current", "upcoming", "upcoming"])
     expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
       "Now · Switch to Base Sepolia",
-      "Later · Fill in the escrow",
-      "Later · Review and send",
+      "Later · Add your bot's profile",
+      "Later · Register on testnet",
     ])
     expect(screen.getByTestId("wrong-network-note").textContent).toBe(WRONG_NETWORK_NOTE)
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     expect(screen.queryByTestId("journey-fund")).toBeNull()
+    expect(screen.queryByTestId("journey-register")).toBeNull()
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     fireEvent.click(screen.getByTestId("journey-switch"))
     expect(switchChain).toHaveBeenCalledWith({ chainId: BASE_SEPOLIA_CHAIN_ID })
@@ -153,15 +180,15 @@ describe("walkthrough states", () => {
     expect(screen.getByTestId("journey-switch")).toBeTruthy()
   })
 
-  it("offers fund as the only primary action once the wallet is on Base Sepolia", () => {
+  it("offers register as the primary action once the wallet is on Base Sepolia, with escrow secondary", () => {
     world.connected = true
     render(<FirstRun />)
     const card = screen.getByTestId("first-run")
     expect(statesOf(card)).toEqual(["done", "current", "upcoming"])
     expect(within(card).getAllByRole("listitem").map((item) => item.querySelector(".step-dot-word")?.textContent)).toEqual([
       "Done · Connect your wallet",
-      "Now · Fill in the escrow",
-      "Later · Review and send",
+      "Now · Add your bot's profile",
+      "Later · Register on testnet",
     ])
     const note = screen.getByTestId("test-eth-note")
     expect(note.textContent).toBe(TEST_ETH_NOTE)
@@ -172,11 +199,18 @@ describe("walkthrough states", () => {
     expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer")
     expect(links[0]?.getAttribute("target")).toBe("_blank")
     expect(links[0]?.textContent).toBe("Base Sepolia faucet")
+    const register = screen.getByTestId("journey-register")
+    expect(register.getAttribute("href")).toBe(IDENTITY_GATEWAY_PATH)
+    expect(register.getAttribute("href")).toBe("/app/identity")
+    expect(register.textContent).toBe("Register your bot")
+    expect(register.classList.contains("secondary")).toBe(false)
     const fund = screen.getByTestId("journey-fund")
     expect(fund.getAttribute("href")).toBe("/app/fund")
+    expect(fund.textContent).toBe("Or try a test escrow payment")
+    expect(fund.classList.contains("secondary")).toBe(true)
     expect(screen.queryByTestId("journey-connect")).toBeNull()
     expect(screen.queryByTestId("journey-switch")).toBeNull()
-    fireEvent.click(fund)
-    expect(window.location.pathname).toBe("/app/fund")
+    fireEvent.click(register)
+    expect(window.location.pathname).toBe("/app/identity")
   })
 })
