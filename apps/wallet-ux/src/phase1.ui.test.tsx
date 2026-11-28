@@ -167,6 +167,8 @@ beforeEach(() => {
   publicClient.getTransaction = async () => {
     throw Object.assign(new Error("missing transaction"), { name: "TransactionNotFoundError" })
   }
+  // A real send always has a wallet provider. The send path now refuses to run without one.
+  ;(window as Window & { ethereum?: unknown }).ethereum = { request: async () => "0x14a34" }
   receiptWatchConfig.pollMs = 15_000
   receiptWatchConfig.waitMs = 180_000
   receiptWatchConfig.unknownGraceMs = 3 * 60 * 1000
@@ -182,6 +184,7 @@ afterEach(() => {
   resetPendingRuntime()
   localStorage.clear()
   vi.useRealTimers()
+  delete (window as Window & { ethereum?: unknown }).ethereum
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   window.history.replaceState(null, "", "/")

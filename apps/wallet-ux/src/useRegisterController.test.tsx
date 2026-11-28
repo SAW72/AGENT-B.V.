@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { encodeAbiParameters, encodeEventTopics, formatEther, getAddress, WaitForTransactionReceiptTimeoutError, type Address, type Hex } from "viem"
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, formatEther, getAddress, WaitForTransactionReceiptTimeoutError, type Address, type Hex } from "viem"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { identityRegistry8004Abi } from "./abi"
 import { WALLET_HINT_MS, WALLET_HINT_TEXT } from "./actionButton"
@@ -12,6 +12,7 @@ import { baseSepoliaAddChainParams, registryAddress } from "./registry/register"
 import {
   CANCELLED,
   CHAIN_LEFT,
+  CHECK_AGAIN,
   CHECK_REGISTRATION,
   CONFIRM_IN_WALLET,
   CONNECT_REJECTED,
@@ -33,6 +34,7 @@ import {
   SWITCH_TO_SEPOLIA,
   TAB_PASTE,
   WAITING_WALLET,
+  WRONG_CHAIN,
   basescanTxUrl,
   insufficientGas,
   ownsAfterReplacement,
@@ -244,6 +246,34 @@ async function reachConfirm() {
   fireEvent.click(screen.getByRole("button", { name: REVIEW_AND_CONFIRM }))
   await screen.findByTestId("step-confirm")
   fireEvent.click(screen.getByTestId("register-ack"))
+}
+
+type Prompt = { release: (hash: Hex) => void; fail: (error: unknown) => void }
+
+async function startPrompt(world: World): Promise<Prompt> {
+  let release: (hash: Hex) => void = () => undefined
+  let fail: (error: unknown) => void = () => undefined
+  wagmiHarness.sendTransactionAsync.mockImplementation(() => new Promise<Hex>((resolve, reject) => { release = resolve; fail = reject }))
+  render(<Harness world={world} onRegistered={vi.fn()} />)
+  await reachConfirm()
+  fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+  await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+  return { release: (hash) => release(hash), fail: (error) => fail(error) }
+}
+
+function switchBackToSepolia(world: World) {
+  world.chainId = SEPOLIA_HEX
+  wagmiHarness.account.chainId = 84532
+  act(() => world.emit("chainChanged", SEPOLIA_HEX))
+}
+
+function acknowledge() {
+  const box = screen.getByTestId("register-ack") as HTMLInputElement
+  if (!box.checked) fireEvent.click(box)
+}
+
+function stepperText(): string {
+  return screen.getByTestId("wizard-stepper").textContent ?? ""
 }
 
 function switchChainIds(world: World): string[] {
@@ -641,5 +671,255 @@ describe("register wizard wallet states", () => {
     await act(async () => {
       release(HASH_A)
     })
+  })
+
+  it("the wallet send and the preflight carry the pasted URI, value 0 and chainId 84532", async () => {
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+    const sent = (wagmiHarness.sendTransactionAsync.mock.calls as unknown as [{ to: Address; data: Hex; value: bigint; chainId: number }][])[0]?.[0]
+    expect(sent).toBeTruthy()
+    if (!sent) throw new Error("missing send")
+    const expectedUri = `data:application/json;base64,${Buffer.from(REGISTRATION).toString("base64")}`
+    const decoded = decodeFunctionData({ abi: identityRegistry8004Abi, data: sent.data })
+    expect(decoded.functionName).toBe("register")
+    expect(decoded.args).toEqual([expectedUri])
+    expect(sent.to).toBe(registryAddress())
+    expect(sent.to).toBe("0x8004A818BFB912233c491871b3d84c89A494BD9e")
+    expect(sent.value).toBe(0n)
+    expect(sent.chainId).toBe(84532)
+    const pre = ((world.reader as unknown as { call: { mock: { calls: [{ to: Address; data: Hex; value: bigint }][] } } }).call.mock.calls)[0]?.[0]
+    expect(pre).toBeTruthy()
+    if (!pre) throw new Error("missing preflight")
+    expect(pre.data).toBe(sent.data)
+    expect(pre.to).toBe(registryAddress())
+    expect(pre.value).toBe(0n)
+  })
+
+  it("aborts the wallet prompt when the chain changes before the send is confirmed", async () => {
+    let release: (hash: Hex) => void = () => undefined
+    wagmiHarness.sendTransactionAsync.mockImplementation(() => new Promise<Hex>((resolve) => { release = resolve }))
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(screen.queryByTestId("step-confirm")).toBeNull()
+    await act(async () => { release(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(screen.queryByText(PENDING_TX)).toBeNull()
+    expect(screen.getByText(CHAIN_LEFT)).toBeTruthy()
+  })
+
+  it("refuses the send when eth_chainId is not 84532 after preflight", async () => {
+    const original = world.reader.call
+    ;(world.reader as { call: typeof original }).call = vi.fn(async (args) => {
+      world.chainId = BASE_MAINNET_HEX
+      return original ? original(args) : { data: "0x" }
+    })
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    expect(await screen.findByText(WRONG_CHAIN)).toBeTruthy()
+    expect(wagmiHarness.sendTransactionAsync).not.toHaveBeenCalled()
+  })
+
+  it("a chain change during a plain re-check is not overwritten by the stale quote", async () => {
+    world.balance = 0n
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachDryRun().catch(() => undefined)
+    const simulate = world.reader.simulateContract as unknown as { mockImplementation: (f: () => Promise<unknown>) => void; mock: { calls: unknown[] } }
+    let release: (value: { result: bigint }) => void = () => undefined
+    simulate.mockImplementation(() => new Promise((resolve) => { release = resolve as typeof release }))
+    fireEvent.click(screen.getByRole("button", { name: CHECK_AGAIN }))
+    await waitFor(() => expect(simulate.mock.calls.length).toBe(2))
+    world.chainId = MAINNET_HEX
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(screen.getByText(CHAIN_LEFT)).toBeTruthy()
+    world.balance = 10n ** 18n
+    await act(async () => { release({ result: 424242n }) })
+    expect(screen.getByText(CHAIN_LEFT)).toBeTruthy()
+    expect(screen.queryByTestId("provisional-id")).toBeNull()
+    expect(stepperText()).toContain("Step 3 of 5")
+  })
+
+  it("ignores the late hash of an aborted prompt while a new prompt is open", async () => {
+    const resolvers: ((hash: Hex) => void)[] = []
+    wagmiHarness.sendTransactionAsync.mockImplementation(() => new Promise<Hex>((resolve) => { resolvers.push(resolve) }))
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(resolvers.length).toBe(1))
+    world.chainId = MAINNET_HEX
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    switchBackToSepolia(world)
+    fireEvent.click(screen.getByRole("button", { name: CHECK_AGAIN }))
+    await screen.findByTestId("provisional-id")
+    fireEvent.click(screen.getByRole("button", { name: REVIEW_AND_CONFIRM }))
+    await screen.findByTestId("step-confirm")
+    acknowledge()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(resolvers.length).toBe(2))
+    await act(async () => { resolvers[0]?.(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_A)}"]`)).toBeNull()
+    expect(screen.getByRole("button", { name: WAITING_WALLET })).toBeTruthy()
+    await act(async () => { resolvers[1]?.(HASH_B) })
+    expect(await screen.findByTestId("step-done")).toBeTruthy()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_B)}"]`)).toBeTruthy()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_A)}"]`)).toBeNull()
+  })
+
+  it("aborts the prompt when the account changes and ignores a later hash", async () => {
+    const prompt = await startPrompt(world)
+    expect(screen.getByRole("button", { name: WAITING_WALLET })).toBeTruthy()
+    act(() => world.emit("accountsChanged", [OTHER]))
+    expect(await screen.findByText(walletSwitched(shortHex(OTHER)))).toBeTruthy()
+    expect(screen.queryByRole("button", { name: WAITING_WALLET })).toBeNull()
+    expect(screen.queryByTestId("step-confirm")).toBeNull()
+    expect(stepperText()).toContain("Step 3 of 5")
+    await act(async () => { prompt.release(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(screen.queryByText(PENDING_TX)).toBeNull()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_A)}"]`)).toBeNull()
+    expect(screen.getByText(walletSwitched(shortHex(OTHER)))).toBeTruthy()
+  })
+
+  it("aborts the prompt when the wallet disconnects and ignores a later hash", async () => {
+    const prompt = await startPrompt(world)
+    act(() => world.emit("accountsChanged", []))
+    await waitFor(() => expect(screen.queryByRole("button", { name: WAITING_WALLET })).toBeNull())
+    expect(screen.queryByTestId("step-confirm")).toBeNull()
+    await act(async () => { prompt.release(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_A)}"]`)).toBeNull()
+    expect(screen.getByRole("button", { name: CONNECT_WALLET })).toBeTruthy()
+  })
+
+  it("aborts the prompt on a chainChanged that reports Base Sepolia again", async () => {
+    const prompt = await startPrompt(world)
+    act(() => world.emit("chainChanged", SEPOLIA_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: WAITING_WALLET })).toBeNull()
+    await act(async () => { prompt.release(HASH_A) })
+    expect(screen.queryByTestId("step-done")).toBeNull()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_A)}"]`)).toBeNull()
+  })
+
+  it("keeps the chain-left state and step 3 when an aborted prompt is rejected late", async () => {
+    const prompt = await startPrompt(world)
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    await act(async () => { prompt.fail(Object.assign(new Error("rejected"), { code: 4001 })) })
+    expect(screen.getByText(CHAIN_LEFT)).toBeTruthy()
+    expect(stepperText()).toContain("Step 3 of 5")
+    expect(screen.queryByText("You rejected the transaction. Nothing was sent.")).toBeNull()
+    expect(screen.queryByTestId("step-confirm")).toBeNull()
+  })
+
+  it("clears the waiting state and the quote on abort, and a second send works after the late settle", async () => {
+    const prompt = await startPrompt(world)
+    world.chainId = MAINNET_HEX
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(await screen.findByText(CHAIN_LEFT)).toBeTruthy()
+    expect(stepperText()).toContain("Step 3 of 5")
+    expect(screen.queryByRole("button", { name: WAITING_WALLET })).toBeNull()
+    expect(screen.queryByTestId("provisional-id")).toBeNull()
+    await act(async () => { prompt.fail(Object.assign(new Error("rejected"), { code: 4001 })) })
+    switchBackToSepolia(world)
+    wagmiHarness.sendTransactionAsync.mockImplementation(async () => HASH_B)
+    fireEvent.click(screen.getByRole("button", { name: CHECK_AGAIN }))
+    await screen.findByTestId("provisional-id")
+    fireEvent.click(screen.getByRole("button", { name: REVIEW_AND_CONFIRM }))
+    await screen.findByTestId("step-confirm")
+    acknowledge()
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(2))
+    expect(await screen.findByTestId("step-done")).toBeTruthy()
+    expect(document.querySelector(`a[href="${basescanTxUrl(HASH_B)}"]`)).toBeTruthy()
+  })
+
+  it("does not abort after the send is recorded", async () => {
+    const prompt = await startPrompt(world)
+    await act(async () => { prompt.release(HASH_A) })
+    expect(await screen.findByTestId("step-done")).toBeTruthy()
+    act(() => world.emit("chainChanged", MAINNET_HEX))
+    expect(screen.queryByText(CHAIN_LEFT)).toBeNull()
+    expect(screen.getByTestId("step-done")).toBeTruthy()
+  })
+
+  it("reads eth_chainId from the connector provider, not window.ethereum, and refuses a non-84532 id", async () => {
+    const request = vi.fn(async () => MAINNET_HEX)
+    wagmiHarness.account.connector = { getProvider: async () => ({ request }) } as never
+    try {
+      render(<Harness world={world} onRegistered={vi.fn()} />)
+      await reachConfirm()
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+      expect(await screen.findByText(WRONG_CHAIN)).toBeTruthy()
+      expect(request).toHaveBeenCalledWith({ method: "eth_chainId" })
+      expect(wagmiHarness.sendTransactionAsync).not.toHaveBeenCalled()
+    } finally {
+      wagmiHarness.account.connector = undefined
+    }
+  })
+
+  it("refuses the send when the connector provider returns an unreadable or missing eth_chainId", async () => {
+    for (const bad of [undefined, null, "", "0x", "garbage", "0xzz"]) {
+      cleanup()
+      world = new World()
+      world.install()
+      wagmiHarness.sendTransactionAsync.mockClear()
+      wagmiHarness.account.connector = { getProvider: async () => ({ request: async () => bad }) } as never
+      try {
+        render(<Harness world={world} onRegistered={vi.fn()} />)
+        await reachConfirm()
+        fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+        expect(await screen.findByText(WRONG_CHAIN), String(bad)).toBeTruthy()
+        expect(wagmiHarness.sendTransactionAsync, String(bad)).not.toHaveBeenCalled()
+      } finally {
+        wagmiHarness.account.connector = undefined
+      }
+    }
+  })
+
+  it("refuses the send when the connector provider throws on eth_chainId", async () => {
+    wagmiHarness.account.connector = { getProvider: async () => ({ request: async () => { throw new Error("rpc down") } }) } as never
+    try {
+      render(<Harness world={world} onRegistered={vi.fn()} />)
+      await reachConfirm()
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+      await waitFor(() => expect(screen.queryByRole("button", { name: WAITING_WALLET })).toBeNull())
+      expect(wagmiHarness.sendTransactionAsync).not.toHaveBeenCalled()
+      expect(screen.queryByTestId("step-done")).toBeNull()
+    } finally {
+      wagmiHarness.account.connector = undefined
+    }
+  })
+
+  it("refuses the send when no wallet provider can answer eth_chainId", async () => {
+    render(<Harness world={world} onRegistered={vi.fn()} />)
+    await reachConfirm()
+    delete (window as Window & { ethereum?: unknown }).ethereum
+    fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+    expect(await screen.findByText(WRONG_CHAIN)).toBeTruthy()
+    expect(wagmiHarness.sendTransactionAsync).not.toHaveBeenCalled()
+    expect(screen.queryByTestId("step-done")).toBeNull()
+  })
+
+  it("falls back to window.ethereum when the connector provider cannot be loaded", async () => {
+    wagmiHarness.account.connector = { getProvider: async () => { throw new Error("not ready") } } as never
+    try {
+      render(<Harness world={world} onRegistered={vi.fn()} />)
+      await reachConfirm()
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_IN_WALLET }))
+      await waitFor(() => expect(wagmiHarness.sendTransactionAsync).toHaveBeenCalledTimes(1))
+      expect(await screen.findByTestId("step-done")).toBeTruthy()
+    } finally {
+      wagmiHarness.account.connector = undefined
+    }
   })
 })
