@@ -217,6 +217,8 @@ beforeEach(() => {
   relayerSpies.readRelayerHealth.mockClear()
   relayerSpies.readRelayerPaused.mockClear()
   relayerSpies.submitRelayerAfterPreflight.mockClear()
+  // A real send always has a wallet provider. The send path now refuses to run without one.
+  ;(window as Window & { ethereum?: unknown }).ethereum = { request: async () => "0x14a34" }
   vi.stubGlobal("fetch", fetchSpy)
   vi.stubEnv("VITE_CLAIM_RELAYER_URL", "https://relayer.example.test")
 })
@@ -228,6 +230,7 @@ afterEach(() => {
   resetPendingRuntime()
   localStorage.clear()
   vi.unstubAllGlobals()
+  delete (window as Window & { ethereum?: unknown }).ethereum
   vi.unstubAllEnvs()
 })
 

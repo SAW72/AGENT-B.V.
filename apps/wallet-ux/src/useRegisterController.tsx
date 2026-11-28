@@ -332,7 +332,9 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
   const stateRef = useRef(fields)
   const mountedRef = useRef(true)
   const phaseRef = useRef<Phase>("form")
-  const promptAbortedRef = useRef(false)
+  const promptTokenRef = useRef(0)
+  /** Ticket of the one prompt that may still settle. null once the prompt is aborted or settled. */
+  const activePromptRef = useRef<number | null>(null)
   const booted = useRef(false)
   const fromRef = useRef<Address | null>(null)
   const senderRef = useRef<Address | null>(null)
@@ -562,7 +564,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
       })
       return
     }
-    if (phaseRef.current === "prompt") return
+    if (phaseRef.current === "prompt") abortPrompt()
     dryGen.current += 1
     confirmGen.current += 1
     sendLock.current = false
@@ -611,7 +613,13 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     })
   }
 
+  function abortPrompt() {
+    activePromptRef.current = null
+    phaseRef.current = "form"
+  }
+
   function patchChainLeft(id: number | null) {
+    dryGen.current += 1
     confirmGen.current += 1
     sendLock.current = false
     clearPromptTimer()
@@ -635,8 +643,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     chainRef.current = id
     if (phaseRef.current === "sent") return
     if (phaseRef.current === "prompt") {
-      promptAbortedRef.current = true
-      phaseRef.current = "form"
+      abortPrompt()
       patchChainLeft(id)
       return
     }
@@ -1035,7 +1042,8 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
         })
         return
       }
-      promptAbortedRef.current = false
+      const ticket = ++promptTokenRef.current
+      activePromptRef.current = ticket
       phaseRef.current = "prompt"
       patch({
         walletPending: true,
@@ -1046,7 +1054,7 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
         noticeDetail: null,
       })
       armPromptTimer()
-      submit()
+      submit(ticket)
     } catch (error) {
       if (gen !== confirmGen.current || !mountedRef.current) return
       sendLock.current = false
@@ -1061,8 +1069,9 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     }
   }
 
-  function onSubmitted(hash: Hex) {
-    if (promptAbortedRef.current || phaseRef.current !== "prompt") return
+  function onSubmitted(hash: Hex, ticket?: number) {
+    if (ticket == null || ticket !== activePromptRef.current || phaseRef.current !== "prompt") return
+    activePromptRef.current = null
     clearPromptTimer()
     phaseRef.current = "sent"
     sendLock.current = true
@@ -1099,9 +1108,10 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     setFollowNonce((value) => value + 1)
   }
 
-  function onSubmitError(error: unknown) {
+  function onSubmitError(error: unknown, ticket?: number) {
     if (phaseRef.current === "sent") return
-    if (promptAbortedRef.current) return
+    if (ticket == null || ticket !== activePromptRef.current) return
+    activePromptRef.current = null
     clearPromptTimer()
     phaseRef.current = "form"
     sendLock.current = false
@@ -1125,8 +1135,8 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
     })
   }
 
-  const submittedImpl = useRef<(hash: Hex) => void>(() => {})
-  const failedImpl = useRef<(error: unknown) => void>(() => {})
+  const submittedImpl = useRef<(hash: Hex, ticket?: number) => void>(() => {})
+  const failedImpl = useRef<(error: unknown, ticket?: number) => void>(() => {})
   submittedImpl.current = onSubmitted
   failedImpl.current = onSubmitError
 
@@ -1260,8 +1270,8 @@ export function useRegisterController(options?: { reader?: RegisterReader; onReg
       submitRef={submitRef}
       fromAddressRef={fromAddressRef}
       preflightClient={reader.call ? { call: reader.call } : null}
-      onSubmitted={(hash) => submittedImpl.current(hash)}
-      onSubmitError={(error) => failedImpl.current(error)}
+      onSubmitted={(hash, ticket) => submittedImpl.current(hash, ticket)}
+      onSubmitError={(error, ticket) => failedImpl.current(error, ticket)}
     />
   )
 

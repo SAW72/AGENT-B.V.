@@ -55,7 +55,8 @@ async function liveChainRequest(
 }
 
 export type WalletSubmitHandle = {
-  submit: () => void
+  /** The ticket comes back on onSubmitted and onSubmitError so a caller can drop a settle from an old prompt. */
+  submit: (ticket?: number) => void
 }
 
 /**
@@ -89,8 +90,8 @@ export function WalletOnlySubmit({
   submitRef?: { current: WalletSubmitHandle | null } | null
   fromAddressRef?: { current: Address | null } | null
   preflightClient?: PreflightClient | null
-  onSubmitted?: (hash: Hex) => void
-  onSubmitError?: (error: unknown) => void
+  onSubmitted?: (hash: Hex, ticket?: number) => void
+  onSubmitError?: (error: unknown, ticket?: number) => void
 }) {
   const account = useAccount()
   const { switchChain } = useSwitchChain()
@@ -116,18 +117,18 @@ export function WalletOnlySubmit({
   const disabled =
     (decision.ok && (control.disabled || hold || receipt.phase !== "idle" || signing)) || blocked
 
-  function failSubmit(error: unknown) {
-    onSubmitError?.(error)
+  function failSubmit(error: unknown, ticket?: number) {
+    onSubmitError?.(error, ticket)
   }
 
-  async function onClick() {
+  async function onClick(ticket?: number) {
     const active = livePreviewRef?.current ?? (livePreviewRef ? null : preview)
     if (!active) {
-      failSubmit(new Error("The register transaction is not ready."))
+      failSubmit(new Error("The register transaction is not ready."), ticket)
       return
     }
     if (hold || receipt.phase !== "idle" || blocked) {
-      if (quiet) failSubmit(new Error("Another transaction is still pending."))
+      if (quiet) failSubmit(new Error("Another transaction is still pending."), ticket)
       return
     }
     setSubmitError(null)
@@ -139,11 +140,11 @@ export function WalletOnlySubmit({
     })
     if (!current.ok) {
       setSubmitError(notice(current.reason))
-      failSubmit(new Error(current.reason))
+      failSubmit(new Error(current.reason), ticket)
       return
     }
     if (!tryHoldSubmit(submitSlot)) {
-      failSubmit(new Error("Another transaction is still pending."))
+      failSubmit(new Error("Another transaction is still pending."), ticket)
       return
     }
     let keepLock = false
@@ -153,7 +154,7 @@ export function WalletOnlySubmit({
       if (!client) {
         const unavailable = new Error("Base Sepolia client is unavailable. The wallet was not opened.")
         setSubmitError(notice(unavailable.message))
-        failSubmit(unavailable)
+        failSubmit(unavailable, ticket)
         return
       }
       setSigning(true)
@@ -166,8 +167,7 @@ export function WalletOnlySubmit({
         data: active.calldata,
         value: active.valueWei,
         send: async () => {
-          const request = await liveChainRequest(account.connector)
-          if (request) await assertLiveChain84532(request)
+          await assertLiveChain84532(await liveChainRequest(account.connector))
           return sendTransactionAsync({
             to: active.to,
             data: active.calldata,
@@ -184,12 +184,12 @@ export function WalletOnlySubmit({
           hash,
         })
       }
-      onSubmitted?.(hash)
+      onSubmitted?.(hash, ticket)
       releaseSubmit(submitSlot)
       keepLock = true
     } catch (cause) {
       keepLock = false
-      failSubmit(cause)
+      failSubmit(cause, ticket)
       if (isWalletCancel(cause)) {
         setCancelled(true)
         return
@@ -202,7 +202,7 @@ export function WalletOnlySubmit({
   }
 
   if (submitRef) {
-    submitRef.current = { submit: () => { void onClick() } }
+    submitRef.current = { submit: (ticket) => { void onClick(ticket) } }
   }
 
   const state: ActionButtonState = !decision.ok

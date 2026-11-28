@@ -68,11 +68,14 @@ export function parseRpcChainId(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-/** Fail closed if a live eth_chainId read is not Base Sepolia. */
+/**
+ * Fail closed if a live eth_chainId read is not Base Sepolia. A missing request function,
+ * a thrown read, and a value that does not parse all refuse the send.
+ */
 export async function assertLiveChain84532(
-  request: (args: { method: "eth_chainId" }) => Promise<unknown>,
+  request: ((args: { method: "eth_chainId" }) => Promise<unknown>) | null,
 ): Promise<void> {
-  const id = parseRpcChainId(await request({ method: "eth_chainId" }))
+  const id = request ? parseRpcChainId(await request({ method: "eth_chainId" })) : null
   if (id !== BASE_SEPOLIA_CHAIN_ID) {
     throw Object.assign(new Error("This check only runs on the Base Sepolia network. Nothing was sent."), {
       name: "ChainMismatchError",
